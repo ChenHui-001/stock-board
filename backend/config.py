@@ -65,7 +65,7 @@ class Settings:
     LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
     LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
     LLM_TIMEOUT = _float("LLM_TIMEOUT", 45.0)
-    LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 2400)
+    LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 4000)
     LLM_TEMPERATURE = _float("LLM_TEMPERATURE", 0.25)
     # 部分兼容端点不支持 response_format=json_object，可关闭
     LLM_JSON_MODE = _bool("LLM_JSON_MODE", True)

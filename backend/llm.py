@@ -94,37 +94,71 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
         "Content-Type": "application/json",
     }
 
-    try:
-        resp = await _client_of().post(url, json=payload, headers=headers)
-    except httpx.HTTPError as exc:
-        raise LLMError(f"LLM 请求失败: {exc}") from exc
+    # 空 content 可能来自思考模型把配额耗在推理上、输出被截断或瞬时异常，重试一次
+    last_finish: str | None = None
+    last_msg: dict[str, Any] | None = None
+    for _attempt in (1, 2):
+        try:
+            resp = await _client_of().post(url, json=payload, headers=headers)
+        except httpx.HTTPError as exc:
+            raise LLMError(f"LLM 请求失败: {exc}") from exc
 
-    if resp.status_code >= 400:
-        body = resp.text[:300]
-        # 不支持 json_object 的端点会报 400，自动降级重试一次
-        if c["json_mode"] and resp.status_code == 400 and "response_format" in body:
-            payload.pop("response_format", None)
-            try:
-                resp = await _client_of().post(url, json=payload, headers=headers)
-            except httpx.HTTPError as exc:
-                raise LLMError(f"LLM 请求失败: {exc}") from exc
         if resp.status_code >= 400:
-            raise LLMError(f"LLM 返回 {resp.status_code}: {resp.text[:300]}")
+            body = resp.text[:300]
+            # 不支持 json_object 的端点会报 400，自动降级重试一次
+            if c["json_mode"] and resp.status_code == 400 and "response_format" in body:
+                payload.pop("response_format", None)
+                try:
+                    resp = await _client_of().post(url, json=payload, headers=headers)
+                except httpx.HTTPError as exc:
+                    raise LLMError(f"LLM 请求失败: {exc}") from exc
+            if resp.status_code >= 400:
+                raise LLMError(f"LLM 返回 {resp.status_code}: {resp.text[:300]}")
 
-    try:
-        data = resp.json()
-    except json.JSONDecodeError as exc:
-        raise LLMError("LLM 响应不是 JSON") from exc
+        try:
+            data = resp.json()
+        except json.JSONDecodeError as exc:
+            raise LLMError("LLM 响应不是 JSON") from exc
 
-    choices = data.get("choices") or []
-    if not choices:
-        raise LLMError(f"LLM 未返回结果: {str(data)[:200]}")
-    content = (choices[0].get("message") or {}).get("content") or ""
-    meta = {
-        "model": data.get("model") or c["model"],
-        "usage": data.get("usage") or {},
-    }
-    return _extract_json(content), meta
+        choices = data.get("choices") or []
+        if not choices:
+            raise LLMError(f"LLM 未返回结果: {str(data)[:200]}")
+        msg = choices[0].get("message") or {}
+        content = msg.get("content") or ""
+        # 少数端点把正文拆成 content 片段数组返回
+        if isinstance(content, list):
+            content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
+        if content.strip():
+            meta = {
+                "model": data.get("model") or c["model"],
+                "usage": data.get("usage") or {},
+            }
+            return _extract_json(content), meta
+        last_finish = choices[0].get("finish_reason")
+        last_msg = msg
+        log.warning(
+            "LLM 返回空 content（attempt %s/2），finish_reason=%s，message=%s",
+            _attempt, last_finish, str(last_msg)[:200],
+        )
+
+    raise LLMError(_empty_content_error(last_finish, last_msg))
+
+
+def _empty_content_error(finish: str | None, msg: dict[str, Any] | None) -> str:
+    """把空响应的常见原因翻译成可执行的提示。"""
+    if (msg or {}).get("reasoning_content"):
+        return (
+            "模型只输出了思考过程、未输出正文（content 为空）。"
+            "请换用非思考类模型（如 deepseek-chat 而非 deepseek-reasoner），"
+            "或调大 LLM_MAX_TOKENS 后重试"
+        )
+    if finish == "length":
+        return (
+            "模型输出被截断（finish_reason=length）。请调大 LLM_MAX_TOKENS "
+            "环境变量（如 4000）或换用更大上下文的模型后重试"
+        )
+    snippet = str(msg)[:160] if msg else ""
+    return f"模型返回为空（finish_reason={finish}，响应片段：{snippet}）"
 
 
 async def test_connection(cfg: dict[str, Any] | None = None) -> tuple[bool, str]:

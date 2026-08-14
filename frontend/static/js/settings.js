@@ -97,6 +97,8 @@
         res.models.forEach(function (m) {
           const opt = document.createElement('option');
           opt.value = m;
+          // 部分浏览器对只有 value 没有文本的 option 不可点选，补齐文本提高兼容性
+          opt.textContent = m;
           dl.appendChild(opt);
         });
         if (!silent) setNote('已获取 ' + res.models.length + ' 个模型，点输入框可下拉选择。', 'info');

@@ -1,29 +1,31 @@
 # ============================================================
-# 股票看板 · Docker Compose 部署文件（纯环境变量配置，无 .env、无 healthcheck）
-# 固定项目名：目录名含中文时 docker compose 无法自动推断项目名，会报错，故显式指定。
-name: stock-board
+# 股票看板 · 生产部署 Compose（从 Docker Hub 拉取镜像，不构建）
 #
-# 配置方式：
-#   所有配置内联在 environment 中，默认值写死；部署时可用 shell 环境变量覆盖：
-#     HOST_PORT=8898 LLM_API_KEY=sk-xxx docker compose up -d --build
-#   常用命令：
-#     docker compose up -d --build      # 首次构建并后台启动
-#     docker compose ps / logs -f       # 状态 / 日志
-#     docker compose down               # 停止（保留数据卷）
-#     docker compose down -v            # 停止并删除数据卷（数据一并清除！）
-# 数据备份：命名卷 stock-board-data 存自选股 / AI 记录 / LLM 配置
+# 用法：
+#   首次/升级部署（默认 latest）：
+#     docker compose -f docker-compose.prod.yml up -d
+#   指定版本部署：
+#     IMAGE=nanpo/stock-board:v1.2.3 docker compose -f docker-compose.prod.yml up -d
+#   手动拉取新镜像：
+#     docker compose -f docker-compose.prod.yml pull
+#   查看状态 / 日志 / 停止：
+#     docker compose -f docker-compose.prod.yml ps
+#     docker compose -f docker-compose.prod.yml logs -f
+#     docker compose -f docker-compose.prod.yml down
+#
+# 说明：
+#   - 与 docker-compose.yml（本地构建版）唯一区别：无 build 段，镜像从 Docker Hub 拉取。
+#   - 服务器上无需任何源码，只要这一个文件 + Docker。
+#   - 数据存命名卷 stock-board-data，容器重建/升级不丢。
+#   - 全部配置用环境变量覆盖，无 .env 文件、无 healthcheck。
 # ============================================================
+
+name: stock-board
 
 services:
   stock-board:
-    build:
-      context: .
-      args:
-        # AkShare 辅助兜底源（K线/资金流向），镜像约增大 400MB；不需要时改 "false"
-        WITH_AKSHARE: "true"
-    # 镜像名可用 IMAGE 环境变量覆盖：本地构建用默认值；
-    # 从 Docker Hub 拉取时：IMAGE=用户名/stock-board:1.0.0 docker compose up -d
-    image: "${IMAGE:-stock-board:1.0.0}"
+    # 从 Docker Hub 拉取：默认 nanpo/stock-board:latest，可用 IMAGE 覆盖任意 tag
+    image: "${IMAGE:-nanpo/stock-board:latest}"
     container_name: stock-board
     restart: unless-stopped           # 崩溃/重启后自动拉起
 

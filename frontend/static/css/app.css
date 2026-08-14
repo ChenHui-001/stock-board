@@ -695,3 +695,22 @@ main {
   /* 极窄窗口：顶栏放不下时段徽标，隐藏（数据源等信息仍在副栏） */
   .session { display: none; }
 }
+
+/* ------------------------------------------------------------ 设置弹窗窄屏 */
+/* 固定「150px 标签 + 1fr 内容」网格在窄窗口下会把模型输入框压扁到无法使用，
+   改为纵向堆叠：标签一行、输入控件一行 */
+@media (max-width: 620px) {
+  .modal-root { padding: 10px; }
+  .cfg-row {
+    grid-template-columns: 1fr;
+    gap: 5px 0;
+    margin-bottom: 10px;
+  }
+  .cfg-row label { margin-bottom: 2px; }
+  .cfg-check { grid-template-columns: 1fr auto; gap: 0 12px; align-items: center; }
+  .cfg-check label { margin-bottom: 0; }
+  .cfg-model-wrap { flex-wrap: wrap; }
+  .cfg-model-wrap input { flex: 1 1 130px; min-width: 130px; }
+  .cfg-actions { flex-wrap: wrap; }
+  .cfg-test-result { flex-basis: 100%; }
+}
