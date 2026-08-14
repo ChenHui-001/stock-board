@@ -2,7 +2,8 @@
 (function (global) {
   'use strict';
 
-  const state = { vendors: [], config: null, testing: false };
+  const state = { vendors: [], config: null, testing: false, models: [] };
+  let menuActive = -1;   // 菜单当前高亮项索引
 
   function root() { return document.getElementById('modal-settings'); }
   function vendorSel() { return document.getElementById('cfg-vendor'); }
@@ -80,13 +81,71 @@
     document.body.style.overflow = '';
   }
 
-  function modelList() { return document.getElementById('cfg-model-list'); }
+  function menuNode() { return document.getElementById('cfg-model-menu'); }
   function modelsBtn() { return document.getElementById('cfg-models'); }
+
+  // ---- 自绘模型下拉菜单（替代原生 datalist，行为跨浏览器一致）----
+  function filteredModels() {
+    const kw = model().value.trim().toLowerCase();
+    if (!kw) return state.models.slice();
+    return state.models.filter(function (m) {
+      return m.toLowerCase().indexOf(kw) >= 0;
+    });
+  }
+
+  function renderMenu() {
+    const menu = menuNode();
+    menu.innerHTML = '';
+    const items = filteredModels();
+    if (!items.length) {
+      menu.appendChild(U.el('div', 'cfg-model-empty', '无匹配模型，可直接输入自定义模型名'));
+      return items;
+    }
+    items.forEach(function (name) {
+      const it = U.el('div', 'cfg-model-item', name);
+      // mousedown 阻止默认行为，避免输入框失焦导致菜单先关闭
+      it.addEventListener('mousedown', function (e) { e.preventDefault(); });
+      it.addEventListener('click', function () { selectModel(name); });
+      menu.appendChild(it);
+    });
+    return items;
+  }
+
+  function openMenu() {
+    const items = renderMenu();
+    menuActive = items.length ? 0 : -1;
+    highlightMenu();
+    menuNode().hidden = false;
+  }
+
+  function closeMenu() {
+    menuNode().hidden = true;
+    menuActive = -1;
+  }
+
+  function highlightMenu() {
+    const items = menuNode().querySelectorAll('.cfg-model-item');
+    items.forEach(function (el, i) {
+      el.classList.toggle('active', i === menuActive);
+    });
+  }
+
+  function selectModel(name) {
+    model().value = name;
+    closeMenu();
+  }
+
+  function moveActive(step) {
+    const items = menuNode().querySelectorAll('.cfg-model-item');
+    if (!items.length) return;
+    menuActive = (menuActive + step + items.length) % items.length;
+    highlightMenu();
+    const el = items[menuActive];
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+  }
 
   async function fetchModels(silent) {
     const btn = modelsBtn();
-    const dl = modelList();
-    dl.innerHTML = '';
     if (!btn.disabled && !silent) {
       btn.disabled = true;
       btn.textContent = '获取中…';
@@ -94,14 +153,9 @@
     try {
       const res = await API.llmModels(formConfig());
       if (res.ok && res.models && res.models.length) {
-        res.models.forEach(function (m) {
-          const opt = document.createElement('option');
-          opt.value = m;
-          // 部分浏览器对只有 value 没有文本的 option 不可点选，补齐文本提高兼容性
-          opt.textContent = m;
-          dl.appendChild(opt);
-        });
+        state.models = res.models.slice();
         if (!silent) setNote('已获取 ' + res.models.length + ' 个模型，点输入框可下拉选择。', 'info');
+        openMenu();
       } else if (!silent) {
         setNote(res.message || '获取失败', 'err');
       }
@@ -172,6 +226,36 @@
     document.getElementById('cfg-test').addEventListener('click', testConnection);
     document.getElementById('cfg-save').addEventListener('click', save);
     document.getElementById('cfg-reset').addEventListener('click', reset);
+
+    // 输入框：聚焦/输入打开菜单，键盘上下选择、回车确认
+    model().addEventListener('focus', openMenu);
+    model().addEventListener('input', openMenu);
+    model().addEventListener('keydown', function (e) {
+      const open = !menuNode().hidden;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (!open) openMenu(); else moveActive(1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (open) moveActive(-1);
+      } else if (e.key === 'Enter') {
+        if (open && menuActive >= 0) {
+          const items = menuNode().querySelectorAll('.cfg-model-item');
+          if (items[menuActive]) {
+            e.preventDefault();
+            selectModel(items[menuActive].textContent);
+          }
+        }
+      } else if (e.key === 'Escape') {
+        if (open) { e.stopPropagation(); closeMenu(); }
+      }
+    });
+    // 点击菜单外关闭
+    document.addEventListener('mousedown', function (e) {
+      const wrap = document.querySelector('.cfg-model-wrap');
+      if (wrap && !wrap.contains(e.target)) closeMenu();
+    });
+
     root().addEventListener('click', function (e) {
       if (e.target.getAttribute('data-close-settings') === '1') close();
     });

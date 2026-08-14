@@ -66,9 +66,11 @@
         <div class="cfg-row">
           <label for="cfg-model">模型名称</label>
           <div class="cfg-model-wrap">
-            <input id="cfg-model" type="text" list="cfg-model-list" spellcheck="false"
-                   placeholder="deepseek-chat">
-            <datalist id="cfg-model-list"></datalist>
+            <div class="cfg-model-field">
+              <input id="cfg-model" type="text" spellcheck="false" autocomplete="off"
+                     placeholder="deepseek-chat">
+              <div class="cfg-model-menu" id="cfg-model-menu" hidden></div>
+            </div>
             <button class="btn btn-sm" id="cfg-models" title="从云端拉取该服务支持的模型列表">获取模型</button>
           </div>
         </div>

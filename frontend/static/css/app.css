@@ -546,8 +546,43 @@ main {
 .cfg-note { font-size: 12px; color: var(--text-faint); margin: -4px 0 12px; }
 .cfg-note.info { color: var(--accent); }
 .cfg-note.err { color: var(--up); }
-.cfg-model-wrap { display: flex; gap: 8px; align-items: center; }
-.cfg-model-wrap input { flex: 1; }
+.cfg-model-wrap { display: flex; gap: 8px; align-items: flex-start; }
+.cfg-model-field { position: relative; flex: 1; }
+.cfg-model-field input { width: 100%; }
+
+/* 自绘模型下拉菜单（替代原生 datalist，避免浏览器兼容差异） */
+.cfg-model-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+  z-index: 130;
+}
+.cfg-model-item {
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: var(--mono);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cfg-model-item:hover,
+.cfg-model-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.cfg-model-empty {
+  padding: 9px 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
 .cfg-actions {
   display: flex;
   align-items: center;
@@ -710,7 +745,7 @@ main {
   .cfg-check { grid-template-columns: 1fr auto; gap: 0 12px; align-items: center; }
   .cfg-check label { margin-bottom: 0; }
   .cfg-model-wrap { flex-wrap: wrap; }
-  .cfg-model-wrap input { flex: 1 1 130px; min-width: 130px; }
+  .cfg-model-field { flex: 1 1 130px; min-width: 130px; }
   .cfg-actions { flex-wrap: wrap; }
   .cfg-test-result { flex-basis: 100%; }
 }
