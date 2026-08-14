@@ -49,24 +49,87 @@ class LLMError(Exception):
 
 
 def _extract_json(text: str) -> dict[str, Any]:
-    """兼容模型在 JSON 外包了 ```json 代码块或前后寒暄的情况。"""
+    """解析模型返回的 JSON，容忍代码块围栏、前后寒暄、尾随逗号与截断。
+
+    修复阶梯：原文 -> 平衡括号提取首个完整对象 -> 去尾随逗号 -> 截断前缀。
+    """
     text = (text or "").strip()
     if not text:
         raise LLMError("模型返回为空")
-    fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
+    fence = re.search(r"```(?:json|JSON)?\s*(.+?)```", text, re.S)
     if fence:
         text = fence.group(1).strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    start, end = text.find("{"), text.rfind("}")
-    if start >= 0 and end > start:
+
+    def _loads(s: str) -> dict[str, Any] | None:
         try:
-            return json.loads(text[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise LLMError(f"模型返回不是合法 JSON: {exc}") from exc
-    raise LLMError("模型返回中未找到 JSON 对象")
+            obj = json.loads(s)
+            return obj if isinstance(obj, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    # 1) 原文直接解析
+    obj = _loads(text)
+    if obj is not None:
+        return obj
+
+    # 2) 平衡括号提取首个完整对象（容忍前后寒暄、多个对象拼接）
+    depth = 0
+    start = -1
+    first_start = -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+                if first_start < 0:
+                    first_start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                obj = _loads(text[start : i + 1])
+                if obj is not None:
+                    return obj
+    # 首个对象片段解析失败（或对象未闭合）：对该片段做修复
+    if first_start >= 0:
+        tail = text[first_start:]
+        # 3) 常见小毛病：尾随逗号（仅当修复后能通过 json.loads 校验才采用）
+        repaired = _loads(_strip_trailing_commas(tail))
+        if repaired is not None:
+            return repaired
+        # 4) 截断修复：取最长可解析前缀，必要时补齐闭合括号
+        repaired = _repair_truncated(tail)
+        if repaired is not None:
+            return repaired
+    raise LLMError(f"模型返回不是合法 JSON（内容开头：{text[:100]!r}）")
+
+
+def _strip_trailing_commas(s: str) -> str:
+    """移除所有尾随逗号（如 [1, 2,] -> [1, 2]，{"a":1,} -> {"a":1}）。
+
+    结果必须通过 json.loads 校验才被采用，因此误伤字符串内容时不会产生错误结果。
+    """
+    return re.sub(r",\s*([}\]])", r"\1", s)
+
+
+def _repair_truncated(s: str) -> dict[str, Any] | None:
+    """截断修复：取最长可解析前缀；必要时收紧/补齐闭合括号与尾随逗号。"""
+    closes = [i for i, ch in enumerate(s) if ch in "}]"]
+    suffix_pool = ("", "}", "]}", "}}", "])", "]}}", "}}}]")
+    candidates: list[str] = []
+    # 从右往左：先试最长的前缀（最近的闭合符），命中即最长完整结构
+    for i in closes[-16:][::-1]:
+        for suf in suffix_pool:
+            candidates.append(s[: i + 1] + suf)
+    for suf in suffix_pool[1:]:
+        candidates.append(s.rstrip() + suf)
+    for cand in candidates:
+        try:
+            obj = json.loads(_strip_trailing_commas(cand))
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -94,10 +157,18 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
         "Content-Type": "application/json",
     }
 
-    # 空 content 可能来自思考模型把配额耗在推理上、输出被截断或瞬时异常，重试一次
+    # 空 content 或 JSON 解析失败都重试一次；第二次追加「只输出合法 JSON」提示
+    nudge = (
+        "\n\n（注意：上一次返回的内容不是合法 JSON。请务必只输出一个完整的 JSON 对象："
+        "不要包含 Markdown 代码块标记、注释或任何额外文字，所有字符串用双引号，"
+        "字段之间用逗号分隔，不要截断。）"
+    )
     last_finish: str | None = None
     last_msg: dict[str, Any] | None = None
+    last_content: str = ""
     for _attempt in (1, 2):
+        if _attempt == 2:
+            payload["messages"][1]["content"] = str(payload["messages"][1]["content"]) + nudge
         try:
             resp = await _client_of().post(url, json=payload, headers=headers)
         except httpx.HTTPError as exc:
@@ -129,11 +200,20 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
         if isinstance(content, list):
             content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
         if content.strip():
+            last_content = content
+            try:
+                parsed = _extract_json(content)
+            except LLMError as exc:
+                log.warning(
+                    "LLM JSON 解析失败（attempt %s/2）：%s，内容开头：%s",
+                    _attempt, exc, content[:120].replace("\n", " "),
+                )
+                continue
             meta = {
                 "model": data.get("model") or c["model"],
                 "usage": data.get("usage") or {},
             }
-            return _extract_json(content), meta
+            return parsed, meta
         last_finish = choices[0].get("finish_reason")
         last_msg = msg
         log.warning(
@@ -141,6 +221,8 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
             _attempt, last_finish, str(last_msg)[:200],
         )
 
+    if last_content:
+        raise LLMError(f"模型返回不是合法 JSON（内容开头：{last_content[:100]!r}）")
     raise LLMError(_empty_content_error(last_finish, last_msg))
 
 
