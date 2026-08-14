@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+srv.log
+_probe.py
+ai.json
+ai2.json
+d.json
+w.json
+s.json
+hot.json
+.idea/
+.vscode/
+.DS_Store
+# 本地工具与生成产物
+.claude/
+.freebuff/
+shots/

@@ -1,0 +1,85 @@
+# ============================================================
+# 股票看板 · Docker Compose 部署文件（纯环境变量配置，无 .env、无 healthcheck）
+# 固定项目名：目录名含中文时 docker compose 无法自动推断项目名，会报错，故显式指定。
+name: stock-board
+#
+# 配置方式：
+#   所有配置内联在 environment 中，默认值写死；部署时可用 shell 环境变量覆盖：
+#     HOST_PORT=8898 LLM_API_KEY=sk-xxx docker compose up -d --build
+#   常用命令：
+#     docker compose up -d --build      # 首次构建并后台启动
+#     docker compose ps / logs -f       # 状态 / 日志
+#     docker compose down               # 停止（保留数据卷）
+#     docker compose down -v            # 停止并删除数据卷（数据一并清除！）
+# 数据备份：命名卷 stock-board-data 存自选股 / AI 记录 / LLM 配置
+# ============================================================
+
+services:
+  stock-board:
+    build:
+      context: .
+      args:
+        # AkShare 辅助兜底源（K线/资金流向），镜像约增大 400MB；不需要时改 "false"
+        WITH_AKSHARE: "true"
+    # 镜像名可用 IMAGE 环境变量覆盖：本地构建用默认值；
+    # 从 Docker Hub 拉取时：IMAGE=用户名/stock-board:1.0.0 docker compose up -d
+    image: "${IMAGE:-stock-board:1.0.0}"
+    container_name: stock-board
+    restart: unless-stopped           # 崩溃/重启后自动拉起
+
+    # 宿主机 HOST_PORT -> 容器 8000（应用固定监听 8000）
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+
+    environment:
+      # ---------- 基础 ----------
+      TZ: Asia/Shanghai               # 交易时段判断依赖东八区
+      DATA_DIR: /app/data
+
+      # ---------- AI 分析（OpenAI 兼容协议） ----------
+      # 不配 LLM_API_KEY 也能跑：AI 分析自动降级为内置规则引擎
+      LLM_ENABLED: "${LLM_ENABLED:-true}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-https://api.deepseek.com/v1}"
+      LLM_MODEL: "${LLM_MODEL:-deepseek-chat}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_JSON_MODE: "${LLM_JSON_MODE:-true}"
+      LLM_TIMEOUT: "${LLM_TIMEOUT:-45}"
+      LLM_MAX_TOKENS: "${LLM_MAX_TOKENS:-2400}"
+      LLM_TEMPERATURE: "${LLM_TEMPERATURE:-0.25}"
+
+      # ---------- 数据源 ----------
+      PROVIDER_ORDER: "${PROVIDER_ORDER:-eastmoney,tencent,sina,ths,akshare}"
+      ENABLE_AKSHARE: "${ENABLE_AKSHARE:-true}"
+      HTTP_TIMEOUT: "${HTTP_TIMEOUT:-6}"
+      HTTP_RETRY: "${HTTP_RETRY:-2}"
+
+      # ---------- 缓存 TTL（秒） ----------
+      QUOTE_TTL_OPEN: "${QUOTE_TTL_OPEN:-2.5}"
+      QUOTE_TTL_CLOSED: "${QUOTE_TTL_CLOSED:-60}"
+      HISTORY_TTL_OPEN: "${HISTORY_TTL_OPEN:-120}"
+      HISTORY_TTL_CLOSED: "${HISTORY_TTL_CLOSED:-900}"
+      SEARCH_TTL: "${SEARCH_TTL:-300}"
+      HOT_TTL: "${HOT_TTL:-60}"
+
+      # ---------- 业务参数 ----------
+      KLINE_LIMIT: "${KLINE_LIMIT:-260}"
+      FLOW_DAYS: "${FLOW_DAYS:-30}"
+      MARGIN_DAYS: "${MARGIN_DAYS:-30}"
+
+    # 数据持久化：容器重建不丢
+    volumes:
+      - stock-board-data:/app/data
+
+    # 日志上限：防止长期运行占满磁盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # 资源上限（按需调整）
+    mem_limit: 1g
+    cpus: "1.0"
+
+volumes:
+  stock-board-data:

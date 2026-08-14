@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>股票看板</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark">股</span>
+        <span class="brand-name">股票看板</span>
+      </div>
+
+      <nav class="nav" id="nav">
+        <a class="nav-item" href="#/home" data-route="home">首页</a>
+        <a class="nav-item" href="#/search" data-route="search">查询</a>
+      </nav>
+
+      <div class="topbar-right">
+        <span class="session" id="session-badge" title="交易时段">--</span>
+        <button class="btn btn-ghost" id="btn-settings" title="AI 模型配置" aria-label="设置">⚙</button>
+        <button class="btn btn-ghost" id="btn-manage" title="批量管理自选股">管理</button>
+        <button class="btn btn-primary" id="btn-refresh" title="手动刷新全部数据">
+          <span class="refresh-icon">⟳</span> 刷新
+        </button>
+      </div>
+    </div>
+    <div class="topbar-sub" id="topbar-sub"></div>
+  </header>
+
+  <main id="view"></main>
+
+  <div class="modal-root" id="modal-root" hidden>
+    <div class="modal-mask" data-close="1"></div>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head">
+        <div class="modal-title" id="modal-title">AI 智能分析</div>
+        <div class="modal-actions" id="modal-actions"></div>
+        <button class="modal-close" data-close="1" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="modal-settings" hidden>
+    <div class="modal-mask" data-close-settings="1"></div>
+    <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head">
+        <div class="modal-title" id="settings-title">AI 模型配置</div>
+        <button class="modal-close" data-close-settings="1" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="cfg-row">
+          <label for="cfg-vendor">厂商预设</label>
+          <select id="cfg-vendor"></select>
+        </div>
+        <div class="cfg-row">
+          <label for="cfg-base-url">Base URL</label>
+          <input id="cfg-base-url" type="text" spellcheck="false"
+                 placeholder="https://api.deepseek.com/v1">
+        </div>
+        <div class="cfg-row">
+          <label for="cfg-model">模型名称</label>
+          <div class="cfg-model-wrap">
+            <input id="cfg-model" type="text" list="cfg-model-list" spellcheck="false"
+                   placeholder="deepseek-chat">
+            <datalist id="cfg-model-list"></datalist>
+            <button class="btn btn-sm" id="cfg-models" title="从云端拉取该服务支持的模型列表">获取模型</button>
+          </div>
+        </div>
+        <div class="cfg-row">
+          <label for="cfg-api-key">API Key</label>
+          <input id="cfg-api-key" type="password" autocomplete="off"
+                 placeholder="已保存的密钥会保留，留空则不变">
+        </div>
+        <div class="cfg-row cfg-check">
+          <label for="cfg-enabled">启用 AI 分析</label>
+          <input id="cfg-enabled" type="checkbox">
+        </div>
+        <div class="cfg-row cfg-check">
+          <label for="cfg-json-mode">JSON 模式（不兼容的端点请关闭）</label>
+          <input id="cfg-json-mode" type="checkbox">
+        </div>
+        <div class="cfg-note" id="cfg-note"></div>
+        <div class="cfg-actions">
+          <button class="btn" id="cfg-test">测试连接</button>
+          <span class="cfg-test-result" id="cfg-test-result"></span>
+        </div>
+        <div class="cfg-actions">
+          <button class="btn btn-primary" id="cfg-save">保存</button>
+          <button class="btn btn-ghost" id="cfg-reset">恢复默认（环境变量）</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-root" id="toast-root"></div>
+
+  <script src="/static/vendor/echarts.min.js"></script>
+  <script src="/static/js/util.js"></script>
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script src="/static/js/page-home.js"></script>
+  <script src="/static/js/page-search.js"></script>
+  <script src="/static/js/page-detail.js"></script>
+  <script src="/static/js/ai.js"></script>
+  <script src="/static/js/settings.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

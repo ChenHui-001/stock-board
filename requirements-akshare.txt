@@ -1,0 +1,5 @@
+# 可选数据源：AkShare（辅助兜底）
+# 默认不安装，镜像可减小 ~400MB。
+# 启用方式：docker compose build --build-arg WITH_AKSHARE=true
+akshare==1.18.91
+pandas==2.2.3
