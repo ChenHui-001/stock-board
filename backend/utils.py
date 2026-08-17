@@ -161,3 +161,24 @@ def data_is_stale(trade_date: str | None) -> bool:
         while not is_weekday(ref):
             ref -= timedelta(days=1)
     return (ref - d).days > 3
+
+
+def kline_is_stale(last_date: str | None) -> bool:
+    """K 线是否缺少最新交易日（比 `data_is_stale` 更严格）。
+
+    场景：同花顺 / 部分兜底源的日线文件滞后一天（周五收盘后最新K线仍是周四、
+    周一收盘后仍停在周五），此时 `data_is_stale` 的 3 天阈值恰好不触发，
+    用户会静默看到缺最新一根的 K 线。这里在工作日收盘后要求 K 线包含今天：
+    缺最近 1 个交易日（gap<=4，容忍跨周末）即判为滞后，长假（gap>4）仍不误报。
+    """
+    if not last_date:
+        return False
+    try:
+        d = datetime.strptime(last_date[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    today = now().date()
+    if session_state() == "closed" and is_weekday(today):
+        gap = (today - d).days
+        return 0 < gap <= 4
+    return False

@@ -14,6 +14,7 @@ from .utils import (
     data_is_stale,
     full_code,
     is_trading_now,
+    kline_is_stale,
     normalize_code,
     resolve_market,
     session_state,
@@ -308,7 +309,13 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
         storage.update_meta(code, None, boards[0])
 
     last_bar_date = bars[-1].date if bars else ""
-    if quote_dict["status"] == "normal" and data_is_stale(last_bar_date):
+    # 东财批量行情接口拿不到更新时间戳时（f86 语义异常），用 K 线最新日期回填，
+    # 避免 trade_date 恒为空导致 delayed 判定与前端展示失效
+    if not quote_dict.get("trade_date") and last_bar_date:
+        quote_dict["trade_date"] = last_bar_date
+    # data_is_stale 覆盖长假后仍停在节前的情况；kline_is_stale 覆盖同花顺/新浪这类
+    # 日线源滞后一天（收盘后缺最新交易日）的情况，避免用户静默看到缺最新一根的K线
+    if quote_dict["status"] == "normal" and (data_is_stale(last_bar_date) or kline_is_stale(last_bar_date)):
         quote_dict["status"] = "delayed"
         quote_dict["status_text"] = f"数据更新延迟（最新交易日 {last_bar_date}）"
 

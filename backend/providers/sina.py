@@ -1,12 +1,15 @@
-"""新浪财经数据源（辅）：实时行情 + 资金流向兜底。必须带 Referer，否则 403。"""
+"""新浪财经数据源（辅）：实时行情 + 日线 K 线 + 资金流向兜底。必须带 Referer，否则 403。"""
 from __future__ import annotations
 
 import json
 
 from ..utils import normalize_code, resolve_market, sina_code, to_float
-from .base import FlowDay, Provider, ProviderError, Quote, fetch
+from .base import Bar, FlowDay, Provider, ProviderError, Quote, fetch
 
 QUOTE_URL = "https://hq.sinajs.cn/list="
+KLINE_URL = (
+    "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData"
+)
 FLOW_URL = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_zjlrqs"
 RANK_URL = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
 HEADERS = {"Referer": "https://finance.sina.com.cn"}
@@ -23,7 +26,7 @@ def _decode(raw: bytes) -> str:
 
 class SinaProvider(Provider):
     def __init__(self) -> None:
-        super().__init__(name="sina", caps={"quotes", "fund_flow", "hot"})
+        super().__init__(name="sina", caps={"quotes", "kline", "fund_flow", "hot"})
 
     async def quotes(self, keys: list[tuple[str, str]]) -> dict[str, Quote]:
         if not keys:
@@ -70,6 +73,52 @@ class SinaProvider(Provider):
         if not out:
             raise ProviderError("新浪行情返回为空")
         return out
+
+    # ------------------------------------------------------------ 日线 K 线
+    async def kline(self, code: str, market: str, limit: int) -> list[Bar]:
+        """新浪日线（含当日，收盘后即有），作为东财 K 线不可用时的兜底。
+
+        该接口返回未复权数据，除权日会有跳空，仅作兜底使用；
+        东财（前复权）优先，新浪失败再退同花顺。
+        """
+        resp = await fetch(
+            KLINE_URL,
+            headers=HEADERS,
+            params={"symbol": sina_code(code, market), "scale": 240, "ma": "no", "datalen": limit},
+        )
+        try:
+            rows = json.loads(_decode(resp.content) or "[]")
+        except json.JSONDecodeError as exc:
+            raise ProviderError("新浪K线解析失败") from exc
+        if not isinstance(rows, list) or not rows:
+            raise ProviderError("新浪未返回K线")
+
+        bars: list[Bar] = []
+        for row in rows:
+            try:
+                date = str(row["day"] or "")[:10]
+                if len(date) != 10:
+                    continue
+                bars.append(
+                    Bar(
+                        date=date,
+                        open=to_float(row.get("open"), 0.0) or 0.0,
+                        close=to_float(row.get("close"), 0.0) or 0.0,
+                        high=to_float(row.get("high"), 0.0) or 0.0,
+                        low=to_float(row.get("low"), 0.0) or 0.0,
+                        volume=to_float(row.get("volume"), 0.0) or 0.0,
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        if not bars:
+            raise ProviderError("新浪未返回K线")
+        # 补涨跌幅（新浪该接口不含 change_pct）
+        for i in range(1, len(bars)):
+            prev = bars[i - 1].close
+            if prev:
+                bars[i].change_pct = round((bars[i].close - prev) / prev * 100, 2)
+        return bars[-limit:]
 
     async def fund_flow(self, code: str, market: str, days: int) -> list[FlowDay]:
         """兜底口径：新浪只提供「净流入总额」与「超大单净额」，

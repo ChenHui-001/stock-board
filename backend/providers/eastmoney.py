@@ -24,7 +24,10 @@ DC = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 REFERER = {"Referer": "https://quote.eastmoney.com/"}
 
 # ulist 字段（f10=量比，f8=换手率）
-QUOTE_FIELDS = "f1,f2,f3,f4,f5,f6,f8,f10,f12,f13,f14,f15,f16,f17,f18,f86,f100,f292"
+# f86 在 stock/get（单股）接口是标准 unix 时间戳，但在 ulist（批量）接口部分场景
+# 返回的是延迟秒数等非时间戳值；f124 是批量接口的备选更新时间字段，二者都无效时
+# trade_date 置空，由上层用 K 线日期回填（详情页已实现）。
+QUOTE_FIELDS = "f1,f2,f3,f4,f5,f6,f8,f10,f12,f13,f14,f15,f16,f17,f18,f86,f100,f124,f292"
 
 # A 股全市场（沪深主板+创业板+科创板+北交所）
 FS_ALL = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
@@ -106,7 +109,7 @@ class EastmoneyProvider(Provider):
                 amount=to_float(row.get("f6")),
                 turnover=to_float(row.get("f8")),
                 volume_ratio=to_float(row.get("f10")),
-                trade_date=_ts_to_date(row.get("f86")),
+                trade_date=_ts_to_date(row.get("f86")) or _ts_to_date(row.get("f124")),
                 source=self.name,
             )
             out[f"{code}.{market}"] = quote

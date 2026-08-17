@@ -84,6 +84,17 @@ def test_model_filter() -> None:
           f"keep误杀={bad_keep} drop漏网={bad_drop}")
 
 
+# ------------------------------------------------------------------ K 线滞后判定
+def test_kline_stale() -> None:
+    from backend.utils import kline_is_stale
+
+    # 周一收盘（2026-08-17）：K线停在周五应判滞后，含今天则正常
+    check("K线滞后判定: 周一收盘缺周五->周一(停08-14)", kline_is_stale("2026-08-14") is True)
+    check("K线滞后判定: 周一收盘已含今天(08-17)", kline_is_stale("2026-08-17") is False)
+    check("K线滞后判定: 空日期不滞后", kline_is_stale("") is False)
+    check("K线滞后判定: 非法日期不滞后", kline_is_stale("abc") is False)
+
+
 # ------------------------------------------------------------------ 缓存
 
 def test_cache() -> None:
@@ -158,6 +169,7 @@ def main() -> int:
     test_json_repair()
     test_fingerprint()
     test_model_filter()
+    test_kline_stale()
     test_cache()
     test_ai_lock()
     test_indicators()
