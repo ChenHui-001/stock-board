@@ -197,12 +197,6 @@ async def add_watchlist(body: AddWatchBody) -> dict[str, Any]:
     return {"ok": True, "created": created, "code": code, "name": name, "board": board}
 
 
-@router.delete("/watchlist")
-async def delete_watchlist(codes: str = Query(..., description="逗号分隔的股票代码")) -> dict[str, Any]:
-    removed = storage.remove_watch(codes.split(","))
-    return {"ok": True, "removed": removed}
-
-
 @router.post("/watchlist/remove")
 async def remove_watchlist(body: CodesBody) -> dict[str, Any]:
     """批量删除（需求 7.4）。"""
@@ -248,13 +242,20 @@ async def stock_detail(code: str, refresh: bool = Query(False)) -> dict[str, Any
         raise _fail(exc, "获取股票详情失败") from exc
 
 
+@router.get("/quote/{code}")
+async def stock_quote(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
+    """轻量行情（详情页自动刷新用）：只返回单只报价，不携带 K线/资金/两融历史。"""
+    code = normalize_code(code)
+    if not code:
+        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    try:
+        quote = await service.get_quote(code, resolve_market(code), force=refresh)
+    except ProviderError as exc:
+        raise _fail(exc, "获取行情失败") from exc
+    return {"quote": quote.to_dict(), "session": service.session_info()}
+
+
 # ------------------------------------------------------------------ AI 分析
-
-@router.get("/ai/{code}")
-async def ai_cached(code: str) -> dict[str, Any]:
-    report = storage.get_report(normalize_code(code))
-    return {"exists": bool(report), "report": report}
-
 
 @router.post("/ai/{code}")
 async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:

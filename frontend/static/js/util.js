@@ -81,18 +81,16 @@
     };
   }
 
-  let toastTimer = [];
   function toast(message, kind) {
     const root = document.getElementById('toast-root');
     if (!root) return;
     const node = el('div', 'toast' + (kind ? ' ' + kind : ''), message);
     root.appendChild(node);
-    const t = setTimeout(function () {
+    setTimeout(function () {
       node.style.opacity = '0';
       node.style.transition = 'opacity .25s';
       setTimeout(function () { node.remove(); }, 250);
     }, 2600);
-    toastTimer.push(t);
   }
 
   async function copyText(text) {

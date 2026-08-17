@@ -120,7 +120,9 @@ class EastmoneyProvider(Provider):
                 "input": keyword,
                 "type": 14,
                 "token": "D43BF722C8E33BDC906FB84D85E326E8",
-                "count": max(limit * 3, 20),
+                # 联想接口会混入基金/债券/港股等非 A 股条目，预留 2 倍余量过滤；
+                # 上限 60 防止超大 limit 无谓拉取（此前固定 3 倍、默认 15 条会拉到 45 条）
+                "count": min(max(limit * 2, 20), 60),
             },
         )
         data = resp.json() or {}

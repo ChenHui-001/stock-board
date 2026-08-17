@@ -449,11 +449,13 @@
   }
 
   // ---------------------------------------------------------- 局部刷新
+  // 只拉轻量行情（单只报价），避免每 3 秒整包重传 K线/资金/两融历史数据
   async function tick() {
     if (!state.data) return;
     try {
-      const data = await API.detail(state.code, false);
-      state.data = data;
+      const data = await API.quote(state.code, false);
+      if (!data || !data.quote) return;
+      state.data.quote = data.quote;
       patchHead(data);
       App.setSession(data.session);
     } catch (err) { /* 静默 */ }

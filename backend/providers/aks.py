@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
 from typing import Any
 
-from ..utils import normalize_code, resolve_market, to_float
+from ..utils import normalize_code, now, resolve_market, to_float
 from .base import Bar, FlowDay, Provider, ProviderError
 
 log = logging.getLogger("providers.akshare")
@@ -43,10 +44,10 @@ async def _run(fn: Any, *args: Any, **kwargs: Any) -> Any:
         raise ProviderError(f"akshare 调用失败: {exc}") from exc
 
 
-def _prefixed(code: str, market: str | None = None) -> str:
-    code = normalize_code(code)
-    market = market or resolve_market(code)
-    return f"{market.lower()}{code}"
+def _start_date(limit: int) -> str:
+    """K线起始日期：按「日历日 ≈ 交易日 ×1.4 + 假期缓冲」折算，避免每次拉全量历史。"""
+    days = int(limit * 1.4) + 30
+    return (now().date() - timedelta(days=days)).strftime("%Y%m%d")
 
 
 class AkshareProvider(Provider):
@@ -59,6 +60,8 @@ class AkshareProvider(Provider):
             ak.stock_zh_a_hist,
             symbol=normalize_code(code),
             period="daily",
+            start_date=_start_date(limit),
+            end_date=now().strftime("%Y%m%d"),
             adjust="qfq",
         )
         if df is None or df.empty:

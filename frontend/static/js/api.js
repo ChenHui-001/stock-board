@@ -2,13 +2,33 @@
 (function (global) {
   'use strict';
 
+  // 请求超时（毫秒）：LLM 分析最坏 3 次重试，给足余量；超时提示而非无限转圈
+  const REQUEST_TIMEOUT = 90000;
+
+  function fetchWithTimeout(path, opts) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(function () { ctrl.abort(); }, opts.timeout || REQUEST_TIMEOUT);
+    opts.signal = ctrl.signal;
+    return fetch(path, opts).finally(function () { clearTimeout(timer); });
+  }
+
   async function request(path, options) {
     const opts = Object.assign({ headers: {} }, options || {});
     if (opts.body && typeof opts.body !== 'string') {
       opts.body = JSON.stringify(opts.body);
       opts.headers['Content-Type'] = 'application/json';
     }
-    const resp = await fetch(path, opts);
+    let resp;
+    try {
+      resp = await fetchWithTimeout(path, opts);
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        const err = new Error('请求超时，请稍后重试');
+        err.status = 0;
+        throw err;
+      }
+      throw e;
+    }
     let data = null;
     const text = await resp.text();
     if (text) {
@@ -51,8 +71,8 @@
     detail: function (code, refresh) {
       return request('/api/stock/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''));
     },
-    aiCached: function (code) {
-      return request('/api/ai/' + encodeURIComponent(code));
+    quote: function (code, refresh) {
+      return request('/api/quote/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''));
     },
     aiAnalyze: function (code, refresh) {
       return request('/api/ai/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''), {

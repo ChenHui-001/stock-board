@@ -51,6 +51,14 @@ class LLMError(Exception):
 # 空 content / JSON 解析失败时的总尝试次数
 MAX_ATTEMPTS = 3
 
+# 云端 /models 返回的模型 ID 中，明确非「对话补全」类别的关键字（embedding/图片/语音/重排等），
+# 下拉选择时直接过滤，避免选中后 /chat/completions 必失败
+_NON_CHAT_RE = re.compile(
+    r"embed|bge|m3e|jina|e5-|gte|text-embedding|dall|image|sdxl|stable-diffusion|flux|"
+    r"tts|speech|audio|whisper|rerank|re-rank|moderat|vector|video",
+    re.I,
+)
+
 
 def _extract_json(text: str) -> dict[str, Any]:
     """解析模型返回的 JSON，容忍代码块围栏、前后寒暄、尾随逗号与截断。
@@ -124,6 +132,10 @@ def _repair_truncated(s: str) -> dict[str, Any] | None:
     for i in closes[-16:][::-1]:
         for suf in suffix_pool:
             candidates.append(s[: i + 1] + suf)
+    # 截断发生在未闭合字符串内部（如 "short": "截断）：先补闭合引号再补括号；
+    # 所有候选都经 json.loads 校验，误补不会产生错误结果
+    for suf in suffix_pool[1:]:
+        candidates.append(s + '"' + suf)
     for suf in suffix_pool[1:]:
         candidates.append(s.rstrip() + suf)
     for cand in candidates:
@@ -360,10 +372,22 @@ async def list_models(cfg: dict[str, Any] | None = None) -> tuple[bool, list[str
         return False, [], "响应不是合法 JSON"
 
     models: list[str] = []
+    filtered = 0
     for row in data.get("data") or []:
         mid = (row or {}).get("id")
-        if mid:
-            models.append(str(mid))
+        if not mid:
+            continue
+        mid = str(mid)
+        if _NON_CHAT_RE.search(mid):
+            filtered += 1
+            continue
+        models.append(mid)
     if not models:
-        return False, [], "接口未返回任何模型"
-    return True, sorted(set(models)), f"获取到 {len(models)} 个模型"
+        return False, [], (
+            f"接口共返回 {len(data.get('data') or [])} 个模型，但都不是对话补全类"
+            "（已过滤 embedding/图片/语音等），无法用于 AI 分析"
+        )
+    note = f"获取到 {len(models)} 个模型"
+    if filtered:
+        note += f"（已过滤 {filtered} 个非对话模型）"
+    return True, sorted(set(models)), note
