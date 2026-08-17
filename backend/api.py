@@ -80,6 +80,24 @@ def _cached_report(code: str) -> dict[str, Any] | None:
     return cached
 
 
+# ------------------------------------------------------------------ 数据源健康自检
+# 逐源实测各能力（会真实请求数据源，较慢），同一时刻只允许一次探测，避免刷新风暴。
+_health_lock = asyncio.Lock()
+
+
+@router.get("/health/check")
+async def health_check() -> dict[str, Any]:
+    from . import check_sources
+
+    if _health_lock.locked():
+        raise HTTPException(status_code=409, detail="已有自检正在进行，请稍候")
+    async with _health_lock:
+        try:
+            return await asyncio.wait_for(check_sources.run_diagnostics(None), timeout=90)
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="自检超时（>90s），请稍后重试")
+
+
 # ------------------------------------------------------------------ 元信息
 
 @router.get("/meta")

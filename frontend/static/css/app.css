@@ -108,6 +108,142 @@ button { font-family: inherit; }
 }
 .topbar-sub:not(:empty) { padding-bottom: 7px; }
 
+/* ------------------------------------------------------------ 数据源状态角标 */
+.ds-wrap { position: relative; }
+
+.ds-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .15s, color .15s;
+}
+.ds-badge:hover { color: var(--text); border-color: #3a4354; }
+
+.ds-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--flat);
+  flex-shrink: 0;
+}
+.ds-badge.ok .ds-dot { background: var(--down); }
+.ds-badge.warn .ds-dot { background: var(--warn); }
+.ds-badge.err .ds-dot { background: var(--up); animation: pulse 1.4s ease-in-out infinite; }
+
+.ds-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 330px;
+  max-height: 72vh;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .55);
+  z-index: 90;
+  padding: 12px;
+  font-size: 12.5px;
+  animation: modalIn .15s ease-out;
+}
+
+.ds-head {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ds-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ds-row:last-child { border-bottom: none; }
+.ds-name {
+  width: 78px;
+  font-family: var(--mono);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.ds-name.ok { color: var(--down); }
+.ds-name.warn { color: var(--warn); }
+.ds-name.err { color: var(--up); }
+.ds-caps {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-state {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.ds-state.warn { color: var(--warn); }
+.ds-state.err { color: var(--up); }
+.ds-sub {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  line-height: 1.7;
+}
+.ds-sub .warn { color: var(--warn); }
+
+.ds-cap {
+  display: inline-block;
+  margin: 1px 3px 1px 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: default;
+}
+.ds-cap.ok { border-color: rgba(23, 178, 106, .35); color: var(--down); }
+.ds-cap.err { border-color: rgba(245, 70, 93, .4); color: var(--up); }
+.ds-cap.warn { border-color: rgba(245, 158, 11, .4); color: var(--warn); }
+
+.ds-check-row { flex-wrap: wrap; }
+.ds-checking { text-align: center; padding: 18px 6px; color: var(--text-dim); font-size: 12.5px; line-height: 1.8; }
+.ds-spinner {
+  width: 26px; height: 26px; margin: 0 auto 10px;
+  border: 3px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+.ds-actions { margin-top: 10px; display: flex; gap: 8px; }
+.ds-faint { color: var(--text-faint); font-size: 11px; }
+.ds-issues { color: var(--warn); }
+.ds-head .ds-faint { font-weight: 400; margin-left: auto; }
+.ds-head { justify-content: space-between; }
+
+@media (max-width: 700px) {
+  .ds-badge { padding: 3px 8px; }
+  .ds-popover { width: min(330px, calc(100vw - 24px)); }
+  /* 顶栏放不下完整文字时，角标只保留状态圆点、时段徽标去掉提示（信息在 title 与副栏） */
+  .ds-badge #ds-label { display: none; }
+  .session-hint { display: none; }
+}
+
 /* ------------------------------------------------------------ 按钮 */
 .btn {
   border: 1px solid var(--line);

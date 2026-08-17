@@ -22,6 +22,13 @@
 
       <div class="topbar-right">
         <span class="session" id="session-badge" title="交易时段">--</span>
+        <div class="ds-wrap">
+          <button class="ds-badge" id="btn-ds" title="数据源状态" aria-label="数据源状态" aria-expanded="false">
+            <span class="ds-dot" id="ds-dot"></span>
+            <span id="ds-label">数据源</span>
+          </button>
+          <div class="ds-popover" id="ds-popover" hidden></div>
+        </div>
         <button class="btn btn-ghost" id="btn-settings" title="AI 模型配置" aria-label="设置">⚙</button>
         <button class="btn btn-ghost" id="btn-manage" title="批量管理自选股">管理</button>
         <button class="btn btn-primary" id="btn-refresh" title="手动刷新全部数据">

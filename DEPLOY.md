@@ -130,6 +130,18 @@ docker compose down        # 停止（数据卷保留）
 curl -s http://127.0.0.1:8000/healthz
 ```
 
+**数据源健康自检**（逐源实测行情/K线/资金/两融，报告新鲜度与限流状态）：
+
+```bash
+# 在项目目录（有源码时）
+python backend/check_sources.py                 # 默认 4 只样本股
+python backend/check_sources.py --code 600000   # 指定单只股票
+python backend/check_sources.py --json          # JSON 输出（脚本/监控用）
+```
+
+退出码：`0`=至少一个行情源可用，`1`=全部行情源不可用，`2`=参数错误。
+每次输出会标注各源 K 线/资金流最新日期、行情日期是否滞后（已判延迟的数据会在页面显示「数据更新延迟」），以及被限流的主机与冷却剩余时间。
+
 ---
 
 ## 6. 升级
