@@ -66,6 +66,9 @@ class Settings:
     LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
     LLM_TIMEOUT = _float("LLM_TIMEOUT", 45.0)
     LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 4000)
+    # 思考类模型（deepseek-reasoner / *-thinking / r1 等）的思考过程也占用输出配额，
+    # 配额不足时正文 content 会为空；检测到思考型模型或空正文时自动放大到此值重试。
+    LLM_THINKING_MAX_TOKENS = _int("LLM_THINKING_MAX_TOKENS", 8192)
     LLM_TEMPERATURE = _float("LLM_TEMPERATURE", 0.25)
     # 部分兼容端点不支持 response_format=json_object，可关闭
     LLM_JSON_MODE = _bool("LLM_JSON_MODE", True)

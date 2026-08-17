@@ -151,24 +151,46 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
     if c["json_mode"]:
         payload["response_format"] = {"type": "json_object"}
 
+    # 思考类模型（deepseek-reasoner / *-thinking / r1 等）的思考过程也占用输出配额，
+    # 按模型名预先放大 max_tokens，避免思考挤占正文配额导致 content 为空
+    thinking_bumped = False
+    if re.search(r"reason|r1(?:\b|-)|think", c["model"], re.I):
+        if settings.LLM_THINKING_MAX_TOKENS > payload["max_tokens"]:
+            payload["max_tokens"] = settings.LLM_THINKING_MAX_TOKENS
+            thinking_bumped = True
+
     url = f"{c['base_url']}/chat/completions"
     headers = {
         "Authorization": f"Bearer {c['api_key']}",
         "Content-Type": "application/json",
     }
 
-    # 空 content 或 JSON 解析失败都重试一次；第二次追加「只输出合法 JSON」提示
+    # 空 content 或 JSON 解析失败自动重试；第二次视失败原因追加针对性提示
     nudge = (
         "\n\n（注意：上一次返回的内容不是合法 JSON。请务必只输出一个完整的 JSON 对象："
         "不要包含 Markdown 代码块标记、注释或任何额外文字，所有字符串用双引号，"
         "字段之间用逗号分隔，不要截断。）"
     )
+    thinking_nudge = (
+        "\n\n（注意：请先完成思考过程，然后把最终的 JSON 结果完整输出在 content 正文中，"
+        "不要只输出思考、不要截断。）"
+    )
     last_finish: str | None = None
     last_msg: dict[str, Any] | None = None
     last_content: str = ""
-    for _attempt in (1, 2):
-        if _attempt == 2:
+    nudged_json = False
+    for _attempt in (1, 2, 3):
+        if _attempt == 2 and (last_msg or {}).get("reasoning_content"):
+            # 思考模型正文为空：放大配额并提示把结果输出到 content
+            if settings.LLM_THINKING_MAX_TOKENS > payload["max_tokens"]:
+                payload["max_tokens"] = settings.LLM_THINKING_MAX_TOKENS
+                thinking_bumped = True
+            payload["messages"][1]["content"] = (
+                str(payload["messages"][1]["content"]) + thinking_nudge
+            )
+        elif _attempt >= 2 and not nudged_json:
             payload["messages"][1]["content"] = str(payload["messages"][1]["content"]) + nudge
+            nudged_json = True
         try:
             resp = await _client_of().post(url, json=payload, headers=headers)
         except httpx.HTTPError as exc:
@@ -179,6 +201,14 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
             # 不支持 json_object 的端点会报 400，自动降级重试一次
             if c["json_mode"] and resp.status_code == 400 and "response_format" in body:
                 payload.pop("response_format", None)
+                try:
+                    resp = await _client_of().post(url, json=payload, headers=headers)
+                except httpx.HTTPError as exc:
+                    raise LLMError(f"LLM 请求失败: {exc}") from exc
+            # 放大的 max_tokens 超出端点上限报 400：退回原值重试一次
+            if resp.status_code == 400 and thinking_bumped and "max_tokens" in body:
+                payload["max_tokens"] = settings.LLM_MAX_TOKENS
+                thinking_bumped = False
                 try:
                     resp = await _client_of().post(url, json=payload, headers=headers)
                 except httpx.HTTPError as exc:
@@ -217,22 +247,31 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
         last_finish = choices[0].get("finish_reason")
         last_msg = msg
         log.warning(
-            "LLM 返回空 content（attempt %s/2），finish_reason=%s，message=%s",
-            _attempt, last_finish, str(last_msg)[:200],
+            "LLM 返回空 content（attempt %s/3），finish_reason=%s，reasoning_len=%s，message=%s",
+            _attempt, last_finish,
+            len(str(msg.get("reasoning_content") or "")), str(last_msg)[:200],
         )
 
     if last_content:
         raise LLMError(f"模型返回不是合法 JSON（内容开头：{last_content[:100]!r}）")
-    raise LLMError(_empty_content_error(last_finish, last_msg))
+    raise LLMError(_empty_content_error(last_finish, last_msg, thinking_bumped))
 
 
-def _empty_content_error(finish: str | None, msg: dict[str, Any] | None) -> str:
+def _empty_content_error(
+    finish: str | None, msg: dict[str, Any] | None, thinking_bumped: bool = False
+) -> str:
     """把空响应的常见原因翻译成可执行的提示。"""
     if (msg or {}).get("reasoning_content"):
+        if thinking_bumped:
+            return (
+                "模型只输出了思考过程、未输出正文（content 为空），自动调大输出配额"
+                "（LLM_THINKING_MAX_TOKENS）后仍失败。请在 ⚙ 设置里调大"
+                "LLM_THINKING_MAX_TOKENS，或换用非思考类模型（如 deepseek-chat）后重试"
+            )
         return (
-            "模型只输出了思考过程、未输出正文（content 为空）。"
+            "模型只输出了思考过程、未输出正文（content 为空），已自动调大输出配额重试。"
             "请换用非思考类模型（如 deepseek-chat 而非 deepseek-reasoner），"
-            "或调大 LLM_MAX_TOKENS 后重试"
+            "或在环境变量里调大 LLM_THINKING_MAX_TOKENS 后重试"
         )
     if finish == "length":
         return (

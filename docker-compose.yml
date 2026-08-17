@@ -45,6 +45,8 @@ services:
       LLM_JSON_MODE: "${LLM_JSON_MODE:-true}"
       LLM_TIMEOUT: "${LLM_TIMEOUT:-45}"
       LLM_MAX_TOKENS: "${LLM_MAX_TOKENS:-4000}"
+      # 思考类模型（deepseek-reasoner 等）思考过程也占输出配额，正文为空时自动放大到此值重试
+      LLM_THINKING_MAX_TOKENS: "${LLM_THINKING_MAX_TOKENS:-8192}"
       LLM_TEMPERATURE: "${LLM_TEMPERATURE:-0.25}"
 
       # ---------- 数据源 ----------
