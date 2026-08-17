@@ -48,6 +48,10 @@ class LLMError(Exception):
     pass
 
 
+# 空 content / JSON 解析失败时的总尝试次数
+MAX_ATTEMPTS = 3
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     """解析模型返回的 JSON，容忍代码块围栏、前后寒暄、尾随逗号与截断。
 
@@ -165,6 +169,36 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
         "Content-Type": "application/json",
     }
 
+    async def post() -> httpx.Response:
+        try:
+            return await _client_of().post(url, json=payload, headers=headers)
+        except httpx.HTTPError as exc:
+            raise LLMError(f"LLM 请求失败: {exc}") from exc
+
+    async def post_with_400_repair() -> httpx.Response:
+        """发请求；遇 400 按报错内容逐项自愈。
+
+        每轮都重新读取本轮响应体再决定下一步，否则会拿上一轮的报错内容
+        去判断这一轮的结果，导致该触发的修复被跳过。
+        """
+        nonlocal thinking_bumped
+        resp = await post()
+        for _ in range(2):
+            if resp.status_code != 400:
+                break
+            body = resp.text[:300]
+            if "response_format" in body and "response_format" in payload:
+                # 端点不支持 json_object：去掉该字段重试
+                payload.pop("response_format", None)
+            elif "max_tokens" in body and thinking_bumped:
+                # 放大的 max_tokens 超出端点上限：退回原值重试
+                payload["max_tokens"] = settings.LLM_MAX_TOKENS
+                thinking_bumped = False
+            else:
+                break
+            resp = await post()
+        return resp
+
     # 空 content 或 JSON 解析失败自动重试；第二次视失败原因追加针对性提示
     nudge = (
         "\n\n（注意：上一次返回的内容不是合法 JSON。请务必只输出一个完整的 JSON 对象："
@@ -179,7 +213,7 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
     last_msg: dict[str, Any] | None = None
     last_content: str = ""
     nudged_json = False
-    for _attempt in (1, 2, 3):
+    for _attempt in range(1, MAX_ATTEMPTS + 1):
         if _attempt == 2 and (last_msg or {}).get("reasoning_content"):
             # 思考模型正文为空：放大配额并提示把结果输出到 content
             if settings.LLM_THINKING_MAX_TOKENS > payload["max_tokens"]:
@@ -191,30 +225,10 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
         elif _attempt >= 2 and not nudged_json:
             payload["messages"][1]["content"] = str(payload["messages"][1]["content"]) + nudge
             nudged_json = True
-        try:
-            resp = await _client_of().post(url, json=payload, headers=headers)
-        except httpx.HTTPError as exc:
-            raise LLMError(f"LLM 请求失败: {exc}") from exc
 
+        resp = await post_with_400_repair()
         if resp.status_code >= 400:
-            body = resp.text[:300]
-            # 不支持 json_object 的端点会报 400，自动降级重试一次
-            if c["json_mode"] and resp.status_code == 400 and "response_format" in body:
-                payload.pop("response_format", None)
-                try:
-                    resp = await _client_of().post(url, json=payload, headers=headers)
-                except httpx.HTTPError as exc:
-                    raise LLMError(f"LLM 请求失败: {exc}") from exc
-            # 放大的 max_tokens 超出端点上限报 400：退回原值重试一次
-            if resp.status_code == 400 and thinking_bumped and "max_tokens" in body:
-                payload["max_tokens"] = settings.LLM_MAX_TOKENS
-                thinking_bumped = False
-                try:
-                    resp = await _client_of().post(url, json=payload, headers=headers)
-                except httpx.HTTPError as exc:
-                    raise LLMError(f"LLM 请求失败: {exc}") from exc
-            if resp.status_code >= 400:
-                raise LLMError(f"LLM 返回 {resp.status_code}: {resp.text[:300]}")
+            raise LLMError(f"LLM 返回 {resp.status_code}: {resp.text[:300]}")
 
         try:
             data = resp.json()
@@ -235,8 +249,8 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
                 parsed = _extract_json(content)
             except LLMError as exc:
                 log.warning(
-                    "LLM JSON 解析失败（attempt %s/2）：%s，内容开头：%s",
-                    _attempt, exc, content[:120].replace("\n", " "),
+                    "LLM JSON 解析失败（attempt %s/%s）：%s，内容开头：%s",
+                    _attempt, MAX_ATTEMPTS, exc, content[:120].replace("\n", " "),
                 )
                 continue
             meta = {
@@ -247,8 +261,8 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
         last_finish = choices[0].get("finish_reason")
         last_msg = msg
         log.warning(
-            "LLM 返回空 content（attempt %s/3），finish_reason=%s，reasoning_len=%s，message=%s",
-            _attempt, last_finish,
+            "LLM 返回空 content（attempt %s/%s），finish_reason=%s，reasoning_len=%s，message=%s",
+            _attempt, MAX_ATTEMPTS, last_finish,
             len(str(msg.get("reasoning_content") or "")), str(last_msg)[:200],
         )
 

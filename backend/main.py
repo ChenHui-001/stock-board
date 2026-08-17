@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import llm, storage
@@ -22,6 +23,30 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+# 静态资源版本号：取 static 目录下最新文件的 mtime，前端文件一变版本即变。
+# index.html 给 css/js/vendor 加上 ?v= 查询参数，/static 响应头 immutable 长缓存；
+# 升级后浏览器自动拉新文件，不再需要手动 Ctrl+F5 强刷。
+def _static_version() -> str:
+    latest = 0.0
+    root = FRONTEND_DIR / "static"
+    if root.is_dir():
+        for p in root.rglob("*"):
+            if p.is_file():
+                latest = max(latest, p.stat().st_mtime)
+    return str(int(latest)) if latest else "1"
+
+
+_ASSET_VERSION = _static_version()
+_INDEX_HTML: str | None = None
+_ASSET_RE = re.compile(r"(/static/(?:css|js|vendor)/[^\"'?#\s]+)")
+
+
+def _render_index() -> str:
+    global _INDEX_HTML
+    if _INDEX_HTML is None:
+        _INDEX_HTML = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    return _ASSET_RE.sub(lambda m: f"{m.group(1)}?v={_ASSET_VERSION}", _INDEX_HTML)
 
 
 @asynccontextmanager
@@ -49,6 +74,15 @@ app.add_middleware(
 app.include_router(router)
 
 
+@app.middleware("http")
+async def cache_headers(request, call_next):
+    """HTML 始终 no-cache（配合 ?v= 保证前端改动即时生效）；静态资源 immutable 长缓存。"""
+    resp = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
+
+
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
     return JSONResponse({"ok": True})
@@ -62,8 +96,12 @@ if FRONTEND_DIR.exists():
     )
 
     @app.get("/")
-    async def index() -> FileResponse:
-        return FileResponse(str(FRONTEND_DIR / "index.html"))
+    async def index() -> Response:
+        return Response(
+            _render_index(),
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @app.get("/favicon.svg")
     async def favicon() -> FileResponse:

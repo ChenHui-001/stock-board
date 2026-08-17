@@ -139,6 +139,17 @@ def is_watched(code: str) -> bool:
         return _connect().execute("SELECT 1 FROM watchlist WHERE code=?", (code,)).fetchone() is not None
 
 
+def watched_codes() -> set[str]:
+    """一次取回全部自选股代码，供批量判定使用。
+
+    搜索结果 / 热门榜要给每一行标注是否已自选，逐行查会退化成 N+1 次查询。
+    自选股规模很小，整表读进内存做集合判定更划算。
+    """
+    with _lock:
+        rows = _connect().execute("SELECT code FROM watchlist").fetchall()
+    return {r["code"] for r in rows}
+
+
 # ------------------------------------------------------------------ 键值配置
 
 def get_kv(key: str) -> str | None:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -103,6 +104,9 @@ class Throttled(ProviderError):
 
 
 class HostLimiter:
+    """主机级节流。计时统一用 `time.monotonic()`：与 Registry 的熔断计时同源，
+    且不依赖事件循环，`status()` 在任意上下文都能安全调用。"""
+
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
         self._last: dict[str, float] = {}
@@ -117,24 +121,23 @@ class HostLimiter:
             return self._locks[host]
 
     async def acquire(self, host: str) -> None:
-        loop = asyncio.get_running_loop()
         until = self._cooldown_until.get(host, 0.0)
-        if until > loop.time():
-            raise Throttled(f"{host} 频控冷却中，剩余 {until - loop.time():.0f}s")
+        now = time.monotonic()
+        if until > now:
+            raise Throttled(f"{host} 频控冷却中，剩余 {until - now:.0f}s")
 
         interval = _HOST_MIN_INTERVAL.get(host, DEFAULT_MIN_INTERVAL)
         lock = await self._lock(host)
         async with lock:
-            wait = self._last.get(host, 0.0) + interval - loop.time()
+            wait = self._last.get(host, 0.0) + interval - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
-            self._last[host] = loop.time()
+            self._last[host] = time.monotonic()
 
     def punish(self, host: str) -> None:
-        loop = asyncio.get_event_loop()
         length = min(COOLDOWN_MAX, (self._cooldown_len.get(host) or COOLDOWN_START / 2) * 2)
         self._cooldown_len[host] = length
-        self._cooldown_until[host] = loop.time() + length
+        self._cooldown_until[host] = time.monotonic() + length
         log.warning("主机 %s 触发频控，冷却 %.0fs（期间自动切换其他数据源）", host, length)
 
     def relax(self, host: str) -> None:
@@ -146,11 +149,11 @@ class HostLimiter:
             self._cooldown_len.pop(host, None)
 
     def status(self) -> dict[str, float]:
-        loop = asyncio.get_event_loop()
+        now = time.monotonic()
         return {
-            host: round(until - loop.time(), 1)
+            host: round(until - now, 1)
             for host, until in self._cooldown_until.items()
-            if until > loop.time()
+            if until > now
         }
 
 

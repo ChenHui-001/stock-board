@@ -1,8 +1,9 @@
 """HTTP API 路由。"""
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -39,6 +40,44 @@ class LLMConfigBody(BaseModel):
 def _fail(exc: Exception, hint: str) -> HTTPException:
     log.warning("%s: %s", hint, exc)
     return HTTPException(status_code=503, detail=f"{hint}：{exc}")
+
+
+# ------------------------------------------------------------------ AI 并发去重
+# 同一股票并发触发分析时只执行一次 LLM 调用，其余请求等待并复用其结果。
+class _AILock:
+    __slots__ = ("lock", "waiters")
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.waiters = 0
+
+
+_ai_locks: dict[str, _AILock] = {}
+
+
+async def _with_ai_lock(code: str, work: Callable[[], Awaitable[Any]]) -> Any:
+    entry = _ai_locks.get(code)
+    if entry is None:
+        entry = _ai_locks[code] = _AILock()
+    entry.waiters += 1
+    try:
+        async with entry.lock:
+            return await work()
+    finally:
+        entry.waiters -= 1
+        if entry.waiters <= 0 and _ai_locks.get(code) is entry:
+            _ai_locks.pop(code, None)
+
+
+def _cached_report(code: str) -> dict[str, Any] | None:
+    """当日缓存命中；但 LLM 配置变化后旧缓存作废（如规则引擎降级结果 -> 已配置大模型）。"""
+    cached = storage.get_report(code)
+    if not cached:
+        return None
+    meta = cached.get("meta") or {}
+    if meta.get("fingerprint") != llmcfg.fingerprint():
+        return None
+    return cached
 
 
 # ------------------------------------------------------------------ 元信息
@@ -181,7 +220,12 @@ async def order_watchlist(body: CodesBody) -> dict[str, Any]:
 # ------------------------------------------------------------------ 查询
 
 @router.get("/search")
-async def search(q: str = Query("", min_length=0), limit: int = Query(15, ge=1, le=30)) -> dict[str, Any]:
+async def search(
+    # 关键词进入缓存 key（service.search），限长以收敛 key 基数；
+    # 股票名称/6 位代码/拼音首字母都远短于此，前端输入框同样限制在 32 字符。
+    q: str = Query("", min_length=0, max_length=32),
+    limit: int = Query(15, ge=1, le=30),
+) -> dict[str, Any]:
     items = await service.search(q, limit)
     return {"keyword": q, "items": items}
 
@@ -218,28 +262,33 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
     if not code:
         raise HTTPException(status_code=400, detail="股票代码不能为空")
 
-    if not refresh:
-        cached = storage.get_report(code)
-        if cached:
-            return cached
+    async def _work() -> dict[str, Any]:
+        # 等锁期间可能已被并发请求填充，二次检查缓存
+        if not refresh:
+            cached = _cached_report(code)
+            if cached:
+                return cached
 
-    try:
-        detail = await service.stock_detail(code, resolve_market(code))
-    except ProviderError as exc:
-        raise _fail(exc, "AI 分析取数失败") from exc
+        try:
+            detail = await service.stock_detail(code, resolve_market(code))
+        except ProviderError as exc:
+            raise _fail(exc, "AI 分析取数失败") from exc
 
-    result = await analysis.analyze(detail)
-    quote = detail["quote"]
-    report = {
-        "code": code,
-        "name": quote.get("name"),
-        "board": quote.get("board"),
-        "price": quote.get("price"),
-        "change_pct": quote.get("change_pct"),
-        "analysis": result["analysis"],
-        "meta": result["meta"],
-        "status_tags": detail["status"]["tags"],
-        "from_cache": False,
-    }
-    storage.save_report(code, report)
-    return report
+        result = await analysis.analyze(detail)
+        quote = detail["quote"]
+        report = {
+            "code": code,
+            "name": quote.get("name"),
+            "board": quote.get("board"),
+            "price": quote.get("price"),
+            "change_pct": quote.get("change_pct"),
+            "analysis": result["analysis"],
+            "meta": {**result["meta"], "fingerprint": llmcfg.fingerprint()},
+            "status_tags": detail["status"]["tags"],
+            "from_cache": False,
+        }
+        storage.save_report(code, report)
+        return report
+
+    # 每股票单飞：并发点击同一只股票只打一次 LLM/取数，其余请求等待复用
+    return await _with_ai_lock(code, _work)

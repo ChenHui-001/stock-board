@@ -17,6 +17,7 @@
     input.id = 'search-input';
     input.placeholder = '输入股票名称、6 位代码或拼音首字母，如：浦发银行 / 600000 / pfyh';
     input.autocomplete = 'off';
+    input.maxLength = 32;               // 与后端 /api/search 的 max_length 对齐
     input.value = state.keyword;
     input.addEventListener('input', onInput);
     input.addEventListener('keydown', function (e) {

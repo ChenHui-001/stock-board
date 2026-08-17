@@ -174,13 +174,26 @@ async def _industry_map(keys: list[tuple[str, str]]) -> dict[str, str]:
         for key, name in fetched.items():
             cache.put(f"industry:{key}", name, 3600.0)
             found[key] = name
+        # 批量接口没覆盖到的（失败/空结果），并发逐股兜底，避免串行拖慢看板接口
         still = [(c, m) for c, m in missing if full_code(c, m) not in found]
-        for code, market in still:
-            names = await _boards(code, market, False)
-            if names:
-                key = full_code(code, market)
-                cache.put(f"industry:{key}", names[0], 3600.0)
-                found[key] = names[0]
+        if still:
+            async def _fetch_board(item: tuple[str, str]) -> tuple[str, str, str | None]:
+                code, market = item
+                names = await _boards(code, market, False)
+                return code, market, (names[0] if names else None)
+
+            results = await asyncio.gather(
+                *(_fetch_board(item) for item in still), return_exceptions=True
+            )
+            for r in results:
+                if isinstance(r, BaseException):
+                    log.info("逐股板块兜底失败：%s", r)
+                    continue
+                code, market, name = r
+                if name:
+                    key = full_code(code, market)
+                    cache.put(f"industry:{key}", name, 3600.0)
+                    found[key] = name
     return found
 
 
@@ -255,17 +268,30 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     code = normalize_code(code)
     market = market or resolve_market(code)
 
-    quote_task = asyncio.create_task(get_quote(code, market, force=force))
-    kline_task = asyncio.create_task(_kline(code, market, force))
-    flow_task = asyncio.create_task(_flow(code, market, force))
-    margin_task = asyncio.create_task(_margin(code, market, force))
-    boards_task = asyncio.create_task(_boards(code, market, force))
+    # 并发取数；任一失败立即取消其余任务，避免孤儿协程继续打上游接口
+    # （FIRST_EXCEPTION：无异常时等全部完成，有异常时立刻返回并取消未完成的）
+    tasks = {
+        "quote": asyncio.create_task(get_quote(code, market, force=force)),
+        "kline": asyncio.create_task(_kline(code, market, force)),
+        "flow": asyncio.create_task(_flow(code, market, force)),
+        "margin": asyncio.create_task(_margin(code, market, force)),
+        "boards": asyncio.create_task(_boards(code, market, force)),
+    }
+    done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_EXCEPTION)
+    for t in done:
+        exc = t.exception()
+        if exc is not None:
+            for p in pending:
+                p.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            raise exc
 
-    quote = await quote_task
-    kline_pack = await kline_task
-    flow_pack = await flow_task
-    margin_pack = await margin_task
-    boards = await boards_task
+    quote = tasks["quote"].result()
+    kline_pack = tasks["kline"].result()
+    flow_pack = tasks["flow"].result()
+    margin_pack = tasks["margin"].result()
+    boards = tasks["boards"].result()
 
     bars = kline_pack["bars"]
     ma_infos, ma_summary = indicators.build_ma(bars, quote.price)
@@ -354,6 +380,7 @@ async def search(keyword: str, limit: int = 15) -> list[dict[str, Any]]:
         quotes = {}
 
     out: list[dict[str, Any]] = []
+    watched = storage.watched_codes()
     for item in items:
         key = f"{item.code}.{item.market}"
         quote = quotes.get(key)
@@ -367,7 +394,7 @@ async def search(keyword: str, limit: int = 15) -> list[dict[str, Any]]:
             "change_pct": quote.change_pct if quote else None,
             "status": quote.status if quote else "unknown",
             "status_text": quote.status_text if quote else "",
-            "watched": storage.is_watched(item.code),
+            "watched": item.code in watched,
         }
         out.append(row)
     return out
@@ -382,9 +409,10 @@ async def hot(limit: int = 8) -> dict[str, Any]:
         empty={"data": {"gainers": [], "losers": [], "actives": []}},
     )
     data = pack.get("data") or {}
+    watched = storage.watched_codes()
 
     def pack_rows(items: list[Quote]) -> list[dict[str, Any]]:
-        return [{**q.to_dict(), "watched": storage.is_watched(q.code)} for q in items]
+        return [{**q.to_dict(), "watched": q.code in watched} for q in items]
 
     return {
         **{k: pack_rows(v) for k, v in data.items()},

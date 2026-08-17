@@ -106,6 +106,21 @@ def merge_pending(cfg: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def fingerprint() -> str:
+    """当前生效 LLM 配置的指纹，用于判断 AI 当日缓存是否仍适用。
+
+    启用开关 / Base URL / 模型 / 是否配置 Key 任一变化，指纹即不同：
+    旧缓存应作废重新分析，避免用户配好大模型后仍看到规则引擎的降级结果。
+    """
+    c = get_config()
+    return "|".join([
+        "1" if c["enabled"] else "0",
+        str(c.get("base_url") or ""),
+        str(c.get("model") or ""),
+        "1" if c.get("api_key") else "0",
+    ])
+
+
 def reset_config() -> dict[str, Any]:
     """清除界面配置，回退到环境变量。"""
     storage.clear_llm_config()
