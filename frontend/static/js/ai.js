@@ -234,10 +234,26 @@
     const risk = a.risk || {};
     const rs = U.el('div', 'ai-section');
     rs.appendChild(U.el('div', 'ai-section-title', '三、风险与机会拆解'));
+    // 机会/风险条目兼容两种结构：纯字符串（旧格式）或 {text, strength, hit, note}
+    // （盘口信号带历史命中率强度标注）
+    function sigLi(x) {
+      const li = U.el('li', '');
+      if (typeof x === 'string') {
+        li.textContent = x;
+        return li;
+      }
+      li.appendChild(U.el('span', '', x.text || ''));
+      if (x.strength) {
+        const b = U.el('span', 'ai-sig-badge ai-sig-' + x.strength, x.strength);
+        b.title = (x.hit ? '历史命中率: ' + x.hit + '\n' : '') + (x.note || '');
+        li.appendChild(b);
+      }
+      return li;
+    }
     if ((risk.opportunities || []).length) {
       rs.appendChild(U.el('div', 'ai-item-label', '核心机会'));
       const ul = U.el('ul', 'ai-list good');
-      risk.opportunities.forEach(function (x) { ul.appendChild(U.el('li', '', x)); });
+      risk.opportunities.forEach(function (x) { ul.appendChild(sigLi(x)); });
       rs.appendChild(ul);
     }
     if ((risk.risks || []).length) {
@@ -246,7 +262,7 @@
       lab.style.display = 'block';
       rs.appendChild(lab);
       const ul = U.el('ul', 'ai-list bad');
-      risk.risks.forEach(function (x) { ul.appendChild(U.el('li', '', x)); });
+      risk.risks.forEach(function (x) { ul.appendChild(sigLi(x)); });
       rs.appendChild(ul);
     }
     host.appendChild(rs);
@@ -416,9 +432,13 @@
     lines.push('');
 
     const r = a.risk || {};
+    const txt = function (x) {
+      if (typeof x === 'string') return x;
+      return x.text + (x.strength ? ' 【' + x.strength + (x.hit ? '·' + x.hit : '') + '】' : '');
+    };
     lines.push('■ 风险与机会：');
-    (r.opportunities || []).forEach(function (x) { lines.push('  + ' + x); });
-    (r.risks || []).forEach(function (x) { lines.push('  - ' + x); });
+    (r.opportunities || []).forEach(function (x) { lines.push('  + ' + txt(x)); });
+    (r.risks || []).forEach(function (x) { lines.push('  - ' + txt(x)); });
     lines.push('');
 
     // 研报面

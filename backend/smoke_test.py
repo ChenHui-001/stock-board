@@ -261,7 +261,10 @@ def test_rule_precision() -> None:
     intra_pts = fb_intra["advice"]["scores"]["intraday"]
     check("盘口分项计入技术面", intra_pts > 0, f"intraday={intra_pts}")
     check("盘口分项写进依据", f"盘口 {intra_pts:+d} 分" in fb_intra["advice"]["reason"], fb_intra["advice"]["reason"])
-    check("高位强势提示进机会面", any("高位" in o and "强势" in o for o in fb_intra["risk"]["opportunities"]),
+    def _o_txt(x):
+        return x if isinstance(x, str) else x.get("text", "")
+
+    check("高位强势提示进机会面", any("高位" in _o_txt(o) and "强势" in _o_txt(o) for o in fb_intra["risk"]["opportunities"]),
           str(fb_intra["risk"]["opportunities"]))
     # 高位回落转跌 -> 盘口分项为负、进风险面（现价贴近当日高点但较昨收下跌）
     detail_intra_bear = _mk_detail(
@@ -274,7 +277,7 @@ def test_rule_precision() -> None:
     fb_intra_bear = analysis.rule_based(detail_intra_bear)
     intra_bear = fb_intra_bear["advice"]["scores"]["intraday"]
     check("高位回落盘口分项为负", intra_bear < 0, f"intraday={intra_bear}")
-    check("冲高回落提示进风险面", any("回落" in r for r in fb_intra_bear["risk"]["risks"]),
+    check("冲高回落提示进风险面", any("回落" in _o_txt(r) for r in fb_intra_bear["risk"]["risks"]),
           str(fb_intra_bear["risk"]["risks"]))
     # 数据缺失时 intraday 字段仍存在且为 0、不报错
     fb_no_intra = analysis.rule_based(_mk_detail())
@@ -303,6 +306,31 @@ def test_rule_precision() -> None:
     check("盘口: 振幅大减分", analysis._intraday_score(_q(high=9.9, low=8.6))[0] < 0)
     check("盘口: 换手极高下跌更空", analysis._intraday_score(_q(turnover=12.0, change_pct=-3.3))[0] < 0)
     check("盘口: 缺数据为 0", analysis._intraday_score({"code": "600000", "price": 9.0})[0] == 0)
+
+    # 5.7) 盘口信号历史命中率强度标注（_annotate_intraday 拆分 + rule_based 输出）
+    ann = analysis._annotate_intraday(
+        "现价自当日高位回落（92%）转跌，短线抛压显现；量比 2.30 放量下挫，抛压集中释放；"
+        "换手率 0.5% 过低，交投清淡"
+    )
+    check("信号标注: 拆分 3 条", len(ann) == 3, str(ann))
+    check("信号标注: 冲高回落=高", ann[0]["strength"] == "高" and "盘中57.1%" in ann[0]["hit"], str(ann[0]))
+    check("信号标注: 放量下挫=中样本不足", ann[1]["strength"] == "中" and "样本不足" in ann[1]["hit"], str(ann[1]))
+    check("信号标注: 交投清淡=高", ann[2]["strength"] == "高" and "54.3%" in ann[2]["hit"], str(ann[2]))
+    check("信号标注: 未匹配子句不标", analysis._annotate_intraday("当日成交额 4.21 亿元，市场交投正常")[0]["strength"] == "",
+          str(analysis._annotate_intraday("当日成交额 4.21 亿元，市场交投正常")))
+    # 盘口机会/风险条目为 dict 结构（带强度），非盘口条目保持字符串
+    d_sig = _mk_detail(quote={
+        "code": "600000", "name": "浦发银行", "price": 9.85, "prev_close": 10.0,
+        "change": -0.15, "change_pct": -1.5, "open": 9.8, "high": 9.9, "low": 8.9,
+        "volume": 5e7, "amount": 4.8e8, "turnover": 0.5, "volume_ratio": 2.3,
+    })
+    fb_sig = analysis.rule_based(d_sig)
+    sig_risks = [x for x in fb_sig["risk"]["risks"] if isinstance(x, dict)]
+    check("规则输出: 风险含 dict 标注条目", len(sig_risks) >= 2, str(fb_sig["risk"]["risks"]))
+    check("规则输出: dict 条目含 strength/hit",
+          all("strength" in x and "hit" in x and "text" in x for x in sig_risks), str(sig_risks))
+    check("规则输出: 非盘口条目仍为字符串",
+          any(isinstance(x, str) for x in fb_sig["risk"]["risks"]), str(fb_sig["risk"]["risks"]))
 
     # 6) 三维权重：clamp 越界 + 权重影响分面分
     from backend import scorecfg
@@ -418,7 +446,7 @@ def test_backtest_selftest() -> None:
     try:
         proc = subprocess.run(
             [_sys.executable, str(root / "backtest_intraday.py"), "--selftest"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
         detail = (proc.stdout or "")[-200:] + (proc.stderr or "")[-200:]
     except subprocess.TimeoutExpired as exc:
@@ -430,7 +458,7 @@ def test_backtest_selftest() -> None:
     try:
         proc2 = subprocess.run(
             [_sys.executable, str(root / "backtest_compare.py"), "--selftest"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
         detail2 = (proc2.stdout or "")[-200:] + (proc2.stderr or "")[-200:]
     except subprocess.TimeoutExpired as exc:
@@ -474,6 +502,24 @@ def test_check_sources_backtest_struct() -> None:
         "latest_trade_date": "", "issues": [], "backtest": {"ok": False, "error": "回测失败: x"},
     })
     check("自检渲染: 回测失败分支", "回测失败" in text_no)
+
+    # _summarize_backtest_safe 兜底：异常样本结构不抛错，返回 ok=False
+    bad_summary = check_sources._summarize_backtest_safe(
+        {"samples": [{"score": 3} for _ in range(40)], "per_stock": []}, [("600000", "SH")]
+    )
+    check("回测统计兜底: 坏样本不抛错", bad_summary.get("ok") is False and "回测统计失败" in bad_summary.get("error", ""),
+          str(bad_summary))
+    # 正常样本走通统计
+    ok_samples = [
+        {"score": 3, "next_ret": 1.2, "labels": [("高位强势", True)]},
+        {"score": -2, "next_ret": -0.5, "labels": [("低位下跌", False)]},
+        {"score": 0, "next_ret": 0.3, "labels": []},
+    ] * 20
+    good_summary = check_sources._summarize_backtest_safe(
+        {"samples": ok_samples, "per_stock": [{"code": "600000"}]}, [("600000", "SH")]
+    )
+    check("回测统计兜底: 正常样本可出报告", good_summary.get("ok") is True and good_summary["samples"] == 60,
+          str(good_summary)[:200])
 
 
 def main() -> int:

@@ -187,6 +187,17 @@ async def check_backtest(sample: list[tuple[str, str | None]], days: int = 120) 
         res = await asyncio.wait_for(run_backtest(codes, days), timeout=TIMEOUT + 10)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"回测失败: {_err_text(exc)}"}
+    return _summarize_backtest_safe(res, sample)
+
+
+def _summarize_backtest(res: dict[str, Any], sample: list[tuple[str, str | None]]) -> dict[str, Any]:
+    """把 run_backtest 结果整理成自检报告（分桶 + 信号命中率）。
+
+    内部自带兜底：样本结构异常（缺字段/类型错误）时返回 ok=False，
+    任何调用者（自检端点/脚本）都不会因此抛异常拖垮整体。
+    """
+    import statistics
+
     samples = res.get("samples") or []
     if len(samples) < 30:
         return {"ok": False, "error": f"回测样本不足（{len(samples)} 个）", "samples": len(samples)}
@@ -253,6 +264,14 @@ async def check_backtest(sample: list[tuple[str, str | None]], days: int = 120) 
     }
 
 
+def _summarize_backtest_safe(res: dict[str, Any], sample: list[tuple[str, str | None]]) -> dict[str, Any]:
+    """带兜底的 _summarize_backtest 包装（统计异常返回 ok=False 不抛）。"""
+    try:
+        return _summarize_backtest(res, sample)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"回测统计失败: {_err_text(exc)}"}
+
+
 def _backtest_advice(hit_rate: float, base_rate: float, n: int) -> str:
     """与回测脚本同口径的校准建议。"""
     if n < 50:
@@ -317,8 +336,15 @@ async def run_diagnostics(code: str | None) -> dict[str, Any]:
                 entry["results"][cap] = await check_news(p)
         return entry
 
-    # 各源并行探测（源间无共享限流，互不干扰），整体更快
-    report["providers"] = list(await asyncio.gather(*(_check_one(p) for p in reg.providers)))
+    # 各源并行探测（源间无共享限流，互不干扰），整体更快；
+    # 单个源探测内部已逐能力兜底，这里再包一层防止意外竞态拖垮整个自检
+    async def _safe_check(p: Any) -> dict[str, Any]:
+        try:
+            return await _check_one(p)
+        except Exception as exc:  # noqa: BLE001
+            return {"name": p.name, "caps": sorted(p.caps), "results": {}, "probe_error": _err_text(exc)}
+
+    report["providers"] = list(await asyncio.gather(*(_safe_check(p) for p in reg.providers)))
 
     # ---- 汇总：行情源可用数 / 各源 K 线新鲜度 ----
     quote_ok = [p for p in report["providers"] if p["results"].get("quotes", {}).get("ok")]

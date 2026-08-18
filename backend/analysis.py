@@ -268,6 +268,82 @@ def _volume_confirm(bars: list[dict[str, Any]]) -> tuple[int, str]:
     return 0, ""
 
 
+# 盘口信号历史可靠性（基于两次离线回测：backtest_intraday.py 大样本日线回测
+# ≈1596 样本，backtest_compare.py 盘中 vs 收盘对照实验 14:00 真实快照 240 样本）：
+#   strength: 高=两时点命中率≥52% 或大样本≥53%；中=样本不足但方向有逻辑支撑；
+#             低=命中率显著低于基线（如振幅收敛，撤销看多方向）。
+#   hit:      盘中/收盘命中率展示文本。
+# 命中率受市场环境影响，此处用于让用户了解信号历史可靠性，不构成投资建议。
+SIGNAL_RELIABILITY: dict[str, dict[str, str]] = {
+    "高位强势": {"strength": "中", "hit": "盘中54.7% / 收盘43.8%",
+                "note": "盘中时点有效，收盘时点偏弱（冲高后有均值回归压力）"},
+    "冲高回落": {"strength": "高", "hit": "盘中57.1% / 收盘52.9%",
+                "note": "两个时点命中率均超52%，短线抛压信号可靠"},
+    "低位回升": {"strength": "中", "hit": "样本不足",
+                "note": "空头衰竭逻辑支撑，但回测样本少，仅供参考"},
+    "低位下跌": {"strength": "高", "hit": "大样本53.8% / 盘中42.0%",
+                "note": "大样本回测命中率53.8%高于基线，弱势信号可靠"},
+    "放量上攻": {"strength": "中", "hit": "样本不足",
+                "note": "量价配合逻辑明确，但触发样本少，仅供参考"},
+    "放量下挫": {"strength": "中", "hit": "样本不足",
+                "note": "抛压集中释放逻辑明确，但触发样本少，仅供参考"},
+    "缩量上涨": {"strength": "高", "hit": "盘中63.2% / 收盘69.2%",
+                "note": "两个时点命中率均超63%，涨势不实信号可靠"},
+    "缩量下跌": {"strength": "高", "hit": "盘中64.3% / 收盘58.8%",
+                "note": "两个时点命中率均超58%，抛压减轻信号可靠"},
+    "振幅剧烈": {"strength": "中", "hit": "样本不足",
+                "note": "波动风险逻辑明确，但触发样本少，仅供参考"},
+    "振幅收敛": {"strength": "低", "hit": "盘中41.7% / 收盘53.6%→41.7%",
+                "note": "盘中命中率低于基线，看多方向已被回测撤销"},
+    "换手活跃": {"strength": "中", "hit": "未统计",
+                "note": "交投活跃逻辑明确，暂无独立回测样本"},
+    "换手出货": {"strength": "中", "hit": "未统计",
+                "note": "高换手+下跌逻辑明确，暂无独立回测样本"},
+    "交投清淡": {"strength": "高", "hit": "大样本54.3% / 盘中52.5%",
+                "note": "大样本与盘中命中率均超52%，清淡信号可靠"},
+}
+
+# 信号关键词匹配（与 backtest_intraday.SIGNAL_RULES 同口径，生产代码不依赖脚本）
+_SIGNAL_KEYS: list[tuple[str, tuple[str, ...]]] = [
+    ("高位强势", ("当日高位", "强势")),
+    ("冲高回落", ("高位", "回落")),
+    ("低位回升", ("低位", "回升")),
+    ("低位下跌", ("低位", "下跌")),
+    ("放量上攻", ("放量上攻",)),
+    ("放量下挫", ("放量下挫",)),
+    ("缩量上涨", ("缩量上涨",)),
+    ("缩量下跌", ("缩量下跌",)),
+    ("振幅剧烈", ("振幅", "剧烈")),
+    ("振幅收敛", ("振幅", "收敛")),
+    ("换手活跃", ("交投活跃",)),
+    ("换手出货", ("分歧出货",)),
+    ("交投清淡", ("交投清淡",)),
+]
+
+
+def _annotate_intraday(note: str) -> list[dict[str, str]]:
+    """把盘口说明（；分隔的多信号）拆成带历史可靠性标注的条目。
+
+    返回 [{"text", "strength", "hit", "note"}]；未匹配到已知信号的子句
+    保留原文不标注（strength=""）。
+    """
+    out: list[dict[str, str]] = []
+    for part in note.split("；"):
+        part = part.strip()
+        if not part:
+            continue
+        item: dict[str, str] = {"text": part, "strength": "", "hit": "", "note": ""}
+        for label, keys in _SIGNAL_KEYS:
+            if all(k in part for k in keys):
+                info = SIGNAL_RELIABILITY[label]
+                item["strength"] = info["strength"]
+                item["hit"] = info["hit"]
+                item["note"] = f"{label}：{info['note']}"
+                break
+        out.append(item)
+    return out
+
+
 def _intraday_score(q: dict[str, Any]) -> tuple[int, str]:
     """当日盘口分项：盘中位置×涨跌方向 + 量比 + 振幅 + 换手对技术面的修正。
 
@@ -578,11 +654,12 @@ def rule_based(
         + ("，放量活跃" if (vol_ratio or 0) >= 2 else "，交投清淡" if (vol_ratio or 0) <= 0.6 else "")
     )
 
-    # 当日盘口提示（机会/风险，与盘口分项同源）
-    if intraday_pts > 0 and intraday_note:
-        opportunities.append(intraday_note)
-    elif intraday_pts < 0 and intraday_note:
-        risks.append(intraday_note)
+    # 当日盘口提示（机会/风险，与盘口分项同源）：按信号拆分并标注历史命中率
+    # 强度（高/中/低），条目为 {text, strength, hit, note}，前端渲染徽标；
+    # 非盘口条目保持纯字符串，前端两种结构兼容。
+    if intraday_pts != 0 and intraday_note:
+        target = opportunities if intraday_pts > 0 else risks
+        target.extend(_annotate_intraday(intraday_note))
 
     return {
         "trend": {

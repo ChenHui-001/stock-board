@@ -103,6 +103,12 @@ def _cached_report(code: str) -> dict[str, Any] | None:
     adv_scores = ((cached.get("analysis") or {}).get("advice") or {}).get("scores") or {}
     if not adv_scores or "intraday" not in adv_scores:
         return None
+    # 盘口信号强度标注升级：机会/风险条目应为 {text,strength,hit} 结构（dict），
+    # 旧格式字符串缓存自动作废重建
+    for key in ("opportunities", "risks"):
+        items = ((cached.get("analysis") or {}).get("risk") or {}).get(key) or []
+        if items and not any(isinstance(x, dict) and "strength" in x for x in items):
+            return None
     return cached
 
 
@@ -122,6 +128,14 @@ async def health_check() -> dict[str, Any]:
             return await asyncio.wait_for(check_sources.run_diagnostics(None), timeout=90)
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="自检超时（>90s），请稍后重试")
+        except Exception as exc:  # noqa: BLE001
+            # 防御兜底：数据源限流/探测竞态等偶发异常时返回结构化错误，
+            # 不让 FastAPI 默认 500（Internal Server Error）直接透传前端
+            raise HTTPException(
+                status_code=502,
+                detail=f"自检内部错误（{type(exc).__name__}），请稍后重试；"
+                       f"若持续出现请查看服务日志",
+            )
 
 
 # ------------------------------------------------------------------ 元信息
