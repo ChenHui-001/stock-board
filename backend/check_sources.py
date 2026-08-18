@@ -179,8 +179,15 @@ async def check_backtest(sample: list[tuple[str, str | None]], days: int = 120) 
     这里仅取样本股快速估算：总分分桶单调性 + 各信号命中率与校准建议。
     不触网失败时返回 ok=False，不影响整体自检。
     """
-    from backtest_intraday import run_backtest, signal_labels
-    import statistics
+    # 延迟导入：容器镜像可能未打包根目录回测脚本，缺失时回测段降级提示
+    # （不拖垮整个自检，其余数据源探测照常执行）
+    try:
+        from backtest_intraday import run_backtest, signal_labels  # noqa: F401
+        import statistics
+    except ModuleNotFoundError as exc:
+        return {"ok": False, "error": f"回测脚本未打包进镜像（{_err_text(exc)}）", "degraded": True}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"回测模块导入失败: {_err_text(exc)}", "degraded": True}
 
     codes = [c for c, _m in sample]
     try:
@@ -228,7 +235,7 @@ def _summarize_backtest(res: dict[str, Any], sample: list[tuple[str, str | None]
         })
 
     # 各信号命中率
-    from backtest_intraday import SIGNAL_RULES
+    from backtest_intraday import SIGNAL_RULES  # noqa: E402
     grouped: dict[str, list[dict]] = {}
     for s in samples:
         for label, bullish in s.get("labels", []):

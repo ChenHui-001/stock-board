@@ -485,6 +485,26 @@ def test_check_sources_backtest_struct() -> None:
     res = asyncio.run(_probe_empty())
     check("回测探测: 样本不足返回 ok=False", res.get("ok") is False, str(res))
 
+    # 回测脚本缺失降级分支：镜像未打包 backtest_intraday.py 时返回 degraded
+    # 提示而非抛异常（容器运行时场景，不触网）
+    orig_import = check_sources.__dict__.get("__bt_import_guard")
+    import builtins
+    real_import = builtins.__import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name == "backtest_intraday":
+            raise ModuleNotFoundError("No module named 'backtest_intraday'")
+        return real_import(name, *args, **kwargs)
+
+    builtins.__import__ = _fake_import
+    try:
+        res_d = asyncio.run(check_sources.check_backtest([("600000", "SH")], days=5))
+    finally:
+        builtins.__import__ = real_import
+    check("回测探测: 脚本缺失降级不抛错",
+          res_d.get("ok") is False and res_d.get("degraded") is True and "未打包" in res_d.get("error", ""),
+          str(res_d))
+
     # 渲染函数能处理含回测段/无回测段的报告
     text_with = check_sources.render_text({
         "time": "2026-08-18 12:00:00", "session": "closed", "trading": False,

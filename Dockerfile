@@ -23,6 +23,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
+# 根目录脚本：自检回测（check_sources 运行时引用）、对照实验
+COPY backtest_intraday.py backtest_compare.py ./
 
 RUN mkdir -p /app/data
 
