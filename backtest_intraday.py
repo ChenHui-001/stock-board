@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from backend import analysis  # noqa: E402
 from backend.providers import registry  # noqa: E402
 from backend.providers.base import Bar  # noqa: E402
-from backend.utils import normalize_code, resolve_market  # noqa: E402
+from backend.utils import confidence as _confidence, normalize_code, resolve_market  # noqa: E402
 
 # 默认股票池：沪深主板/创业板代表性标的
 DEFAULT_CODES = [
@@ -137,6 +137,15 @@ async def run_backtest(codes: list[str], days: int, verbose: bool = False) -> di
 
 
 # 兼容旧调用名
+def confidence(n: int) -> tuple[str, str]:
+    """按样本量标注统计置信度（共享实现 backend.utils.confidence）。
+
+    返回 (档位, 说明)，与自检面板 check_sources._confidence 同口径。
+    """
+    c = _confidence(n)
+    return c["label"], c["note"]
+
+
 run = run_backtest
 
 
@@ -150,11 +159,18 @@ def render(report: dict) -> str:
 
     base_up = sum(1 for s in samples if s["next_ret"] > 0) / total
     base_avg = statistics.mean(s["next_ret"] for s in samples)
+    if total >= 400:
+        overall_conf = ("高", f"样本 {total} 个（深样本），结论较可靠")
+    elif total >= 150:
+        overall_conf = ("中", f"样本 {total} 个，参考价值一般")
+    else:
+        overall_conf = ("低", f"样本 {total} 个，仅作参考")
     lines.append("=" * 62)
     lines.append("盘口分项离线回测报告（日线近似收盘时点）")
     lines.append("=" * 62)
     lines.append(f"股票池: {len(per_stock)} 只 | 有效样本: {total} 个")
     lines.append(f"基线: 次日上涨率 {base_up * 100:.1f}% | 次日平均涨跌 {base_avg:+.2f}%")
+    lines.append(f"置信度: {overall_conf[0]}（{overall_conf[1]}）")
     lines.append("")
 
     # ---- 总分分桶：看评分方向是否单调
@@ -168,19 +184,21 @@ def render(report: dict) -> str:
         ("-3~-5", lambda s: -5 <= s["score"] <= -3),
         ("≤ -6",  lambda s: s["score"] <= -6),
     ]
-    lines.append(f"{'分桶':<8}{'样本':>6}{'次日上涨率':>12}{'vs基线':>9}{'平均涨跌':>10}")
+    lines.append(f"{'分桶':<8}{'样本':>6}{'次日上涨率':>12}{'vs基线':>9}{'平均涨跌':>10}{'置信':>7}")
     for label, fn in buckets:
         sub = [s for s in samples if fn(s)]
         if not sub:
             continue
         up = sum(1 for s in sub if s["next_ret"] > 0) / len(sub)
         avg = statistics.mean(s["next_ret"] for s in sub)
-        lines.append(f"{label:<8}{len(sub):>6}{up * 100:>11.1f}%{(up - base_up) * 100:>+8.1f}%{avg:>+9.2f}%")
+        c_level, _c_note = confidence(len(sub))
+        lines.append(f"{label:<8}{len(sub):>6}{up * 100:>11.1f}%{(up - base_up) * 100:>+8.1f}%{avg:>+9.2f}%"
+                     f"{c_level:>7}")
     lines.append("")
 
     # ---- 各信号分组命中率
     lines.append("── 信号命中率（命中=看多信号次日涨 / 看空信号次日跌）──")
-    lines.append(f"{'信号':<8}{'方向':<4}{'样本':>6}{'命中率':>9}{'次日涨率':>10}{'平均涨跌':>10}  校准建议")
+    lines.append(f"{'信号':<8}{'方向':<4}{'样本':>6}{'命中率':>9}{'次日涨率':>10}{'平均涨跌':>10}{'置信':>6}  校准建议")
     grouped: dict[str, list[dict]] = defaultdict(list)
     for s in samples:
         for label, bullish in s["labels"]:
@@ -189,21 +207,22 @@ def render(report: dict) -> str:
         sub = grouped.get(label, [])
         n = len(sub)
         if not n:
-            lines.append(f"{label:<8}{'看多' if bullish else '看空':<4}{0:>6}{'-':>9}{'-':>10}{'-':>10}  未触发")
+            lines.append(f"{label:<8}{'看多' if bullish else '看空':<4}{0:>6}{'-':>9}{'-':>10}{'-':>10}{'-':>6}  未触发")
             continue
         hit = sum(1 for s in sub if (s["next_ret"] > 0) == s["bullish"])
         hit_rate = hit / n
         up = sum(1 for s in sub if s["next_ret"] > 0) / n
         avg = statistics.mean(s["next_ret"] for s in sub)
+        c_level, _c_note = confidence(n)
         lines.append(
             f"{label:<8}{'看多' if bullish else '看空':<4}{n:>6}{hit_rate * 100:>8.1f}%"
-            f"{up * 100:>9.1f}%{avg:>+9.2f}%  {calibrate(hit_rate, base_up, n)}"
+            f"{up * 100:>9.1f}%{avg:>+9.2f}%{c_level:>6}  {calibrate(hit_rate, base_up, n)}"
         )
     lines.append("")
     lines.append("说明: 命中率以「信号方向×次日方向一致」计；基线=全样本次日上涨率。")
-    lines.append("      ≥基线+5pct 有效可加码；<基线-3pct 建议降权或反向。")
-    lines.append("      注意: 本回测以日线近似收盘时点（现价=收盘），盘中实时信号的")
-    lines.append("      强弱可能更强/更弱；样本<50 的信号结论仅作参考。")
+    lines.append("      置信度=高/中/低（样本越深越可靠）；≥基线+5pct 有效可加码；")
+    lines.append("      <基线-3pct 建议降权或反向。注意: 本回测以日线近似收盘时点")
+    lines.append("      （现价=收盘），盘中实时信号可能更强/更弱；样本<50 仅参考。")
     return "\n".join(lines)
 
 

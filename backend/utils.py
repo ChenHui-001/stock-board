@@ -132,6 +132,21 @@ def chunked(items: Iterable[Any], size: int) -> Iterable[list[Any]]:
         yield batch
 
 
+def confidence(n: int) -> dict[str, str]:
+    """按样本量标注统计置信度：样本越深结论越可靠。
+
+    返回 {"level": "high|medium|low", "label": "高|中|低", "note": 说明}。
+    供自检面板（check_sources）与离线回测（backtest_intraday）共用，
+    保证两处口径一致；分档与回测校准的「样本<50 仅参考」阈值衔接：
+    ≥100 高 / 50-99 中 / <50 低。
+    """
+    if n >= 100:
+        return {"level": "high", "label": "高", "note": f"样本 {n} 个，结论较可靠"}
+    if n >= 50:
+        return {"level": "medium", "label": "中", "note": f"样本 {n} 个，参考价值一般"}
+    return {"level": "low", "label": "低", "note": f"样本 {n} 个，仅作参考"}
+
+
 def today_str() -> str:
     return now().strftime("%Y-%m-%d")
 

@@ -144,7 +144,7 @@
   }
 
   // ------------------------------------------------------------ 数据源状态面板
-  const dsState = { view: 'meta', checking: false, lastResult: null };
+  const dsState = { view: 'meta', checking: false, lastResult: null, backtestDays: 120 };
 
   // 自检结果里每个能力的状态摘要（供面板展示）
   function capSummary(cap, res) {
@@ -238,15 +238,24 @@
     const bt = result.backtest;
     if (bt && bt.ok) {
       const btParts = [];
+      const btConf = bt.confidence || {};
+      const confBadge = function (c) {
+        if (!c || !c.level) return '';
+        return '<span class="ds-conf ds-conf-' + c.level + '" title="' + U.escapeHtml(c.note || '') + '">' +
+          U.escapeHtml(c.label || '') + '</span>';
+      };
       btParts.push('<div class="ds-bt-head">盘口信号近期命中率 <span class="ds-faint">' +
-        bt.samples + ' 样本 / ' + bt.stocks + ' 只 · 基线 ' + bt.base_up_rate + '%</span></div>');
-      // 分桶：vs基线>0 绿色、<0 红色
+        bt.samples + ' 样本 / ' + bt.stocks + ' 只 · 基线 ' + bt.base_up_rate + '%</span>' +
+        ' <span class="ds-bt-conf">置信度 ' + confBadge(btConf) + '</span></div>');
+      // 分桶：vs基线>0 绿色、<0 红色；低置信度分桶淡化描边
       const buckRow = bt.buckets || [];
       if (buckRow.length) {
         btParts.push('<div class="ds-bt-buckets">' + buckRow.map(function (b) {
           const cls = b.vs_base >= 2 ? 'up' : (b.vs_base <= -2 ? 'down' : 'flat');
-          return '<span class="ds-bt-bucket ' + cls + '" title="样本 ' + b.n + ' · 平均涨跌 ' + b.avg_ret + '%">' +
-            U.escapeHtml(b.bucket) + ' ' + b.up_rate + '%</span>';
+          const bcl = b.confidence && b.confidence.level === 'low' ? ' weak' : '';
+          return '<span class="ds-bt-bucket ' + cls + bcl + '" title="样本 ' + b.n + ' · 平均涨跌 ' + b.avg_ret +
+            '% · 置信度 ' + (b.confidence ? b.confidence.label : '-') + '">' +
+            U.escapeHtml(b.bucket) + ' ' + b.up_rate + '%' + confBadge(b.confidence) + '</span>';
         }).join('') + '</div>');
       }
       // 有效/反向信号摘要（样本≥50 才提示）
@@ -265,9 +274,11 @@
       }
       btParts.push('<div class="ds-bt-detail" style="display:none">');
       btParts.push((bt.signals || []).map(function (s) {
-        return '<div class="ds-bt-row"><span>' + U.escapeHtml(s.signal) +
+        const scl = s.confidence && s.confidence.level === 'low' ? ' weak' : '';
+        return '<div class="ds-bt-row' + scl + '"><span>' + U.escapeHtml(s.signal) +
           (s.bullish ? ' 看多' : ' 看空') + '</span><span>n=' + s.n + '</span>' +
           '<span class="' + (s.hit_rate >= bt.base_up_rate + 2 ? 'up' : s.hit_rate <= bt.base_up_rate - 2 ? 'down' : '') + '">命中 ' + s.hit_rate + '%</span>' +
+          confBadge(s.confidence) +
           '<span class="ds-faint">' + U.escapeHtml(s.advice) + '</span></div>';
       }).join(''));
       btParts.push('</div>');
@@ -275,9 +286,15 @@
         (bt.signals || []).length + ' 个信号明细</button>');
       parts.push('<div class="ds-bt">' + btParts.join('') + '</div>');
     } else if (bt && bt.skipped) {
-      // 仅数据源自检（跳过回测）——灰字提示 + 补跑按钮
-      parts.push('<div class="ds-sub ds-bt-note"><span class="ds-faint">盘口回测已跳过（仅数据源自检）</span></div>' +
-        '<div class="ds-actions"><button class="btn btn-sm" id="ds-bt-run">📊 补跑回测</button></div>');
+      // 仅数据源自检（跳过回测）——灰字提示 + 天数选择 + 补跑按钮
+      const days = [30, 90, 120, 250];
+      parts.push('<div class="ds-sub ds-bt-note"><span class="ds-faint">盘口回测已跳过（仅数据源自检）</span>' +
+        '<br>回测样本深度：' + days.map(function (d) {
+          const cls = dsState.backtestDays === d ? 'active' : '';
+          return '<button class="ds-day ' + cls + '" data-days="' + d + '">' +
+            (d === 30 ? '近1月' : d === 90 ? '近3月' : d === 120 ? '近半年' : '近1年') + '</button>';
+        }).join('') +
+        '<div class="ds-actions"><button class="btn btn-sm" id="ds-bt-run">📊 补跑回测</button></div></div>');
     } else if (bt && bt.error) {
       // degraded：回测脚本未打包进镜像等环境问题——明确提示降级原因，其余自检正常
       if (bt.degraded) {
@@ -357,7 +374,7 @@
     dsState.withBacktest = withBacktest !== false;
     renderDsCheckLoading();
     try {
-      const result = await API.healthCheck(dsState.withBacktest);
+      const result = await API.healthCheck(dsState.withBacktest, dsState.backtestDays || 120);
       dsState.lastResult = result;
       renderDsCheckResult(result);
     } catch (err) {
@@ -394,6 +411,15 @@
     }));
     const btRun = document.getElementById('ds-bt-run');
     if (btRun) btRun.addEventListener('click', stop(function () { runDsCheck(true); }));
+    // 回测样本深度选择（补跑回测区块内）
+    document.querySelectorAll('#ds-popover .ds-day').forEach(function (b) {
+      b.addEventListener('click', stop(function () {
+        dsState.backtestDays = parseInt(b.getAttribute('data-days'), 10) || 120;
+        document.querySelectorAll('#ds-popover .ds-day').forEach(function (x) {
+          x.classList.toggle('active', x === b);
+        });
+      }));
+    });
     const backBtn = document.getElementById('ds-back');
     if (backBtn) backBtn.addEventListener('click', stop(function () {
       dsState.view = 'meta';

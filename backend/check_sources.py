@@ -24,6 +24,7 @@ from backend.config import settings  # noqa: E402
 from backend.providers import registry  # noqa: E402
 from backend.providers.base import NotSupported, ProviderError, Throttled, close_client  # noqa: E402
 from backend.utils import (  # noqa: E402
+    confidence,
     data_is_stale,
     full_code,
     is_trading_now,
@@ -197,6 +198,11 @@ async def check_backtest(sample: list[tuple[str, str | None]], days: int = 120) 
     return _summarize_backtest_safe(res, sample)
 
 
+def _confidence(n: int) -> dict[str, str]:
+    """按样本量标注统计置信度（与离线回测 backtest_intraday 同口径，共享实现）。"""
+    return confidence(n)
+
+
 def _summarize_backtest(res: dict[str, Any], sample: list[tuple[str, str | None]]) -> dict[str, Any]:
     """把 run_backtest 结果整理成自检报告（分桶 + 信号命中率）。
 
@@ -211,6 +217,15 @@ def _summarize_backtest(res: dict[str, Any], sample: list[tuple[str, str | None]
 
     base_up = sum(1 for s in samples if s["next_ret"] > 0) / len(samples)
     base_avg = statistics.mean(s["next_ret"] for s in samples)
+
+    # 总体置信度：按总样本量（更深样本 → 更可靠）
+    total_n = len(samples)
+    if total_n >= 400:
+        overall_conf = {"level": "high", "label": "高", "note": f"样本 {total_n} 个（深样本），结论较可靠"}
+    elif total_n >= 150:
+        overall_conf = {"level": "medium", "label": "中", "note": f"样本 {total_n} 个，参考价值一般"}
+    else:
+        overall_conf = {"level": "low", "label": "低", "note": f"样本 {total_n} 个，仅作参考"}
 
     # 总分分桶：看评分方向单调性
     buckets: list[dict[str, Any]] = []
@@ -227,11 +242,14 @@ def _summarize_backtest(res: dict[str, Any], sample: list[tuple[str, str | None]
         if not sub:
             continue
         up = sum(1 for s in sub if s["next_ret"] > 0) / len(sub)
+        b_n = len(sub)
+        b_conf = _confidence(b_n)
         buckets.append({
-            "bucket": label, "n": len(sub),
+            "bucket": label, "n": b_n,
             "up_rate": round(up * 100, 1),
             "vs_base": round((up - base_up) * 100, 1),
             "avg_ret": round(statistics.mean(s["next_ret"] for s in sub), 2),
+            "confidence": b_conf,
         })
 
     # 各信号命中率
@@ -257,15 +275,17 @@ def _summarize_backtest(res: dict[str, Any], sample: list[tuple[str, str | None]
             "up_rate": round(up * 100, 1),
             "avg_ret": round(statistics.mean(s["next_ret"] for s in sub), 2),
             "advice": _backtest_advice(hit_rate, base_up, n),
+            "confidence": _confidence(n),
         })
     signals.sort(key=lambda x: (-x["hit_rate"], x["signal"]))
 
     return {
         "ok": True,
-        "samples": len(samples),
+        "samples": total_n,
         "stocks": len(res.get("per_stock") or []),
         "base_up_rate": round(base_up * 100, 1),
         "base_avg_ret": round(base_avg, 2),
+        "confidence": overall_conf,
         "buckets": buckets,
         "signals": signals,
     }
@@ -307,9 +327,11 @@ def _status_line(ok: bool, detail: str) -> str:
     return f"  {'✅' if ok else '❌'} {detail}"
 
 
-async def run_diagnostics(code: str | None, with_backtest: bool = True) -> dict[str, Any]:
+async def run_diagnostics(code: str | None, with_backtest: bool = True,
+                          backtest_days: int = 120) -> dict[str, Any]:
     """数据源健康自检。with_backtest=False 时跳过盘口回测段（更快、省数据源配额），
-    回测可单独用 backtest_intraday.py 或前端「仅回测」执行。
+    回测可单独用 backtest_intraday.py 或前端「仅回测」执行；
+    backtest_days 控制回测样本深度（默认 120 个交易日）。
     """
     reg = registry()
     sample: list[tuple[str, str | None]] = [(code, None)] if code else SAMPLE  # type: ignore[assignment]
@@ -396,9 +418,10 @@ async def run_diagnostics(code: str | None, with_backtest: bool = True) -> dict[
     # 盘口信号近期命中率（样本股快速回测；失败不阻塞自检）。
     # 可分离：with_backtest=False 时跳过（面板「仅数据源」/ CLI --no-backtest）
     if with_backtest:
-        report["backtest"] = await check_backtest(sample)
+        report["backtest"] = await check_backtest(sample, days=backtest_days)
     else:
         report["backtest"] = {"ok": False, "skipped": True, "error": "已跳过回测（仅数据源自检）"}
+    report["backtest_days"] = backtest_days if with_backtest else 0
 
     return report
 
@@ -479,16 +502,19 @@ def render_text(report: dict[str, Any]) -> str:
     a("-" * 62)
     a("盘口信号近期命中率（样本股快速回测）")
     if bt and bt.get("ok"):
+        conf = bt.get("confidence") or {}
         a(f"样本: {bt['samples']} 个 / {bt['stocks']} 只 | 基线次日上涨率 {bt['base_up_rate']}% "
-          f"平均涨跌 {bt['base_avg_ret']:+.2f}%")
-        a(f"{'分桶':<7}{'样本':>6}{'次日涨率':>10}{'vs基线':>9}{'平均涨跌':>9}")
+          f"平均涨跌 {bt['base_avg_ret']:+.2f}% | 置信度: {conf.get('label', '-')}（{conf.get('note', '')}）")
+        a(f"{'分桶':<7}{'样本':>6}{'次日涨率':>10}{'vs基线':>9}{'平均涨跌':>9}{'置信':>7}")
         for b in bt["buckets"]:
-            a(f"{b['bucket']:<7}{b['n']:>6}{b['up_rate']:>9.1f}%{b['vs_base']:>+8.1f}%{b['avg_ret']:>+8.2f}%")
-        a(f"{'信号':<7}{'方向':<4}{'样本':>6}{'命中率':>9}{'次日涨率':>10}{'平均涨跌':>9}  校准建议")
+            a(f"{b['bucket']:<7}{b['n']:>6}{b['up_rate']:>9.1f}%{b['vs_base']:>+8.1f}%{b['avg_ret']:>+8.2f}%"
+              f"{b.get('confidence', {}).get('label', '-'):>7}")
+        a(f"{'信号':<7}{'方向':<4}{'样本':>6}{'命中率':>9}{'次日涨率':>10}{'平均涨跌':>9}{'置信':>6}  校准建议")
         for s in bt["signals"]:
             a(f"{s['signal']:<7}{'看多' if s['bullish'] else '看空':<4}{s['n']:>6}"
-              f"{s['hit_rate']:>8.1f}%{s['up_rate']:>9.1f}%{s['avg_ret']:>+8.2f}%  {s['advice']}")
-        a("提示: 命中=看多信号次日涨/看空信号次日跌；日线近似收盘时点，样本<50 仅参考。")
+              f"{s['hit_rate']:>8.1f}%{s['up_rate']:>9.1f}%{s['avg_ret']:>+8.2f}%"
+              f"{s.get('confidence', {}).get('label', '-'):>6}  {s['advice']}")
+        a("提示: 命中=看多信号次日涨/看空信号次日跌；置信度=高/中/低（样本越深越可靠），样本<50 仅参考。")
     else:
         err = (bt or {}).get("error", "未执行")
         if (bt or {}).get("degraded"):
@@ -519,7 +545,12 @@ async def main() -> int:
     parser.add_argument("--json", action="store_true", help="输出 JSON")
     parser.add_argument("--no-backtest", action="store_true",
                         help="跳过盘口回测段（仅数据源自检，更快）")
+    parser.add_argument("--backtest-days", type=int, default=120,
+                        help="回测样本深度（交易日数，默认 120，范围 30-250）")
     args = parser.parse_args()
+    if not (30 <= args.backtest_days <= 250):
+        print("用法错误: --backtest-days 应在 30-250 之间", file=sys.stderr)
+        return 2
 
     if args.code:
         if len(args.code) != 6 or not args.code.isdigit():
@@ -527,7 +558,8 @@ async def main() -> int:
             return 2
 
     try:
-        report = await run_diagnostics(args.code, with_backtest=not args.no_backtest)
+        report = await run_diagnostics(args.code, with_backtest=not args.no_backtest,
+                                       backtest_days=args.backtest_days)
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:

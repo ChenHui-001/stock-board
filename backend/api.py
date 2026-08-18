@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, Query
@@ -11,7 +12,7 @@ from pydantic import BaseModel, Field
 from . import analysis, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
 from .config import settings
 from .providers import ProviderError, registry
-from .utils import normalize_code, resolve_market
+from .utils import is_trading_now, normalize_code, resolve_market
 
 log = logging.getLogger("api")
 router = APIRouter(prefix="/api")
@@ -84,12 +85,35 @@ async def _with_ai_lock(code: str, work: Callable[[], Awaitable[Any]]) -> Any:
 
 # AI 报告必含字段：升级后旧格式缓存缺新字段时自动作废（重新生成）
 _REQUIRED_REPORT_FIELDS = ("report_sentiment", "rating_dist", "reports_preview")
+# AI 报告结构版本：机会/风险条目升级为 {text,strength,hit,confidence} 后引入。
+# 带版本号的缓存直接命中，不带的一律作废重建——比逐条结构检查更可靠
+# （某些股票机会/风险恰好无盘口信号、全是字符串条目，也会被旧检查误判）。
+REPORT_SCHEMA_VERSION = 2
+
+
+def _cache_fresh(cached_at: str) -> bool:
+    """AI 报告快照是否仍新鲜（盘中 120s / 盘后 1h，可配 AI_CACHE_TTL_*）。"""
+    try:
+        ts = datetime.strptime(cached_at, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False  # 解析失败（异常数据），宁可重建
+    age = (datetime.now() - ts).total_seconds()
+    ttl = settings.AI_CACHE_TTL_OPEN if is_trading_now() else settings.AI_CACHE_TTL_CLOSED
+    return age <= ttl
 
 
 def _cached_report(code: str) -> dict[str, Any] | None:
-    """当日缓存命中；但 LLM 配置变化或字段缺失时旧缓存作废。"""
+    """当日缓存命中；但 LLM 配置变化、字段缺失或快照过旧时旧缓存作废。
+
+    时效：盘中超过 AI_CACHE_TTL_OPEN（默认 120s）即视为过期——点击 AI 分析
+    时拿到的都是最新实时数据，避免命中几小时前的旧快照；刚分析完短时间内
+    再点仍复用，防止对同一只股票重复打 LLM。盘后数据不变，放宽到 1 小时。
+    """
     cached = storage.get_report(code)
     if not cached:
+        return None
+    # 快照时效：缓存里存的报价/盘口是生成时刻的，过旧必须重建
+    if not _cache_fresh(cached.get("cached_at") or ""):
         return None
     meta = cached.get("meta") or {}
     if meta.get("fingerprint") != llmcfg.fingerprint():
@@ -103,12 +127,9 @@ def _cached_report(code: str) -> dict[str, Any] | None:
     adv_scores = ((cached.get("analysis") or {}).get("advice") or {}).get("scores") or {}
     if not adv_scores or "intraday" not in adv_scores:
         return None
-    # 盘口信号强度标注升级：机会/风险条目应为 {text,strength,hit} 结构（dict），
-    # 旧格式字符串缓存自动作废重建
-    for key in ("opportunities", "risks"):
-        items = ((cached.get("analysis") or {}).get("risk") or {}).get(key) or []
-        if items and not any(isinstance(x, dict) and "strength" in x for x in items):
-            return None
+    # 结构版本校验：旧格式缓存（无版本号或版本过旧）自动作废重建
+    if (meta.get("schema_version") or 0) < REPORT_SCHEMA_VERSION:
+        return None
     return cached
 
 
@@ -118,16 +139,20 @@ _health_lock = asyncio.Lock()
 
 
 @router.get("/health/check")
-async def health_check(with_backtest: int = 1) -> dict[str, Any]:
-    """数据源健康自检。with_backtest=0 时跳过盘口回测段（更快）。"""
+async def health_check(with_backtest: int = 1, backtest_days: int = 120) -> dict[str, Any]:
+    """数据源健康自检。with_backtest=0 时跳过盘口回测段（更快）；
+    backtest_days 控制回测样本深度（30-250 交易日）。"""
     from . import check_sources
 
+    if not (30 <= backtest_days <= 250):
+        raise HTTPException(status_code=400, detail="backtest_days 应在 30-250 之间")
     if _health_lock.locked():
         raise HTTPException(status_code=409, detail="已有自检正在进行，请稍候")
     async with _health_lock:
         try:
             return await asyncio.wait_for(
-                check_sources.run_diagnostics(None, with_backtest=bool(with_backtest)),
+                check_sources.run_diagnostics(None, with_backtest=bool(with_backtest),
+                                              backtest_days=backtest_days),
                 timeout=90,
             )
         except asyncio.TimeoutError:
@@ -413,7 +438,9 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
                 return cached
 
         try:
-            detail = await service.stock_detail(code, resolve_market(code))
+            # 重建（缓存过期/强制刷新）时强制实时取数：行情、K线、资金、两融
+            # 全部重新拉取，保证 AI 分析用的就是当下最新数据
+            detail = await service.stock_detail(code, resolve_market(code), force=True)
         except ProviderError as exc:
             raise _fail(exc, "AI 分析取数失败") from exc
 
@@ -447,6 +474,7 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
                 **result["meta"],
                 "fingerprint": llmcfg.fingerprint(),
                 "score_fp": scorecfg.fingerprint(),
+                "schema_version": REPORT_SCHEMA_VERSION,
             },
             "status_tags": detail["status"]["tags"],
             # 研报面统计与关键研报预览（供前端结论下方单独展示）

@@ -272,6 +272,38 @@ button { font-family: inherit; }
 }
 .ds-bt-note.ok { color: var(--down); }
 .ds-bt-note.warn { color: var(--warn); }
+
+/* 补跑回测：样本深度选择胶囊 */
+.ds-day {
+  display: inline-block;
+  margin: 4px 4px 0 0;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.ds-day:hover { border-color: var(--warn); }
+.ds-day.active { background: var(--warn); border-color: var(--warn); color: #fff; }
+
+/* 回测置信度徽标（样本越深越可靠） */
+.ds-bt-conf { font-size: 11px; color: var(--text); }
+.ds-conf {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  line-height: 15px;
+  vertical-align: 1px;
+}
+.ds-conf-high { color: #fff; background: #2e7d32; }
+.ds-conf-medium { color: #8a6d00; background: #fff8e1; border: 1px solid #e0c26a; }
+.ds-conf-low { color: #9e9e9e; background: #f5f5f5; border: 1px solid #d5d5d5; }
+.ds-bt-bucket.weak { opacity: .55; }
+.ds-bt-row.weak { opacity: .6; }
 .ds-bt-detail {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -909,6 +941,9 @@ main {
 .ai-sig-高 { color: #fff; background: #2e7d32; border-color: #2e7d32; }       /* 可靠 */
 .ai-sig-中 { color: #8a6d00; background: #fff8e1; border-color: #e0c26a; }   /* 参考 */
 .ai-sig-低 { color: #9e9e9e; background: #f5f5f5; border-color: #d5d5d5; }   /* 弱 */
+
+/* 样本不足的信号（置信度低）弱化，与自检面板回测区块口径一致 */
+.ai-list li.weak { opacity: .62; }
 
 /* AI 三维分面评分与信号一致性 */
 .ai-scores {

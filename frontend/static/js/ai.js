@@ -222,7 +222,7 @@
 
     // ---- 行情趋势分析（含当日盘中实时盘口）
     host.appendChild(textSection('一、行情趋势分析', a.trend, [
-      ['当日盘中', 'intraday'], ['短期', 'short'], ['中期', 'mid'], ['中长期', 'long'], ['技术形态', 'pattern']
+      ['当日盘中', 'intraday'], ['短期', 'short'], ['中期', 'mid'], ['中长期', 'long'], ['技术形态', 'pattern'], ['MACD/KDJ', 'oscillators']
     ]));
 
     // ---- 资金与两融情绪（含当日资金活跃）
@@ -245,8 +245,12 @@
       li.appendChild(U.el('span', '', x.text || ''));
       if (x.strength) {
         const b = U.el('span', 'ai-sig-badge ai-sig-' + x.strength, x.strength);
-        b.title = (x.hit ? '历史命中率: ' + x.hit + '\n' : '') + (x.note || '');
+        const conf = x.confidence || {};
+        const confNote = conf.label ? '\n置信度: ' + conf.label + '（' + (conf.note || '') + '）' : '';
+        b.title = (x.hit ? '历史命中率: ' + x.hit + '\n' : '') + (x.note || '') + confNote;
         li.appendChild(b);
+        // 样本不足的信号（置信度低）整体弱化，与自检面板口径一致
+        if (conf.level === 'low') li.classList.add('weak');
       }
       return li;
     }
@@ -417,7 +421,7 @@
 
     const t = a.trend || {};
     lines.push('■ 行情趋势分析：' + (t.summary || ''));
-    ['intraday:当日盘中', 'short:短期', 'mid:中期', 'long:中长期', 'pattern:技术形态'].forEach(function (pair) {
+    ['intraday:当日盘中', 'short:短期', 'mid:中期', 'long:中长期', 'pattern:技术形态', 'oscillators:MACD/KDJ'].forEach(function (pair) {
       const kv = pair.split(':');
       if (t[kv[0]]) lines.push('  ' + kv[1] + '：' + t[kv[0]]);
     });

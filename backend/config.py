@@ -59,6 +59,10 @@ class Settings:
     QUOTE_TTL_CLOSED = _float("QUOTE_TTL_CLOSED", 60.0)  # 盘后
     HISTORY_TTL_OPEN = _float("HISTORY_TTL_OPEN", 120.0)  # K线/资金/两融 盘中
     HISTORY_TTL_CLOSED = _float("HISTORY_TTL_CLOSED", 900.0)
+    # AI 报告当日缓存时效：盘中点击 AI 分析时超过该时长即用最新数据重建
+    # （避免命中几小时前的快照；刚分析完短时间内再点仍复用，防止重复打 LLM）
+    AI_CACHE_TTL_OPEN = _float("AI_CACHE_TTL_OPEN", 120.0)
+    AI_CACHE_TTL_CLOSED = _float("AI_CACHE_TTL_CLOSED", 3600.0)  # 盘后数据不变，放宽
     SEARCH_TTL = _float("SEARCH_TTL", 300.0)
     HOT_TTL = _float("HOT_TTL", 60.0)
 

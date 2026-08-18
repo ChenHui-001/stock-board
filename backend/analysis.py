@@ -23,6 +23,11 @@ SYSTEM_PROMPT = """你是一名 A 股量化分析师，擅长用均线技术形�
 请综合基本面与技术面判断：资讯与研报可作为辅助依据，但必须基于数据本身做判断，禁止编造数据中不存在的消息面信息；
 若资讯/研报情绪明显（如连续利好/利空、机构集中买入评级），应在风险机会与操作建议中反映其权重，并在 reason 中提及。
 技术面判断必须结合当日实时盘口（量比、换手率、盘中位置、振幅）验证短线动能，并引用其数值。
+「技术指标_MACD_KDJ」段中的 MACD/KDJ 数值与状态（金叉/死叉/超买超卖）仅作参考展示，
+不作为决策依据（当前市场行情下摆动指标频繁钝化失效）；请勿仅凭 MACD/KDJ 金叉死叉给出操作建议。
+「盘口信号可靠性」段标注了每个当日触发信号的 历史强度/命中率/置信度：历史强度与命中率反映该信号历史有效性，
+置信度反映支撑样本量（样本越深越可靠）。解读时按置信度权衡——高置信信号可作重要依据，
+低置信（样本不足）信号仅作参考提示，不应单独支撑激进操作；请在风险机会描述中自然体现这一权衡。
 
 【硬性要求】
 1. 只输出一个 JSON 对象，不要输出任何解释文字或 Markdown 代码块。
@@ -137,6 +142,7 @@ def build_payload(
             "近60日涨跌幅%": detail.get("status", {}).get("trend", {}).get("chg_60d"),
             "近30日收盘序列": [round(b["close"], 2) for b in bars[-30:]],
         },
+        "技术指标_MACD_KDJ": _payload_oscillators(detail.get("oscillators") or {}),
         "支撑压力": detail.get("support_resistance", {}),
         "资金数据_近30日": {
             **{k: v for k, v in detail.get("fund_flow", {}).get("summary", {}).items()
@@ -176,6 +182,7 @@ def build_payload(
         "当前状态标签": [
             f"{t['group']}：{t['label']}" for t in detail.get("status", {}).get("tags", [])
         ],
+        "盘口信号可靠性_当日": _payload_intraday_signals(q),
         "市场资讯_近30日": [
             {
                 "日期": n.get("date", "")[:10],
@@ -272,34 +279,37 @@ def _volume_confirm(bars: list[dict[str, Any]]) -> tuple[int, str]:
 # ≈1596 样本，backtest_compare.py 盘中 vs 收盘对照实验 14:00 真实快照 240 样本）：
 #   strength: 高=两时点命中率≥52% 或大样本≥53%；中=样本不足但方向有逻辑支撑；
 #             低=命中率显著低于基线（如振幅收敛，撤销看多方向）。
+#   n:        支撑该判断的回测样本数（与 strength 同源，取自大样本/对照实验统计）；
+#              经 utils.confidence 折算为置信度（≥100 高 / 50-99 中 / <50 低），
+#              与自检面板/离线回测口径统一。
 #   hit:      盘中/收盘命中率展示文本。
 # 命中率受市场环境影响，此处用于让用户了解信号历史可靠性，不构成投资建议。
 SIGNAL_RELIABILITY: dict[str, dict[str, str]] = {
-    "高位强势": {"strength": "中", "hit": "盘中54.7% / 收盘43.8%",
+    "高位强势": {"strength": "中", "n": 128, "hit": "盘中54.7% / 收盘43.8%",
                 "note": "盘中时点有效，收盘时点偏弱（冲高后有均值回归压力）"},
-    "冲高回落": {"strength": "高", "hit": "盘中57.1% / 收盘52.9%",
+    "冲高回落": {"strength": "高", "n": 17, "hit": "盘中57.1% / 收盘52.9%",
                 "note": "两个时点命中率均超52%，短线抛压信号可靠"},
-    "低位回升": {"strength": "中", "hit": "样本不足",
+    "低位回升": {"strength": "中", "n": 6, "hit": "样本不足",
                 "note": "空头衰竭逻辑支撑，但回测样本少，仅供参考"},
-    "低位下跌": {"strength": "高", "hit": "大样本53.8% / 盘中42.0%",
+    "低位下跌": {"strength": "高", "n": 75, "hit": "大样本53.8% / 盘中42.0%",
                 "note": "大样本回测命中率53.8%高于基线，弱势信号可靠"},
-    "放量上攻": {"strength": "中", "hit": "样本不足",
+    "放量上攻": {"strength": "中", "n": 4, "hit": "样本不足",
                 "note": "量价配合逻辑明确，但触发样本少，仅供参考"},
-    "放量下挫": {"strength": "中", "hit": "样本不足",
+    "放量下挫": {"strength": "中", "n": 1, "hit": "样本不足",
                 "note": "抛压集中释放逻辑明确，但触发样本少，仅供参考"},
-    "缩量上涨": {"strength": "高", "hit": "盘中63.2% / 收盘69.2%",
+    "缩量上涨": {"strength": "高", "n": 13, "hit": "盘中63.2% / 收盘69.2%",
                 "note": "两个时点命中率均超63%，涨势不实信号可靠"},
-    "缩量下跌": {"strength": "高", "hit": "盘中64.3% / 收盘58.8%",
+    "缩量下跌": {"strength": "高", "n": 17, "hit": "盘中64.3% / 收盘58.8%",
                 "note": "两个时点命中率均超58%，抛压减轻信号可靠"},
-    "振幅剧烈": {"strength": "中", "hit": "样本不足",
+    "振幅剧烈": {"strength": "中", "n": 1, "hit": "样本不足",
                 "note": "波动风险逻辑明确，但触发样本少，仅供参考"},
-    "振幅收敛": {"strength": "低", "hit": "盘中41.7% / 收盘53.6%→41.7%",
+    "振幅收敛": {"strength": "低", "n": 69, "hit": "盘中41.7% / 收盘53.6%→41.7%",
                 "note": "盘中命中率低于基线，看多方向已被回测撤销"},
-    "换手活跃": {"strength": "中", "hit": "未统计",
+    "换手活跃": {"strength": "中", "n": 2, "hit": "未统计",
                 "note": "交投活跃逻辑明确，暂无独立回测样本"},
-    "换手出货": {"strength": "中", "hit": "未统计",
+    "换手出货": {"strength": "中", "n": 1, "hit": "未统计",
                 "note": "高换手+下跌逻辑明确，暂无独立回测样本"},
-    "交投清淡": {"strength": "高", "hit": "大样本54.3% / 盘中52.5%",
+    "交投清淡": {"strength": "高", "n": 249, "hit": "大样本54.3% / 盘中52.5%",
                 "note": "大样本与盘中命中率均超52%，清淡信号可靠"},
 }
 
@@ -321,26 +331,72 @@ _SIGNAL_KEYS: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 
-def _annotate_intraday(note: str) -> list[dict[str, str]]:
+def _annotate_intraday(note: str) -> list[dict[str, Any]]:
     """把盘口说明（；分隔的多信号）拆成带历史可靠性标注的条目。
 
-    返回 [{"text", "strength", "hit", "note"}]；未匹配到已知信号的子句
-    保留原文不标注（strength=""）。
+    返回 [{"text", "strength", "hit", "note", "confidence"}]；
+    confidence 由支撑样本数经 utils.confidence 折算（与自检/回测口径统一），
+    未匹配到已知信号的子句保留原文不标注（strength=""）。
     """
+    from .utils import confidence as _conf
+
     out: list[dict[str, str]] = []
     for part in note.split("；"):
         part = part.strip()
         if not part:
             continue
-        item: dict[str, str] = {"text": part, "strength": "", "hit": "", "note": ""}
+        item: dict[str, str] = {"text": part, "strength": "", "hit": "", "note": "", "confidence": None}  # type: ignore[typeddict-item]
         for label, keys in _SIGNAL_KEYS:
             if all(k in part for k in keys):
                 info = SIGNAL_RELIABILITY[label]
                 item["strength"] = info["strength"]
                 item["hit"] = info["hit"]
                 item["note"] = f"{label}：{info['note']}"
+                item["confidence"] = _conf(info["n"])
                 break
         out.append(item)
+    return out
+
+
+def _payload_oscillators(osc: dict[str, Any]) -> dict[str, Any]:
+    """MACD/KDJ 汇总投喂（数值 + 状态信号），供 LLM 技术面判断。"""
+    macd, kdj = osc.get("macd") or {}, osc.get("kdj") or {}
+    if not macd or not kdj:
+        return {"说明": "K线不足（需≥35 根），MACD/KDJ 无法计算"}
+    return {
+        "MACD": {
+            "DIF": macd.get("dif"),
+            "DEA": macd.get("dea"),
+            "柱": macd.get("hist"),
+            "信号": macd.get("cross") or ("柱" + (macd.get("hist_trend") or "")) or "无",
+            "柱状趋势": macd.get("hist_trend"),
+        },
+        "KDJ": {
+            "K": kdj.get("k"),
+            "D": kdj.get("d"),
+            "J": kdj.get("j"),
+            "信号": kdj.get("cross") or "无",
+            "区域": kdj.get("zone"),
+        },
+    }
+
+
+def _payload_intraday_signals(q: dict[str, Any]) -> list[dict[str, Any]]:
+    """当日触发盘口信号 + 历史强度/命中率/置信度（供 LLM 解读时权衡样本可靠性）。
+
+    与规则引擎 _intraday_score 同源（同一 note），保证双路径口径一致。
+    """
+    _pts, note = _intraday_score(q)
+    out: list[dict[str, Any]] = []
+    for it in _annotate_intraday(note):
+        conf = it.get("confidence") or {}
+        out.append({
+            "信号": it["text"],
+            "历史强度": it["strength"] or "未标注",
+            "历史命中率": it["hit"] or "无",
+            "置信度": conf.get("label", "-"),
+            "置信度说明": conf.get("note", ""),
+        })
     return out
 
 
@@ -496,6 +552,33 @@ def rule_based(
             tech_score += 4
             deviation_note = f"现价较 MA20 乖离 {dev_pct:.1f}%（超卖）"
 
+    # 摆动指标（MACD/KDJ）：仅分析展示与 LLM 投喂，不参与评分与结论——
+    # 当前市场行情下 MACD/KDJ 已不适合作为决策性数据（金叉/死叉/超买超卖
+    # 频繁钝化失效），保留数值与状态描述供用户与模型参考。
+    osc = detail.get("oscillators") or {}
+    macd = osc.get("macd") or {}
+    kdj = osc.get("kdj") or {}
+    osc_note: list[str] = []
+    macd_cross = macd.get("cross", "")
+    if macd_cross == "金叉":
+        osc_note.append(f"MACD 金叉（DIF {macd.get('dif')} 上穿 DEA {macd.get('dea')}），趋势转多（仅参考）")
+    elif macd_cross == "死叉":
+        osc_note.append(f"MACD 死叉（DIF {macd.get('dif')} 下穿 DEA {macd.get('dea')}），趋势转弱（仅参考）")
+    hist_trend = macd.get("hist_trend", "")
+    if "放大" in hist_trend:
+        osc_note.append(f"MACD {'红柱放大，多头动能增强' if '红' in hist_trend else '绿柱放大，空头动能增强'}")
+    kdj_cross = kdj.get("cross", "")
+    if kdj_cross == "金叉":
+        osc_note.append(f"KDJ 金叉（K {kdj.get('k')} 上穿 D {kdj.get('d')}）（仅参考）")
+    elif kdj_cross == "死叉":
+        osc_note.append(f"KDJ 死叉（K {kdj.get('k')} 下穿 D {kdj.get('d')}）（仅参考）")
+    kdj_zone = kdj.get("zone", "")
+    if kdj_zone == "超买":
+        osc_note.append(f"KDJ 超买（J {kdj.get('j')}），短线偏热（仅参考）")
+    elif kdj_zone == "超卖":
+        osc_note.append(f"KDJ 超卖（J {kdj.get('j')}），短线偏冷（仅参考）")
+    osc_summary = "；".join(osc_note)
+
     # 当日盘口分项（技术面修正）：盘中位置/量比/振幅/换手，实时盘口影响结论
     intraday_pts, intraday_note = _intraday_score(q)
     tech_score += intraday_pts
@@ -606,7 +689,6 @@ def rule_based(
             opportunities.append(deviation_note + "，超跌反弹空间或已打开")
         else:
             risks.append(deviation_note + "，追高风险较大")
-
     if above <= 1:
         risks.append(f"股价仅站上 {above} 条均线，MA20={mval(20)} 压制明显（{mpos(20)}）")
     if arrangement in ("空头排列", "短期空头"):
@@ -680,6 +762,13 @@ def rule_based(
                 f"中长期判定为{trend.get('long', '震荡')}。"
             ),
             "pattern": f"{arrangement or '均线交织'}，{sr.get('state', '')}",
+            "oscillators": (
+                f"MACD：DIF {macd.get('dif')} / DEA {macd.get('dea')} / 柱 {macd.get('hist')}"
+                f"（{macd_cross or '无交叉'}，{hist_trend or '柱平'}）；"
+                f"KDJ：K {kdj.get('k')} / D {kdj.get('d')} / J {kdj.get('j')}"
+                f"（{kdj_cross or '无交叉'}，{kdj_zone or '中性'}）"
+                if (macd or kdj) and osc_summary else "MACD/KDJ 数据不足（K线少于 35 根）"
+            ),
         },
         "capital": {
             "summary": f"{flow.get('state', '资金观望')}，{margin.get('sentiment', '两融情绪平稳')}",

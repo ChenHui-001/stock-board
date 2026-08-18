@@ -301,6 +301,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     flow_summary = indicators.summarize_flow(flow_pack["rows"])
     margin_summary = indicators.summarize_margin(margin_pack["rows"])
     status = indicators.build_status(quote, bars, flow_summary, margin_summary, ma_summary, sr)
+    osc = indicators.compute_oscillators(bars)
 
     quote_dict = quote.to_dict()
     if not quote_dict.get("board") and boards:
@@ -332,6 +333,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
             },
         },
         "support_resistance": sr,
+        "oscillators": osc,
         "fund_flow": {
             "rows": [asdict(r) for r in flow_pack["rows"]],
             "summary": flow_summary,

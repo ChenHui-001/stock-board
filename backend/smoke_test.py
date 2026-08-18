@@ -318,12 +318,68 @@ def test_rule_precision() -> None:
     check("信号标注: 交投清淡=高", ann[2]["strength"] == "高" and "54.3%" in ann[2]["hit"], str(ann[2]))
     check("信号标注: 未匹配子句不标", analysis._annotate_intraday("当日成交额 4.21 亿元，市场交投正常")[0]["strength"] == "",
           str(analysis._annotate_intraday("当日成交额 4.21 亿元，市场交投正常")))
+    # 信号置信度：由支撑样本数经 utils.confidence 折算（与自检/回测口径统一）
+    ann_c = analysis._annotate_intraday(
+        "现价自当日高位回落（92%）转跌，短线抛压显现；换手率 0.5% 过低，交投清淡"
+    )
+    check("信号置信度: 字段存在", all("confidence" in a for a in ann_c), str(ann_c))
+    check("信号置信度: 高样本=高置信", ann_c[1]["confidence"]["level"] == "high"
+          and ann_c[1]["confidence"]["label"] == "高", str(ann_c[1]))
+    check("信号置信度: 少样本=低置信且与强度独立", ann_c[0]["strength"] == "高" and ann_c[0]["confidence"]["level"] == "low",
+          str(ann_c[0]))
+    # 口径统一：analysis 标注与 utils.confidence 同函数
+    from backend.utils import confidence as _uconf
+    check("信号置信度: 口径与 utils 一致",
+          ann_c[1]["confidence"] == _uconf(249), str((ann_c[1]["confidence"], _uconf(249))))
     # 盘口机会/风险条目为 dict 结构（带强度），非盘口条目保持字符串
     d_sig = _mk_detail(quote={
         "code": "600000", "name": "浦发银行", "price": 9.85, "prev_close": 10.0,
         "change": -0.15, "change_pct": -1.5, "open": 9.8, "high": 9.9, "low": 8.9,
         "volume": 5e7, "amount": 4.8e8, "turnover": 0.5, "volume_ratio": 2.3,
     })
+    # LLM 投喂：payload 含盘口信号可靠性段（强度/命中率/置信度）
+    _payload_sig = analysis.build_payload(d_sig).get("盘口信号可靠性_当日") or []
+    check("投喂盘口: 段存在且有信号", len(_payload_sig) >= 2, str(_payload_sig)[:200])
+    check("投喂盘口: 含强度/命中率/置信度",
+          all({"信号", "历史强度", "历史命中率", "置信度"} <= set(s.keys()) for s in _payload_sig),
+          str(_payload_sig[0]) if _payload_sig else "无")
+
+    # 7) MACD/KDJ：计算、投喂与规则评分
+    from backend.indicators import compute_oscillators
+    _obars = []
+    _p = 10.0
+    for _i in range(60):
+        _p += (-0.05 if _i < 30 else 0.08)
+        _obars.append(Bar(date=f"2026-08-{_i % 28 + 1:02d}", open=_p - 0.05, close=_p,
+                          high=_p + 0.3, low=_p - 0.3, volume=1e6))
+    _osc = compute_oscillators(_obars)
+    check("MACD/KDJ: 计算产出", _osc["macd"].get("dif") is not None and _osc["kdj"].get("k") is not None,
+          str({k: v for k, v in _osc["macd"].items() if k != "series"}))
+    check("MACD/KDJ: 数据不足兜底", compute_oscillators(_obars[:20])["macd"] == {} and
+          compute_oscillators(_obars[:20])["kdj"] == {}, str(compute_oscillators(_obars[:20])))
+    # 摆动指标仅分析展示，不参与评分与结论（当前市场行情下已不适合作为决策数据）
+    _d_osc = _mk_detail(quote={"code": "600000", "name": "浦发银行", "price": 10.0,
+                                "prev_close": 9.9, "change_pct": 1.0, "high": 10.2,
+                                "low": 9.8, "open": 9.95},
+                         oscillators=_osc)
+    _d_osc2 = _mk_detail(quote={"code": "600000", "name": "浦发银行", "price": 10.0,
+                                 "prev_close": 9.9, "change_pct": 1.0, "high": 10.2,
+                                 "low": 9.8, "open": 9.95},
+                          oscillators={"macd": {"cross": "死叉", "dif": -0.1, "dea": 0.1,
+                                                 "hist_trend": "绿柱放大"},
+                                       "kdj": {"cross": "死叉", "k": 20, "d": 40, "j": -10, "zone": "超卖"}})
+    _fb_osc = analysis.rule_based(_d_osc)
+    _fb_osc2 = analysis.rule_based(_d_osc2)
+    check("MACD/KDJ: 趋势段含指标行", "MACD" in _fb_osc["trend"].get("oscillators", "") and "KDJ" in _fb_osc["trend"]["oscillators"],
+          _fb_osc["trend"].get("oscillators", ""))
+    check("MACD/KDJ: 不参与评分",
+          _fb_osc["advice"]["scores"]["tech"] == _fb_osc2["advice"]["scores"]["tech"],
+          f"金叉 {_fb_osc['advice']['scores']['tech']} vs 死叉 {_fb_osc2['advice']['scores']['tech']}")
+    check("MACD/KDJ: 不进机会/风险",
+          not any("MACD" in str(x) or "KDJ" in str(x) for x in _fb_osc["risk"]["opportunities"] + _fb_osc["risk"]["risks"]),
+          str(_fb_osc["risk"]["opportunities"])[:150])
+    check("MACD/KDJ: 投喂段存在", "MACD" in analysis.build_payload(_d_osc)["技术指标_MACD_KDJ"],
+          str(analysis.build_payload(_d_osc)["技术指标_MACD_KDJ"])[:200])
     fb_sig = analysis.rule_based(d_sig)
     sig_risks = [x for x in fb_sig["risk"]["risks"] if isinstance(x, dict)]
     check("规则输出: 风险含 dict 标注条目", len(sig_risks) >= 2, str(fb_sig["risk"]["risks"]))
@@ -410,6 +466,24 @@ def test_ai_lock() -> None:
         check("AI 锁表回收", "600000" not in api._ai_locks)
 
     asyncio.run(run())
+
+
+def test_ai_cache_freshness() -> None:
+    """AI 当日缓存时效：过期快照必须作废重建（保证点击分析时是最新实时数据）。"""
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    fmt = "%Y-%m-%d %H:%M:%S"
+    fresh = api._cache_fresh((now - timedelta(seconds=30)).strftime(fmt))
+    check("AI 缓存时效: 30s 前快照仍新鲜", fresh is True, f"fresh={fresh}")
+    # 2 小时前快照超过盘后 1h TTL，任何时段（盘中 120s / 盘后 1h）都必过期
+    stale = api._cache_fresh((now - timedelta(hours=2)).strftime(fmt))
+    check("AI 缓存时效: 2 小时前快照过期作废", stale is False, f"stale={stale}")
+    bad = api._cache_fresh("not-a-date")
+    check("AI 缓存时效: 坏格式快照作废", bad is False, f"bad={bad}")
+    # 字段缺失（get_report 无 cached_at）同样视为过期，宁可重建
+    none_at = api._cache_fresh("")
+    check("AI 缓存时效: 无时间戳作废", none_at is False, f"none={none_at}")
 
 
 # ------------------------------------------------------------------ 指标
@@ -538,8 +612,49 @@ def test_check_sources_backtest_struct() -> None:
     check("自检渲染: 回测跳过分支", "已跳过回测" in text_sk, text_sk[:300])
     # run_diagnostics 分离：with_backtest=False 时返回 skipped 且不执行回测
     report_fast = asyncio.run(check_sources.run_diagnostics("600000", with_backtest=False))
-    check("自检分离: 仅数据源跳过回测", report_fast["backtest"].get("skipped") is True,
+    check("自检分离: 仅数据源跳过回测", report_fast["backtest"].get("skipped") is True
+          and report_fast["backtest_days"] == 0,
           str(report_fast["backtest"])[:120])
+    # 回测深度参数化：with_backtest=True 时 backtest_days 传递并记录
+    report_days = asyncio.run(check_sources.run_diagnostics("600000", with_backtest=True,
+                                                             backtest_days=30))
+    check("回测深度: backtest_days 传递", report_days.get("backtest_days") == 30,
+          str(report_days.get("backtest_days")))
+
+    # 置信度分档：样本越深越可靠
+    check("置信度: ≥100 高", check_sources._confidence(500)["level"] == "high",
+          str(check_sources._confidence(500)))
+    check("置信度: 50-99 中", check_sources._confidence(60)["level"] == "medium",
+          str(check_sources._confidence(60)))
+    check("置信度: <50 低", check_sources._confidence(10)["level"] == "low",
+          str(check_sources._confidence(10)))
+    # 汇总报告三层置信度字段（总体/分桶/信号）
+    conf_samples = [
+        {"score": 3, "next_ret": 1.2, "labels": [("高位强势", True)]},
+        {"score": -2, "next_ret": -0.5, "labels": [("低位下跌", False)]},
+        {"score": 0, "next_ret": 0.3, "labels": []},
+    ] * 20
+    conf_rep = check_sources._summarize_backtest_safe(
+        {"samples": conf_samples, "per_stock": [{"code": "600000"}]}, [("600000", "SH")]
+    )
+    check("置信度: 报告含总体字段", conf_rep["confidence"]["level"] == "low", str(conf_rep["confidence"]))
+    check("置信度: 分桶含字段", all("confidence" in b for b in conf_rep["buckets"]), str(conf_rep["buckets"][:1]))
+    check("置信度: 信号含字段", all("confidence" in s for s in conf_rep["signals"]), str(conf_rep["signals"][:1]))
+
+    # 独立回测脚本同步置信度：confidence 分档与 render 报告含置信列（不触网）
+    import backtest_intraday as _bt
+    check("脚本置信度: 分档一致", _bt.confidence(500)[0] == "高" and _bt.confidence(60)[0] == "中"
+          and _bt.confidence(10)[0] == "低", str((_bt.confidence(500), _bt.confidence(60), _bt.confidence(10))))
+    _bt_report = _bt.render({
+        "per_stock": [{"code": "600000"}],
+        "samples": [
+            {"score": 3, "next_ret": 1.2, "labels": [("高位强势", True)]},
+            {"score": -2, "next_ret": -0.5, "labels": [("低位下跌", False)]},
+            {"score": 0, "next_ret": 0.3, "labels": []},
+        ] * 40,
+    })
+    check("脚本置信度: 报告含总体/列", "置信度:" in _bt_report and "置信" in _bt_report,
+          _bt_report[:200])
 
     # _summarize_backtest_safe 兜底：异常样本结构不抛错，返回 ok=False
     bad_summary = check_sources._summarize_backtest_safe(
@@ -570,6 +685,7 @@ def main() -> int:
     test_kline_stale()
     test_cache()
     test_ai_lock()
+    test_ai_cache_freshness()
     test_indicators()
     test_registry()
     test_backtest_selftest()

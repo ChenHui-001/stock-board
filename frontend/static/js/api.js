@@ -47,11 +47,14 @@
     meta: function () {
       return request('/api/meta');
     },
-    healthCheck: function (withBacktest) {
+    healthCheck: function (withBacktest, backtestDays) {
       // 数据源逐源实测，耗时较长（10-30s），给足超时；
-      // withBacktest=false 跳过盘口回测段（更快、省数据源配额）
-      const qs = withBacktest === false ? '?with_backtest=0' : '';
-      return request('/api/health/check' + qs, { timeout: 120000 });
+      // withBacktest=false 跳过盘口回测段（更快、省数据源配额）；
+      // backtestDays 控制回测样本深度（30-250 交易日）
+      const p = [];
+      if (withBacktest === false) p.push('with_backtest=0');
+      if (withBacktest !== false && backtestDays) p.push('backtest_days=' + backtestDays);
+      return request('/api/health/check' + (p.length ? '?' + p.join('&') : ''), { timeout: 120000 });
     },
     watchlist: function (refresh) {
       return request('/api/watchlist' + (refresh ? '?refresh=1' : ''));

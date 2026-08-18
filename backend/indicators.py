@@ -104,6 +104,138 @@ def build_ma(bars: Sequence[Bar], price: float | None) -> tuple[list[MaInfo], di
 
 # ------------------------------------------------------------------ 支撑压力
 
+# ------------------------------------------------------------------ 摆动指标（MACD / KDJ）
+
+def _ema(values: Sequence[float], span: int) -> list[float | None]:
+    """指数移动平均。首个有效值取首元素，之后递推。"""
+    if not values:
+        return []
+    k = 2 / (span + 1)
+    out: list[float | None] = [None] * len(values)
+    prev: float | None = None
+    for i, v in enumerate(values):
+        if prev is None:
+            prev = float(v)
+        else:
+            prev = v * k + prev * (1 - k)
+        out[i] = round(prev, 4)
+    return out
+
+
+def macd_series(closes: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict[str, list[float | None]]:
+    """MACD 序列：DIF / DEA / 柱（柱=(DIF-DEA)*2）。"""
+    if len(closes) < slow + signal:
+        return {"dif": [], "dea": [], "hist": []}
+    ema_fast = _ema(closes, fast)
+    ema_slow = _ema(closes, slow)
+    dif = [round(f - s, 4) if (f is not None and s is not None) else None
+           for f, s in zip(ema_fast, ema_slow)]
+    valid_dif = [d for d in dif if d is not None]
+    dea = [None] * (len(dif) - len(valid_dif)) + _ema(valid_dif, signal)
+    hist = [round((d - e) * 2, 4) if (d is not None and e is not None) else None
+            for d, e in zip(dif, dea)]
+    return {"dif": dif, "dea": dea, "hist": hist}
+
+
+def kdj_series(bars: Sequence[Bar], n: int = 9) -> dict[str, list[float | None]]:
+    """KDJ 序列（9,3,3）：K / D / J。"""
+    if len(bars) < n + 1:
+        return {"k": [], "d": [], "j": []}
+    k: list[float | None] = [None] * len(bars)
+    d: list[float | None] = [None] * len(bars)
+    j: list[float | None] = [None] * len(bars)
+    pk = pd = 50.0
+    for i in range(len(bars)):
+        lo = min(b.low for b in bars[max(0, i - n + 1):i + 1])
+        hi = max(b.high for b in bars[max(0, i - n + 1):i + 1])
+        rsv = (bars[i].close - lo) / (hi - lo) * 100 if hi > lo else 50.0
+        ck = round(pk * 2 / 3 + rsv / 3, 3)
+        cd = round(pd * 2 / 3 + ck / 3, 3)
+        k[i] = ck
+        d[i] = cd
+        j[i] = round(3 * ck - 2 * cd, 3)
+        pk, pd = ck, cd
+    return {"k": k, "d": d, "j": j}
+
+
+def compute_oscillators(bars: Sequence[Bar]) -> dict[str, Any]:
+    """MACD / KDJ 汇总：数值序列（近 30 根）+ 最新状态与信号。
+
+    返回 {"macd": {dif, dea, hist, cross, hist_trend}, "kdj": {k, d, j, cross,
+    zone}, "bars": n}；数据不足时返回空状态（不报错）。
+    """
+    closes = [b.close for b in bars]
+    out: dict[str, Any] = {"bars": len(bars), "macd": {}, "kdj": {}}
+    if len(bars) < 35:
+        return out
+
+    m = macd_series(closes)
+    kd = kdj_series(bars)
+    if not m["dif"] or not kd["k"]:
+        return out
+
+    # ---- MACD 状态
+    dif, dea, hist = m["dif"], m["dea"], m["hist"]
+    def _last(seq: Sequence[float | None]) -> float | None:
+        return next((v for v in reversed(seq) if v is not None), None)
+    def _prev(seq: Sequence[float | None]) -> float | None:
+        valid = [v for v in seq if v is not None]
+        return valid[-2] if len(valid) >= 2 else None
+
+    cdif, cdea, chist = _last(dif), _last(dea), _last(hist)
+    pdif, pdea, phist = _prev(dif), _prev(dea), _prev(hist)
+    cross = ""
+    if cdif is not None and cdea is not None and pdif is not None and pdea is not None:
+        if pdif <= pdea and cdif > cdea:
+            cross = "金叉"
+        elif pdif >= pdea and cdif < cdea:
+            cross = "死叉"
+    hist_trend = ""
+    if chist is not None and phist is not None:
+        hist_trend = "红柱放大" if chist > 0 and chist > phist else (
+            "红柱缩短" if chist > 0 else (
+            "绿柱放大" if chist < phist else "绿柱缩短"))
+    out["macd"] = {
+        "dif": round(cdif, 3) if cdif is not None else None,
+        "dea": round(cdea, 3) if cdea is not None else None,
+        "hist": round(chist, 3) if chist is not None else None,
+        "cross": cross,
+        "hist_trend": hist_trend,
+        "series": {
+            "dif": [round(v, 3) if v is not None else None for v in dif[-30:]],
+            "dea": [round(v, 3) if v is not None else None for v in dea[-30:]],
+            "hist": [round(v, 3) if v is not None else None for v in hist[-30:]],
+        },
+    }
+
+    # ---- KDJ 状态
+    kk, dd, jj = kd["k"], kd["d"], kd["j"]
+    ck, cdd, cj = _last(kk), _last(dd), _last(jj)
+    pk2, pdd = _prev(kk), _prev(dd)
+    kdj_cross = ""
+    if ck is not None and cdd is not None and pk2 is not None and pdd is not None:
+        if pk2 <= pdd and ck > cdd:
+            kdj_cross = "金叉"
+        elif pk2 >= pdd and ck < cdd:
+            kdj_cross = "死叉"
+    zone = ""
+    if cj is not None:
+        zone = "超买" if cj > 100 else ("超卖" if cj < 0 else ("偏强" if cj > 80 else ("偏弱" if cj < 20 else "中性")))
+    out["kdj"] = {
+        "k": round(ck, 2) if ck is not None else None,
+        "d": round(cdd, 2) if cdd is not None else None,
+        "j": round(cj, 2) if cj is not None else None,
+        "cross": kdj_cross,
+        "zone": zone,
+        "series": {
+            "k": [round(v, 2) if v is not None else None for v in kk[-30:]],
+            "d": [round(v, 2) if v is not None else None for v in dd[-30:]],
+            "j": [round(v, 2) if v is not None else None for v in jj[-30:]],
+        },
+    }
+    return out
+
+
 def support_resistance(bars: Sequence[Bar], price: float | None, ma_values: dict[int, float | None]) -> dict[str, Any]:
     """用近 20/60 日高低点 + 均线，取最近的下方支撑与上方压力。"""
     result: dict[str, Any] = {
