@@ -22,6 +22,7 @@ SYSTEM_PROMPT = """你是一名 A 股量化分析师，擅长用均线技术形�
 与「券商观点」段（近一个月券商研报与 AI 情绪标注）。
 请综合基本面与技术面判断：资讯与研报可作为辅助依据，但必须基于数据本身做判断，禁止编造数据中不存在的消息面信息；
 若资讯/研报情绪明显（如连续利好/利空、机构集中买入评级），应在风险机会与操作建议中反映其权重，并在 reason 中提及。
+技术面判断必须结合当日实时盘口（量比、换手率、盘中位置、振幅）验证短线动能，并引用其数值。
 
 【硬性要求】
 1. 只输出一个 JSON 对象，不要输出任何解释文字或 Markdown 代码块。
@@ -267,6 +268,76 @@ def _volume_confirm(bars: list[dict[str, Any]]) -> tuple[int, str]:
     return 0, ""
 
 
+def _intraday_score(q: dict[str, Any]) -> tuple[int, str]:
+    """当日盘口分项：盘中位置×涨跌方向 + 量比 + 振幅 + 换手对技术面的修正。
+
+    返回 (加分, 说明)。盘口数据缺失时返回 (0, "")，不影响其它分项。
+    """
+    price, prev = q.get("price"), q.get("prev_close")
+    hi, lo = q.get("high"), q.get("low")
+    chg = q.get("change_pct")
+    if not (price and prev and hi and lo and hi > lo and chg is not None):
+        return 0, ""
+    pos = (price - lo) / (hi - lo) * 100          # 现价处于当日高低区间的相对位置 0-100
+    amp = (hi - lo) / prev * 100                  # 当日振幅
+    vr = q.get("volume_ratio")
+    turnover = q.get("turnover")
+    score = 0
+    bits: list[str] = []
+
+    # 盘中位置 × 涨跌方向：高位强势/冲高回落、低位弱势/空头衰竭
+    if pos >= 75:
+        if chg > 0:
+            score += 4
+            bits.append(f"现价运行至当日高位（{pos:.0f}%）且上涨，多头强势")
+        else:
+            score -= 4
+            bits.append(f"现价自当日高位回落（{pos:.0f}%）转跌，短线抛压显现")
+    elif pos <= 25:
+        if chg < 0:
+            score -= 3
+            bits.append(f"现价贴近当日低位（{pos:.0f}%）且下跌，弱势明显")
+        else:
+            score += 2
+            bits.append(f"现价自当日低位（{pos:.0f}%）回升，空头动能衰竭")
+
+    # 量比：放量验证方向 / 缩量削弱信号
+    if vr is not None:
+        if vr >= 2:
+            if chg > 0:
+                score += 3
+                bits.append(f"量比 {vr:.2f} 放量上攻，量价配合良好")
+            else:
+                score -= 3
+                bits.append(f"量比 {vr:.2f} 放量下挫，抛压集中释放")
+        elif vr <= 0.6:
+            if chg > 0:
+                score -= 1
+                bits.append(f"量比 {vr:.2f} 缩量上涨，涨势动能存疑")
+            else:
+                score += 1
+                bits.append(f"量比 {vr:.2f} 缩量下跌，抛压有所减轻")
+
+    # 振幅：剧烈波动是风险 / 收敛趋稳偏多
+    if amp >= 8:
+        score -= 2
+        bits.append(f"当日振幅 {amp:.1f}%，波动剧烈")
+    elif amp <= 1.5:
+        score += 1
+        bits.append(f"当日振幅 {amp:.1f}%，走势收敛")
+
+    # 换手：极高警惕分歧出货 / 极低交投清淡
+    if turnover is not None:
+        if turnover >= 10:
+            score += (-2 if chg < 0 else 1)
+            bits.append(f"换手率 {turnover:.1f}% 偏高，{'分歧出货风险' if chg < 0 else '交投活跃'}")
+        elif turnover <= 0.8:
+            score -= 1
+            bits.append(f"换手率 {turnover:.1f}% 过低，交投清淡")
+
+    return max(-8, min(8, score)), "；".join(bits)
+
+
 def rule_based(
     detail: dict[str, Any],
     news: list[dict[str, Any]] | None = None,
@@ -340,6 +411,10 @@ def rule_based(
         elif dev_pct < -8:
             tech_score += 4
             deviation_note = f"现价较 MA20 乖离 {dev_pct:.1f}%（超卖）"
+
+    # 当日盘口分项（技术面修正）：盘中位置/量比/振幅/换手，实时盘口影响结论
+    intraday_pts, intraday_note = _intraday_score(q)
+    tech_score += intraday_pts
 
     # 资金面：主力 / 近5日 / 连续流向 / 两融 / 量能确认
     capital_score = 0
@@ -495,17 +570,11 @@ def rule_based(
         + ("，放量活跃" if (vol_ratio or 0) >= 2 else "，交投清淡" if (vol_ratio or 0) <= 0.6 else "")
     )
 
-    # 当日盘口提示（机会/风险）
-    if intraday_pos is not None and intraday_pos >= 80:
-        risks.append(f"现价已运行至当日区间高位（{intraday_pos:.0f}%），短线追高需谨慎")
-    if intraday_pos is not None and intraday_pos <= 20:
-        opportunities.append(f"现价接近当日区间低位（{intraday_pos:.0f}%），日内存在反弹修复空间")
-    if amp is not None and amp >= 7:
-        risks.append(f"当日振幅 {amp:.2f}%，波动剧烈，注意仓位控制")
-    if (vol_ratio or 0) >= 2 and change_pct is not None and change_pct > 0:
-        opportunities.append(f"量比 {vol_ratio:.2f} 放量配合上行，短线动能较强")
-    if (vol_ratio or 0) >= 2 and change_pct is not None and change_pct < 0:
-        risks.append(f"量比 {vol_ratio:.2f} 放量下挫，抛压集中释放")
+    # 当日盘口提示（机会/风险，与盘口分项同源）
+    if intraday_pts > 0 and intraday_note:
+        opportunities.append(intraday_note)
+    elif intraday_pts < 0 and intraday_note:
+        risks.append(intraday_note)
 
     return {
         "trend": {
@@ -559,6 +628,7 @@ def rule_based(
             "reason": (
                 f"综合评分 {score}：均线站上 {above}/4 条且{arrangement or '交织'}，"
                 f"30日主力{yi(main_total)}，{margin.get('sentiment', '两融平稳')}，{sr_state}"
+                + (f"，盘口 {intraday_pts:+d} 分" if intraday_pts else "")
                 + (f"，资讯面 {bull_n} 利好/{bear_n} 利空（计 {news_pts:+d} 分）" if (news or []) else "")
                 + (f"，研报面 {bull_r} 利好/{bear_r} 利空（计 {report_pts:+d} 分）" if (reports or []) else "")
                 + (f"，{signal_note}" if signal_note else "")
@@ -581,6 +651,7 @@ def rule_based(
                 "tech": w_tech,
                 "capital": w_capital,
                 "news": w_news,
+                "intraday": intraday_pts,  # 当日盘口分项（已计入技术面）
                 "total": score,
             },
             "weights": w,

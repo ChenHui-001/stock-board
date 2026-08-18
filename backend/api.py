@@ -99,8 +99,9 @@ def _cached_report(code: str) -> dict[str, Any] | None:
         return None
     if any(k not in cached for k in _REQUIRED_REPORT_FIELDS):
         return None
-    # 嵌套结构校验：分析建议缺三维分面（规则引擎升级）时也作废
-    if "scores" not in ((cached.get("analysis") or {}).get("advice") or {}):
+    # 嵌套结构校验：分析建议缺三维分面/盘口分项（规则引擎升级）时也作废
+    adv_scores = ((cached.get("analysis") or {}).get("advice") or {}).get("scores") or {}
+    if not adv_scores or "intraday" not in adv_scores:
         return None
     return cached
 

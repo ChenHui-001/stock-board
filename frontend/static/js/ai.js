@@ -201,6 +201,14 @@
       srow.appendChild(mk('技术面', scores.tech));
       srow.appendChild(mk('资金面', scores.capital));
       srow.appendChild(mk('消息面', scores.news));
+      if (scores.intraday != null && scores.intraday !== 0) {
+        // 当日盘口分项（盘中位置/量比/振幅/换手），已计入技术面
+        const intra = U.el('span', 'ai-score intra ' + (scores.intraday > 0 ? 'up' : 'down'));
+        intra.appendChild(U.el('b', '', (scores.intraday > 0 ? '+' : '') + scores.intraday));
+        intra.appendChild(document.createTextNode(' 盘口'));
+        intra.title = '当日盘口分项（盘中位置/量比/振幅/换手），已计入技术面';
+        srow.appendChild(intra);
+      }
       const sig = adv.signal;
       if (sig) {
         const sigNode = U.el('span', 'ai-signal ' + sig,
@@ -386,6 +394,7 @@
       lines.push('  三面评分：技术 ' + (sc.tech > 0 ? '+' : '') + sc.tech
         + ' / 资金 ' + (sc.capital > 0 ? '+' : '') + sc.capital
         + ' / 消息 ' + (sc.news > 0 ? '+' : '') + sc.news
+        + (sc.intraday != null && sc.intraday !== 0 ? ' / 盘口 ' + (sc.intraday > 0 ? '+' : '') + sc.intraday + '（计入技术面）' : '')
         + (adv.signal === 'conflict' ? '（⚠ 信号背离，建议观望确认）' : ''));
     }
     lines.push('');

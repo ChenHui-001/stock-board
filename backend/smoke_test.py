@@ -213,8 +213,9 @@ def test_rule_precision() -> None:
     fb_low = analysis.rule_based(detail_low)
     check("乖离修正: 超卖进机会面", any("超卖" in o for o in fb_low["risk"]["opportunities"]), str(fb_low["risk"]["opportunities"]))
 
-    # 3) 三维分面明细输出
-    check("分面分数输出", set(fb_over["advice"]["scores"].keys()) == {"tech", "capital", "news", "total"}, str(fb_over["advice"]["scores"]))
+    # 3) 三维分面明细输出（含当日盘口分项）
+    check("分面分数输出", set(fb_over["advice"]["scores"].keys()) == {"tech", "capital", "news", "intraday", "total"},
+          str(fb_over["advice"]["scores"]))
 
     # 4) 信号冲突降档：技术/资金偏空 + 消息强多 -> signal=conflict、降档、置信度压低
     detail_cf = _mk_detail(
@@ -243,7 +244,7 @@ def test_rule_precision() -> None:
     check("一致时提示共振", "共振" in fb_al["advice"]["reason"], fb_al["advice"]["reason"])
     check("一致时置信度上修", fb_al["advice"]["confidence"] > 80, str(fb_al["advice"]["confidence"]))
 
-    # 5.5) 当日实时盘口数据：趋势/资金段含 intraday，盘口提示进机会/风险
+    # 5.5) 当日实时盘口数据：趋势/资金段含 intraday，盘口分项计入技术面
     detail_intra = _mk_detail(
         quote={
             "code": "600000", "name": "浦发银行", "price": 9.55, "prev_close": 9.1,
@@ -256,13 +257,52 @@ def test_rule_precision() -> None:
     check("盘中位置/量比/换手", "区间" in fb_intra["trend"]["intraday"] and "量比" in fb_intra["trend"]["intraday"]
           and "换手率" in fb_intra["trend"]["intraday"], fb_intra["trend"]["intraday"])
     check("当日资金活跃进资金段", "当日成交额" in fb_intra["capital"].get("intraday", ""), fb_intra["capital"].get("intraday", ""))
-    check("放量上攻提示进机会面", any("量比" in o and "放量" in o for o in fb_intra["risk"]["opportunities"]),
+    # 高位上涨 + 放量 -> 盘口分项为正、进机会面
+    intra_pts = fb_intra["advice"]["scores"]["intraday"]
+    check("盘口分项计入技术面", intra_pts > 0, f"intraday={intra_pts}")
+    check("盘口分项写进依据", f"盘口 {intra_pts:+d} 分" in fb_intra["advice"]["reason"], fb_intra["advice"]["reason"])
+    check("高位强势提示进机会面", any("高位" in o and "强势" in o for o in fb_intra["risk"]["opportunities"]),
           str(fb_intra["risk"]["opportunities"]))
-    check("高位追高提示进风险面", any("高位" in r for r in fb_intra["risk"]["risks"]), str(fb_intra["risk"]["risks"]))
-    # 数据缺失时 intraday 字段仍存在且不报错
+    # 高位回落转跌 -> 盘口分项为负、进风险面（现价贴近当日高点但较昨收下跌）
+    detail_intra_bear = _mk_detail(
+        quote={
+            "code": "600000", "name": "浦发银行", "price": 9.85, "prev_close": 10.0,
+            "change": -0.15, "change_pct": -1.5, "open": 9.8, "high": 9.9, "low": 8.9,
+            "volume": 5e7, "amount": 4.8e8, "turnover": 3.2, "volume_ratio": 1.2,
+        },
+    )
+    fb_intra_bear = analysis.rule_based(detail_intra_bear)
+    intra_bear = fb_intra_bear["advice"]["scores"]["intraday"]
+    check("高位回落盘口分项为负", intra_bear < 0, f"intraday={intra_bear}")
+    check("冲高回落提示进风险面", any("回落" in r for r in fb_intra_bear["risk"]["risks"]),
+          str(fb_intra_bear["risk"]["risks"]))
+    # 数据缺失时 intraday 字段仍存在且为 0、不报错
     fb_no_intra = analysis.rule_based(_mk_detail())
-    check("无盘口数据时字段兜底", "intraday" in fb_no_intra["trend"] and "intraday" in fb_no_intra["capital"],
+    check("无盘口数据时字段兜底", "intraday" in fb_no_intra["trend"] and "intraday" in fb_no_intra["capital"]
+          and fb_no_intra["advice"]["scores"]["intraday"] == 0,
           str(fb_no_intra["trend"].get("intraday")))
+
+    # 5.6) 盘口分项四象限 + 量比/振幅/换手修正
+    def _q(**kw) -> dict:
+        base = {"code": "600000", "price": 9.4, "prev_close": 9.1, "change_pct": 3.3,
+                "open": 9.1, "high": 9.5, "low": 9.0, "volume_ratio": 1.0, "turnover": 2.0}
+        base.update(kw)
+        return base
+
+    hi_up = analysis._intraday_score(_q(price=9.45, change_pct=3.8))      # 位置 90% + 涨
+    hi_dn = analysis._intraday_score(_q(price=9.45, change_pct=-1.1))     # 位置 90% + 跌
+    lo_dn = analysis._intraday_score(_q(price=9.05, change_pct=-2.2))     # 位置 10% + 跌
+    lo_up = analysis._intraday_score(_q(price=9.05, change_pct=0.6))      # 位置 10% + 涨
+    check("盘口四象限: 高位涨 加分", hi_up[0] > 0, str(hi_up))
+    check("盘口四象限: 高位跌 减分", hi_dn[0] < 0, str(hi_dn))
+    check("盘口四象限: 低位跌 减分", lo_dn[0] < 0, str(lo_dn))
+    check("盘口四象限: 低位涨 加分", lo_up[0] > 0, str(lo_up))
+    check("盘口: 放量上涨加分", analysis._intraday_score(_q(volume_ratio=2.5))[0] > 3)
+    check("盘口: 放量下跌减分", analysis._intraday_score(_q(volume_ratio=2.5, change_pct=-3.3))[0] < -3)
+    check("盘口: 缩量削弱信号", analysis._intraday_score(_q(volume_ratio=0.5))[0] < analysis._intraday_score(_q(volume_ratio=1.0))[0])
+    check("盘口: 振幅大减分", analysis._intraday_score(_q(high=9.9, low=8.6))[0] < 0)
+    check("盘口: 换手极高下跌更空", analysis._intraday_score(_q(turnover=12.0, change_pct=-3.3))[0] < 0)
+    check("盘口: 缺数据为 0", analysis._intraday_score({"code": "600000", "price": 9.0})[0] == 0)
 
     # 6) 三维权重：clamp 越界 + 权重影响分面分
     from backend import scorecfg
