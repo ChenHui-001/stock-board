@@ -158,7 +158,9 @@ def build_payload(
             "中单合计_亿元": yi(detail.get("fund_flow", {}).get("summary", {}).get("md_total")),
             "小单合计_亿元": yi(detail.get("fund_flow", {}).get("summary", {}).get("sm_total")),
             "近5日主力净额_亿元": yi(detail.get("fund_flow", {}).get("summary", {}).get("main_last5")),
-            "当日主力净额_亿元": yi(detail.get("fund_flow", {}).get("summary", {}).get("main_last")),
+            "最新交易日主力净额_亿元": yi(detail.get("fund_flow", {}).get("summary", {}).get("main_last")),
+            "资金流向最新日期": detail.get("fund_flow", {}).get("summary", {}).get("last_date"),
+            "当日资金流向已发布": detail.get("fund_flow", {}).get("summary", {}).get("fresh", False),
             "逐日主力净额_万元": [
                 [r["date"], round(r["main"] / 1e4, 1)] for r in flow_rows[-30:]
             ],
@@ -583,12 +585,21 @@ def rule_based(
     intraday_pts, intraday_note = _intraday_score(q)
     tech_score += intraday_pts
 
-    # 资金面：主力 / 近5日 / 连续流向 / 两融 / 量能确认
+    # 资金面：当日主力为主 / 近5日辅 / 连续流向 / 两融 / 量能确认
+    # 与详情页展示口径一致：用户看到的第一行是当日主力净额，评分以当日为准，
+    # 近5日/30日累计仅作趋势参考（避免「当日流出却判流入」的矛盾观感）。
+    # 当日资金流向未发布（盘中/收盘后16点前，fresh=False）时主项改用近5日口径，
+    # 避免把前一交易日的 main_last 当成「当日」数据参与评分。
     capital_score = 0
-    main_total = flow.get("main_total") or 0
+    main_last = flow.get("main_last") or 0
     main_last5 = flow.get("main_last5") or 0
-    capital_score += 12 if main_total > 0 else (-12 if main_total < 0 else 0)
-    capital_score += 8 if main_last5 > 0 else (-8 if main_last5 < 0 else 0)
+    main_total = flow.get("main_total") or 0
+    flow_fresh = bool(flow.get("fresh", False))
+    flow_last_date = flow.get("last_date") or ""
+    primary = main_last if flow_fresh else main_last5
+    secondary = main_last5 if flow_fresh else main_total  # 未发布时以 30 日累计方向作弱参考
+    capital_score += 12 if primary > 0 else (-12 if primary < 0 else 0)
+    capital_score += 6 if secondary > 0 else (-6 if secondary < 0 else 0)
     if flow.get("streak", 0) >= 3:
         capital_score += 6 if flow.get("streak_dir") == "流入" else -6
 
@@ -666,8 +677,12 @@ def rule_based(
         opportunities.append(f"股价站上 {above} 条均线，MA20={mval(20)} 构成有效支撑")
     if arrangement in ("多头排列", "短期多头"):
         opportunities.append(f"均线{arrangement}，MA5={mval(5)} > MA10={mval(10)}，趋势结构完好")
-    if main_total > 0:
-        opportunities.append(f"近30日主力累计净流入 {yi(main_total)}，其中超大单 {yi(flow.get('xl_total'))}")
+    flow_day_label = "当日" if flow_fresh else f"最近交易日（{flow_last_date}）"
+    if primary > 0:
+        opportunities.append(
+            f"{flow_day_label}主力净流入 {yi(primary)}（近5日 {yi(main_last5)} / 近30日累计 {yi(main_total)}），"
+            f"其中超大单 {yi(flow.get('xl_total'))}"
+        )
     if rz_pct is not None and rz_pct > 0:
         opportunities.append(f"融资余额30日增长 {rz_pct:.2f}%，杠杆资金做多意愿抬升")
     if "突破" in sr_state:
@@ -693,9 +708,12 @@ def rule_based(
         risks.append(f"股价仅站上 {above} 条均线，MA20={mval(20)} 压制明显（{mpos(20)}）")
     if arrangement in ("空头排列", "短期空头"):
         risks.append(f"均线{arrangement}，短期反弹易在 MA20={mval(20)} 受阻")
-    if main_total < 0:
-        risks.append(f"近30日主力累计净流出 {yi(abs(main_total))}，流出天数 {flow.get('outflow_days', 0)} 天")
-    if (flow.get("sm_total") or 0) > 0 and main_total < 0 and flow.get("tiered"):
+    if primary < 0:
+        risks.append(
+            f"{flow_day_label}主力净流出 {yi(abs(primary))}（近5日 {yi(main_last5)} / 近30日累计 {yi(main_total)}），"
+            f"超大单 {yi(flow.get('xl_total'))}"
+        )
+    if (flow.get("sm_total") or 0) > 0 and main_last < 0 and flow.get("tiered"):
         risks.append("主力流出而小单流入，散户接盘特征明显")
     if rz_pct is not None and rz_pct < -3:
         risks.append(f"融资余额30日下降 {abs(rz_pct):.2f}%，杠杆资金撤离")
@@ -774,8 +792,9 @@ def rule_based(
             "summary": f"{flow.get('state', '资金观望')}，{margin.get('sentiment', '两融情绪平稳')}",
             "intraday": intraday_activity,
             "main_force": (
-                f"近30日主力净额合计 {yi(main_total)}（流入 {flow.get('inflow_days', 0)} 天 / "
-                f"流出 {flow.get('outflow_days', 0)} 天），近5日 {yi(main_last5)}，"
+                f"当日主力 {yi(main_last)}，近5日 {yi(main_last5)}，"
+                f"近30日合计 {yi(main_total)}（流入 {flow.get('inflow_days', 0)} 天 / "
+                f"流出 {flow.get('outflow_days', 0)} 天），"
                 f"当前连续{flow.get('streak_dir', '持平')} {flow.get('streak', 0)} 天，"
                 + (f"超大单 {yi(flow.get('xl_total'))}、大单 {yi(flow.get('lg_total'))}，"
                    if flow.get("tiered") else f"超大单 {yi(flow.get('xl_total'))}，")
@@ -784,7 +803,7 @@ def rule_based(
             "retail": (
                 f"中单 {yi(flow.get('md_total'))}、小单（散户）{yi(flow.get('sm_total'))}，"
                 + ("散户在主力流出时接盘，筹码由强手转弱手。"
-                   if (flow.get("sm_total") or 0) > 0 and main_total < 0
+                   if (flow.get("sm_total") or 0) > 0 and main_last < 0
                    else "散户资金与主力方向一致，分歧不大。")
                 if flow.get("tiered")
                 else "当前资金数据来自备用源，仅提供净流入与超大单口径，无大单/中单/小单四档拆分，散户维度不参与本次判定。"

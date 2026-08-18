@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Sequence
 
 from .providers import Bar, FlowDay, MarginDay, Quote
@@ -295,7 +296,13 @@ def support_resistance(bars: Sequence[Bar], price: float | None, ma_values: dict
 
 # ------------------------------------------------------------------ 资金流向
 
-def summarize_flow(rows: Sequence[FlowDay]) -> dict[str, Any]:
+def summarize_flow(rows: Sequence[FlowDay], ref_date: str | None = None) -> dict[str, Any]:
+    """资金流向汇总。ref_date 传已知最近交易日（如 K 线最新日期）用于判断
+    「当日资金流向是否已发布」——东财/新浪的日级资金流向通常在收盘后
+    16 点前后才更新当日数据，盘中及 16 点前最后一行是前一交易日。
+    此时把 rows[-1] 当「当日」会误导（把昨天数据标成今天），
+    因此降级为近5日/累计口径并在 fresh=False 中标注。
+    """
     if not rows:
         return {"available": False, "trend": "无数据", "days": 0}
 
@@ -319,8 +326,21 @@ def summarize_flow(rows: Sequence[FlowDay]) -> dict[str, Any]:
             break
         streak += 1
 
+    main_last = rows[-1].main
+    last_date = (rows[-1].date or "")[:10]
     last5 = sum(r.main for r in rows[-5:])
     ratio = inflow_days / len(rows)
+
+    # 当日资金流向可用性：最后一行日期是否已到参照的最近交易日（K线最新日期）。
+    # K线盘中即含当日，资金流向 16 点后才出当日——盘中/16点前 fresh=False。
+    fresh = False
+    if ref_date:
+        try:
+            last_d = datetime.strptime(last_date, "%Y-%m-%d").date()
+            ref_d = datetime.strptime(str(ref_date)[:10], "%Y-%m-%d").date()
+            fresh = last_d >= ref_d
+        except ValueError:
+            fresh = False
 
     # 备用源（新浪）只有「净流入」与「超大单」两档，没有大单/中单拆分。
     # 这里识别出来，避免把不存在的口径当成真实数据展示或投喂给 AI。
@@ -336,10 +356,20 @@ def summarize_flow(rows: Sequence[FlowDay]) -> dict[str, Any]:
     else:
         trend = "震荡反复"
 
-    if main_total > 0 and last5 > 0:
-        state = "主力净流入"
-    elif main_total < 0 and last5 < 0:
-        state = "主力净流出"
+    # 状态判定：当日资金流向已发布（fresh）时以「当日」为主；未发布（盘中 /
+    # 收盘后 16 点前）退回近5日/累计口径，并把日期语义写进 state，避免把
+    # 前一交易日的数据标成「当日」误导用户。累计视角始终保留在 trend。
+    if fresh:
+        if main_last > 0:
+            state = "主力净流入"
+        elif main_last < 0:
+            state = "主力净流出"
+        else:
+            state = "资金观望"
+    elif last5 > 0 and main_total > 0:
+        state = "主力净流入（近5日）"
+    elif last5 < 0 and main_total < 0:
+        state = "主力净流出（近5日）"
     else:
         state = "资金观望"
 
@@ -360,6 +390,8 @@ def summarize_flow(rows: Sequence[FlowDay]) -> dict[str, Any]:
         "streak_dir": "流入" if direction > 0 else ("流出" if direction < 0 else "持平"),
         "trend": trend,
         "state": state,
+        "last_date": last_date,
+        "fresh": fresh,
     }
 
 

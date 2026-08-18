@@ -298,7 +298,10 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     ma_infos, ma_summary = indicators.build_ma(bars, quote.price)
     ma_values = {i.window: i.value for i in ma_infos}
     sr = indicators.support_resistance(bars, quote.price, ma_values)
-    flow_summary = indicators.summarize_flow(flow_pack["rows"])
+    last_bar_date = bars[-1].date if bars else ""
+    # ref_date=K线最新日期：资金流向当日数据未发布（盘中/16点前）时
+    # summarize_flow 据此降级判定并标注，避免把昨日数据当「当日」
+    flow_summary = indicators.summarize_flow(flow_pack["rows"], ref_date=last_bar_date)
     margin_summary = indicators.summarize_margin(margin_pack["rows"])
     status = indicators.build_status(quote, bars, flow_summary, margin_summary, ma_summary, sr)
     osc = indicators.compute_oscillators(bars)
@@ -309,7 +312,6 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
         # 回写数据库，看板页从此不再依赖行情源是否携带行业字段
         storage.update_meta(code, None, boards[0])
 
-    last_bar_date = bars[-1].date if bars else ""
     # 东财批量行情接口拿不到更新时间戳时（f86 语义异常），用 K 线最新日期回填，
     # 避免 trade_date 恒为空导致 delayed 判定与前端展示失效
     if not quote_dict.get("trade_date") and last_bar_date:

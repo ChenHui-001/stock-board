@@ -267,6 +267,15 @@
     return s.days + ' 个交易日 · ' + s.trend + ' · ' + s.state;
   }
 
+  // 当日资金流向未发布（盘中 / 收盘后 16 点前）：东财/新浪日级资金流向通常
+  // 16 点后才有当日数据，此时最后一行是前一交易日，必须明确标注日期避免误导
+  function flowFreshNotice(d) {
+    const s = d.fund_flow.summary || {};
+    if (!s || !s.available || s.fresh) return '';
+    return '当日资金流向尚未发布（通常收盘后 16 点更新），以下展示最近交易日 '
+      + (s.last_date || '--') + ' 数据；状态判定已退回近5日口径。';
+  }
+
   function renderFlow(d) {
     const wrap = U.el('div');
     const s = d.fund_flow.summary || {};
@@ -284,11 +293,17 @@
         + '仅提供净流入与超大单口径，无大单/中单/小单四档拆分。', 'info'));
     }
 
+    const freshNotice = flowFreshNotice(d);
+    if (freshNotice) {
+      wrap.appendChild(notice(freshNotice, 'warn'));
+    }
+
     const stats = U.el('div', 'stat-row');
+    const lastLabel = s.fresh ? '当日主力' : '最近交易日主力';
     const items = [
       ['30日主力净额', U.signedMoney(s.main_total), U.tone(s.main_total)],
       ['近5日主力', U.signedMoney(s.main_last5), U.tone(s.main_last5)],
-      ['当日主力', U.signedMoney(s.main_last), U.tone(s.main_last)],
+      [lastLabel, U.signedMoney(s.main_last), U.tone(s.main_last)],
       ['超大单合计', U.signedMoney(s.xl_total), U.tone(s.xl_total)]
     ];
     if (s.tiered) {

@@ -19,7 +19,7 @@ os.environ["DATA_DIR"] = _tmp
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend import analysis, api, cache, llm, llmcfg, news, reports, storage  # noqa: E402
-from backend.indicators import build_ma, support_resistance  # noqa: E402
+from backend.indicators import build_ma, summarize_flow, support_resistance  # noqa: E402
 from backend.providers import registry  # noqa: E402
 from backend.providers.base import Bar  # noqa: E402
 
@@ -221,7 +221,7 @@ def test_rule_precision() -> None:
     detail_cf = _mk_detail(
         ma=[_ma_item(5, 9.2, "持平"), _ma_item(10, 9.1, "持平"), _ma_item(20, 9.0, "持平"), _ma_item(60, 8.8, "持平")],
         ma_summary={"arrangement": "交织", "above_count": 2, "above": ["MA5", "MA10"], "below": [], "series": {}},
-        fund_flow={"rows": [], "summary": {"main_total": -1e8, "main_last5": 0, "streak": 0, "streak_dir": ""}},
+        fund_flow={"rows": [], "summary": {"main_total": -1e8, "main_last": -1e8, "main_last5": 0, "streak": 0, "streak_dir": ""}},
         status={"tags": [], "trend": {"chg_20d": -3}},
     )
     news_cf = [{"title": "重大利好" + str(i), "date": f"2026-08-{i+1:02d}",
@@ -237,12 +237,40 @@ def test_rule_precision() -> None:
     detail_al = _mk_detail(
         ma=[_ma_item(5, 8.6, "上行"), _ma_item(10, 8.5, "上行"), _ma_item(20, 8.4, "上行"), _ma_item(60, 8.2, "上行")],
         ma_summary={"arrangement": "多头排列", "above_count": 4, "above": ["MA5", "MA10", "MA20", "MA60"], "below": [], "series": {}},
-        fund_flow={"rows": [], "summary": {"main_total": 3e8, "main_last5": 1e8, "streak": 4, "streak_dir": "流入"}},
+        fund_flow={"rows": [], "summary": {"main_total": 3e8, "main_last": 1e8, "main_last5": 1e8, "streak": 4, "streak_dir": "流入"}},
     )
     fb_al = analysis.rule_based(detail_al, news_cf, reports_cf)
     check("信号一致标记", fb_al["advice"]["signal"] == "aligned", str(fb_al["advice"]["signal"]))
     check("一致时提示共振", "共振" in fb_al["advice"]["reason"], fb_al["advice"]["reason"])
     check("一致时置信度上修", fb_al["advice"]["confidence"] > 80, str(fb_al["advice"]["confidence"]))
+
+    # 5.4) 资金面当日优先：当日流出但 30 日累计流入 -> 判定偏空（与详情页展示一致）
+    detail_daily = _mk_detail(
+        ma=[_ma_item(5, 9.2, "持平"), _ma_item(10, 9.1, "持平"), _ma_item(20, 9.0, "持平"), _ma_item(60, 8.8, "持平")],
+        ma_summary={"arrangement": "交织", "above_count": 2, "above": ["MA5", "MA10"], "below": [], "series": {}},
+        fund_flow={"rows": [], "summary": {"main_total": 15e8, "main_last": -2.45e8, "main_last5": 0.6e8, "streak": 1, "streak_dir": "流出", "fresh": True, "last_date": "2026-08-18"}},
+    )
+    fb_daily = analysis.rule_based(detail_daily)
+    check("资金面当日优先: 当日流出进风险面",
+          any("当日主力净流出" in (r if isinstance(r, str) else r.get("text", "")) for r in fb_daily["risk"]["risks"]),
+          str(fb_daily["risk"]["risks"]))
+    check("资金面当日优先: 不出现累计流入机会",
+          not any("近30日主力累计净流入" in (o if isinstance(o, str) else o.get("text", "")) for o in fb_daily["risk"]["opportunities"]),
+          str(fb_daily["risk"]["opportunities"]))
+
+    # 5.45) 当日资金流向未发布（16点前，最后一行=昨天）：判定退回近5日口径并标注日期
+    detail_nf = _mk_detail(
+        ma=[_ma_item(5, 9.2, "持平"), _ma_item(10, 9.1, "持平"), _ma_item(20, 9.0, "持平"), _ma_item(60, 8.8, "持平")],
+        ma_summary={"arrangement": "交织", "above_count": 2, "above": ["MA5", "MA10"], "below": [], "series": {}},
+        fund_flow={"rows": [], "summary": {"main_total": 15e8, "main_last": -2.45e8, "main_last5": -0.8e8, "streak": 2, "streak_dir": "流出", "fresh": False, "last_date": "2026-08-17"}},
+    )
+    fb_nf = analysis.rule_based(detail_nf)
+    check("资金未发布: 退回近5日口径",
+          any("最近交易日（2026-08-17）" in (r if isinstance(r, str) else r.get("text", "")) for r in fb_nf["risk"]["risks"]),
+          str(fb_nf["risk"]["risks"]))
+    check("资金未发布: 不把昨日当当日",
+          not any("当日主力" in (x if isinstance(x, str) else x.get("text", "")) for x in fb_nf["risk"]["opportunities"] + fb_nf["risk"]["risks"]),
+          str(fb_nf["risk"]["risks"]))
 
     # 5.5) 当日实时盘口数据：趋势/资金段含 intraday，盘口分项计入技术面
     detail_intra = _mk_detail(
@@ -397,7 +425,7 @@ def test_rule_precision() -> None:
     detail_w = _mk_detail(
         ma=[_ma_item(5, 8.6, "上行"), _ma_item(10, 8.5, "上行"), _ma_item(20, 8.4, "上行"), _ma_item(60, 8.2, "上行")],
         ma_summary={"arrangement": "多头排列", "above_count": 4, "above": ["MA5", "MA10", "MA20", "MA60"], "below": [], "series": {}},
-        fund_flow={"rows": [], "summary": {"main_total": 3e8, "main_last5": 1e8, "streak": 4, "streak_dir": "流入"}},
+        fund_flow={"rows": [], "summary": {"main_total": 3e8, "main_last": 1e8, "main_last5": 1e8, "streak": 4, "streak_dir": "流入"}},
     )
     fb_w = analysis.rule_based(detail_w)
     s = fb_w["advice"]["scores"]
@@ -498,6 +526,25 @@ def test_indicators() -> None:
     ma_values = {i.window: i.value for i in infos}
     sr = support_resistance(bars, 20.0, ma_values)
     check("支撑压力", bool(sr.get("support") and sr.get("resistance")), str(sr.get("state")))
+
+    # 资金流向当日新鲜度：ref_date=K线最新日期
+    from backend.providers.base import FlowDay
+    flow_rows = [
+        FlowDay(date="2026-08-14", main=-1.8e8, sm=0, md=0, lg=0, xl=-1.3e8),
+        FlowDay(date="2026-08-17", main=2.4e8, sm=0, md=0, lg=0, xl=2.9e8),
+        FlowDay(date="2026-08-18", main=-2.45e8, sm=0, md=0, lg=0, xl=-2.58e8),
+    ]
+    f_fresh = summarize_flow(flow_rows, ref_date="2026-08-18")
+    check("资金新鲜: 当日已发布", f_fresh["fresh"] is True and f_fresh["last_date"] == "2026-08-18", str(f_fresh.get("fresh")))
+    check("资金新鲜: 当日口径判定", f_fresh["state"] == "主力净流出", f_fresh["state"])
+    # 模拟 16 点前：最后一行是 17 日（昨日）且为流出，K线已到 18 日
+    flow_y = [
+        FlowDay(date="2026-08-14", main=1.8e8, sm=0, md=0, lg=0, xl=1.3e8),
+        FlowDay(date="2026-08-17", main=-2.4e8, sm=0, md=0, lg=0, xl=-2.9e8),
+    ]
+    f_y = summarize_flow(flow_y, ref_date="2026-08-18")
+    check("资金未发布: fresh=False", f_y["fresh"] is False and f_y["last_date"] == "2026-08-17", str(f_y.get("fresh")))
+    check("资金未发布: 退回近5日口径", f_y["state"] == "主力净流出（近5日）", f_y["state"])
 
 
 # ------------------------------------------------------------------ 数据源装配（不触网）
