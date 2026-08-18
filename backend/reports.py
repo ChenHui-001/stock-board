@@ -20,7 +20,7 @@ from typing import Any
 from . import llm
 from .cache import cache
 from .providers import ProviderError, registry
-from .utils import now, resolve_market
+from .utils import items_fingerprint, now, resolve_market
 
 log = logging.getLogger("reports")
 
@@ -205,7 +205,6 @@ async def get_reports(
     market = resolve_market(code)
 
     raw_key = f"reports:raw:{code}"
-    interp_key = f"reports:interp:{code}:{days}"
 
     async def load_raw() -> tuple[list[dict[str, Any]], str]:
         # 拉全量（上限 200 条防滥用），范围过滤在缓存外用内存做
@@ -236,6 +235,8 @@ async def get_reports(
     ranged = [it for it in all_items if not since or it.get("date", "") >= since]
     items = ranged[:limit]
     rating_dist = rating_distribution(ranged, since)
+    # 解读缓存 key 纳入条目指纹：研报列表一变 key 即变，旧解读自动失效，避免错位
+    interp_key = f"reports:interp:{code}:{days}:{items_fingerprint(items)}"
 
     if not items:
         return {"items": [], "meta": {"error": "该时间范围内暂无券商研报", "engine": "none", "total": 0, "source": src_name, "days": days}}

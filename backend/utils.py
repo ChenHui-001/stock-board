@@ -1,6 +1,7 @@
 """通用工具：市场判定、交易时段、数值处理。"""
 from __future__ import annotations
 
+import hashlib
 from datetime import date, datetime, time, timedelta
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
@@ -130,6 +131,22 @@ def chunked(items: Iterable[Any], size: int) -> Iterable[list[Any]]:
             batch = []
     if batch:
         yield batch
+
+
+def items_fingerprint(
+    items: Iterable[dict[str, Any]],
+    fields: tuple[str, ...] = ("id", "date", "title"),
+) -> str:
+    """按条目关键字段生成稳定指纹，用于解读缓存 key。
+
+    资讯/研报的逐条解读必须与条目一一对应；若解读缓存只按 code+days 存，
+    原始数据刷新后新条目会命中旧解读（错位）。把条目指纹并入缓存 key 后，
+    条目一变 key 就变，旧解读自然失效、按新条目重新解读。
+    """
+    raw = "|".join(
+        ":".join(str(item.get(f, "")) for f in fields) for item in items
+    )
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
 
 def confidence(n: int) -> dict[str, str]:

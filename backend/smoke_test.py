@@ -558,6 +558,22 @@ def test_registry() -> None:
     check("资讯源装配（东财+新浪兜底）", news_caps == ["eastmoney", "sina"], str(news_caps))
 
 
+def test_items_fingerprint() -> None:
+    """解读缓存指纹：条目内容一变指纹即变，防止新标题配旧解读的缓存错位。"""
+    from backend.utils import items_fingerprint
+
+    a = [{"id": "1", "date": "2026-08-18", "title": "中标合同"},
+         {"id": "2", "date": "2026-08-17", "title": "回购"}]
+    b = [{"id": "2", "date": "2026-08-17", "title": "回购"},
+         {"id": "3", "date": "2026-08-16", "title": "减持"}]
+    check("指纹: 相同条目同指纹", items_fingerprint(a) == items_fingerprint(list(a)), items_fingerprint(a))
+    check("指纹: 条目变化指纹变化", items_fingerprint(a) != items_fingerprint(b),
+          f"{items_fingerprint(a)} vs {items_fingerprint(b)}")
+    check("指纹: 标题变化指纹变化",
+          items_fingerprint([{"id": "1", "title": "A"}]) != items_fingerprint([{"id": "1", "title": "B"}]))
+    check("指纹: 空列表稳定不报错", isinstance(items_fingerprint([]), str) and len(items_fingerprint([])) == 12)
+
+
 # ------------------------------------------------------------------ 盘口回测脚本自测（不触网，合成日线）
 def test_backtest_selftest() -> None:
     import subprocess
@@ -735,6 +751,7 @@ def main() -> int:
     test_ai_cache_freshness()
     test_indicators()
     test_registry()
+    test_items_fingerprint()
     test_backtest_selftest()
     test_check_sources_backtest_struct()
     print()

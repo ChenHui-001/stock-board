@@ -16,7 +16,7 @@ from typing import Any
 from . import llm
 from .cache import cache
 from .providers import ProviderError, registry
-from .utils import now, resolve_market
+from .utils import items_fingerprint, now, resolve_market
 
 log = logging.getLogger("news")
 
@@ -175,7 +175,6 @@ async def get_stock_news(
     market = resolve_market(code)
 
     raw_key = f"news:raw:{code}"
-    interp_key = f"news:interp:{code}:{days}"
 
     async def load_raw() -> tuple[list[dict[str, Any]], str]:
         # 始终抓取 NEWS_DAYS（30 天）全量进缓存，days 过滤在缓存外用内存做（与研报一致）
@@ -204,6 +203,9 @@ async def get_stock_news(
     since = (now() - timedelta(days=days)).strftime("%Y-%m-%d") if 0 < days < NEWS_DAYS else ""
     ranged = [it for it in all_items if not since or (it.get("date", "") or "")[:10] >= since]
     items = ranged[:limit]
+    # 解读缓存 key 纳入条目指纹：条目一变（新资讯进来/旧滑出）key 即变，
+    # 旧解读自然失效，避免「新标题配旧解读」的错位。
+    interp_key = f"news:interp:{code}:{days}:{items_fingerprint(items)}"
 
     if not items:
         return {"items": [], "meta": {"error": "该时间范围内暂无相关资讯", "engine": "none", "total": 0, "source": src_name, "days": days}}
