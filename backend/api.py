@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, llm, llmcfg, news as news_mod, reports as reports_mod, service, storage
+from . import analysis, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import normalize_code, resolve_market
@@ -94,7 +94,13 @@ def _cached_report(code: str) -> dict[str, Any] | None:
     meta = cached.get("meta") or {}
     if meta.get("fingerprint") != llmcfg.fingerprint():
         return None
+    # 评分权重变化后旧缓存作废（权重影响规则引擎结果）
+    if meta.get("score_fp") != scorecfg.fingerprint():
+        return None
     if any(k not in cached for k in _REQUIRED_REPORT_FIELDS):
+        return None
+    # 嵌套结构校验：分析建议缺三维分面（规则引擎升级）时也作废
+    if "scores" not in ((cached.get("analysis") or {}).get("advice") or {}):
         return None
     return cached
 
@@ -184,6 +190,33 @@ async def llm_config_test(body: LLMConfigBody) -> dict[str, Any]:
     cfg = llmcfg.merge_pending(body.model_dump(exclude_unset=True))
     ok, message = await llm.test_connection(cfg)
     return {"ok": ok, "message": message}
+
+
+# ------------------------------------------------------------------ AI 评分权重
+
+@router.get("/score/weights")
+async def score_weights_get() -> dict[str, Any]:
+    """当前生效的三维分面权重（DB 覆盖优先，环境变量兜底）。"""
+    w = scorecfg.get_weights()
+    return {
+        **w,
+        "range": [scorecfg._MIN, scorecfg._MAX],
+        "source": "db" if storage.get_kv("score_weights") else "env",
+    }
+
+
+@router.post("/score/weights")
+async def score_weights_save(body: dict[str, Any]) -> dict[str, Any]:
+    """保存权重（自动 clamp 到合法范围），保存后 AI 当日缓存作废。"""
+    w = scorecfg.save_weights(body)
+    return {"ok": True, **w}
+
+
+@router.post("/score/weights/reset")
+async def score_weights_reset() -> dict[str, Any]:
+    """清除界面配置，回退到环境变量权重。"""
+    w = scorecfg.reset_weights()
+    return {"ok": True, **w}
 
 
 @router.post("/llm/models")
@@ -391,7 +424,11 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
             "price": quote.get("price"),
             "change_pct": quote.get("change_pct"),
             "analysis": result["analysis"],
-            "meta": {**result["meta"], "fingerprint": llmcfg.fingerprint()},
+            "meta": {
+                **result["meta"],
+                "fingerprint": llmcfg.fingerprint(),
+                "score_fp": scorecfg.fingerprint(),
+            },
             "status_tags": detail["status"]["tags"],
             # 研报面统计与关键研报预览（供前端结论下方单独展示）
             "report_sentiment": _sentiment_stats(report_items),

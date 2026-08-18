@@ -81,6 +81,14 @@ class Settings:
     FLOW_DAYS = _int("FLOW_DAYS", 30)
     MARGIN_DAYS = _int("MARGIN_DAYS", 30)
 
+    # ---------- AI 评分权重 ----------
+    # 三维分面评分（技术面/资金面/消息面）的乘数，默认 1.0，范围 0.2~3.0。
+    # 调大某面让该维度信号更强（如消息面重仓者可调高 NEWS）；
+    # 设置页保存的权重优先于环境变量。
+    SCORE_WEIGHT_TECH = _float("SCORE_WEIGHT_TECH", 1.0)
+    SCORE_WEIGHT_CAPITAL = _float("SCORE_WEIGHT_CAPITAL", 1.0)
+    SCORE_WEIGHT_NEWS = _float("SCORE_WEIGHT_NEWS", 1.0)
+
     @property
     def db_path(self) -> Path:
         return self.DATA_DIR / "board.db"

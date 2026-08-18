@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from . import llm
+from .scorecfg import get_weights
 from .utils import now, round2
 
 log = logging.getLogger("analysis")
@@ -226,6 +227,34 @@ def _reports_score(reports: list[dict[str, Any]] | None) -> tuple[int, int, int]
     return bull, bear, neutral
 
 
+def _volume_confirm(bars: list[dict[str, Any]]) -> tuple[int, str]:
+    """量能确认：近 5 日涨跌 × 最近一日量能 vs 前 5 日均量。
+
+    返回 (加分, 说明)。放量上涨/缩量下跌偏多，放量下跌/缩量上涨偏空，
+    数据不足时返回 (0, "")。volume 单位约定为股（各源已统一）。
+    """
+    if len(bars) < 6:
+        return 0, ""
+    closes = [b.get("close") for b in bars[-6:]]
+    vols = [b.get("volume") for b in bars[-6:]]
+    if any(c is None for c in closes) or any(v is None or v <= 0 for v in vols):
+        return 0, ""
+    if not closes[-6]:
+        return 0, ""
+    chg5 = (closes[-1] - closes[-6]) / closes[-6] * 100
+    base = sum(vols[:-1]) / 5
+    recent = vols[-1] / base if base else 0.0
+    if chg5 > 1 and recent >= 1.3:
+        return 6, f"近5日涨 {chg5:.1f}% 且放量（量比 {recent:.1f}），量价配合良好"
+    if chg5 < -1 and recent >= 1.3:
+        return -6, f"近5日跌 {abs(chg5):.1f}% 且放量（量比 {recent:.1f}），抛压较重"
+    if chg5 < -1 and recent <= 0.7:
+        return 3, f"近5日跌 {abs(chg5):.1f}% 但缩量（量比 {recent:.1f}），抛压减轻"
+    if chg5 > 1 and recent <= 0.7:
+        return -3, f"近5日涨 {chg5:.1f}% 但缩量（量比 {recent:.1f}），涨势缺乏量能确认"
+    return 0, ""
+
+
 def rule_based(
     detail: dict[str, Any],
     news: list[dict[str, Any]] | None = None,
@@ -256,46 +285,83 @@ def rule_based(
     def mpos(w: int) -> str:
         return (ma.get(w) or {}).get("position", "数据不足")
 
-    # ---- 打分：技术面 + 资金面 + 两融
-    score = 0
+    # ==================== 三维分面评分 ====================
+    # 技术面：均线结构 / 排列 / 斜率 / 区间 / 乖离
+    tech_score = 0
     above = ma_sum.get("above_count", 0)
-    score += (above - 2) * 8                       # 站上均线数量
+    tech_score += (above - 2) * 8                  # 站上均线数量
     arrangement = ma_sum.get("arrangement", "")
-    score += {"多头排列": 18, "短期多头": 8, "空头排列": -18, "短期空头": -8}.get(arrangement, 0)
+    tech_score += {"多头排列": 18, "短期多头": 8, "空头排列": -18, "短期空头": -8}.get(arrangement, 0)
     for w, weight in ((5, 3), (10, 3), (20, 4), (60, 4)):
         slope = (ma.get(w) or {}).get("slope")
-        score += weight if slope == "上行" else (-weight if slope == "下行" else 0)
-
-    main_total = flow.get("main_total") or 0
-    main_last5 = flow.get("main_last5") or 0
-    score += 12 if main_total > 0 else (-12 if main_total < 0 else 0)
-    score += 8 if main_last5 > 0 else (-8 if main_last5 < 0 else 0)
-    if flow.get("streak", 0) >= 3:
-        score += 6 if flow.get("streak_dir") == "流入" else -6
-
-    rz_pct = margin.get("rz_change_pct")
-    if rz_pct is not None:
-        score += 8 if rz_pct >= 5 else (-8 if rz_pct <= -5 else 0)
+        tech_score += weight if slope == "上行" else (-weight if slope == "下行" else 0)
 
     chg20 = trend.get("chg_20d")
     if chg20 is not None:
-        score += 6 if chg20 > 0 else -6
+        tech_score += 6 if chg20 > 0 else -6
 
     sr_state = sr.get("state", "")
     if "突破" in sr_state:
-        score += 8
+        tech_score += 8
     elif "跌破" in sr_state:
-        score -= 12
+        tech_score -= 12
 
-    # 资讯面权重：每条利好 +4 / 利空 -4，封顶 ±12（避免单一信息面左右全局）
+    # 乖离修正：现价偏离 MA20 过大时提示超买/超卖风险（避免追高杀跌）
+    ma20v = (ma.get(20) or {}).get("value")
+    deviation_note = ""
+    if price and ma20v:
+        dev_pct = (price - ma20v) / ma20v * 100
+        if dev_pct > 8:
+            tech_score -= 4
+            deviation_note = f"现价较 MA20 乖离 {dev_pct:.1f}%（超买）"
+        elif dev_pct < -8:
+            tech_score += 4
+            deviation_note = f"现价较 MA20 乖离 {dev_pct:.1f}%（超卖）"
+
+    # 资金面：主力 / 近5日 / 连续流向 / 两融 / 量能确认
+    capital_score = 0
+    main_total = flow.get("main_total") or 0
+    main_last5 = flow.get("main_last5") or 0
+    capital_score += 12 if main_total > 0 else (-12 if main_total < 0 else 0)
+    capital_score += 8 if main_last5 > 0 else (-8 if main_last5 < 0 else 0)
+    if flow.get("streak", 0) >= 3:
+        capital_score += 6 if flow.get("streak_dir") == "流入" else -6
+
+    rz_pct = margin.get("rz_change_pct")
+    if rz_pct is not None:
+        capital_score += 8 if rz_pct >= 5 else (-8 if rz_pct <= -5 else 0)
+
+    # 量能确认：放量涨 / 放量跌 / 缩量跌 / 缩量涨（近6根K线，量价配合验证趋势真实性）
+    volume_pts, volume_note = _volume_confirm(detail.get("kline", []))
+    capital_score += volume_pts
+
+    # 消息面：资讯 + 研报
     bull_n, bear_n, _ = _news_score(news)
-    news_pts = max(-12, min(12, bull_n * 4 - bear_n * 4))
-    score += news_pts
-
-    # 券商研报面权重：机构专业判断权威性更高，每条利好 +5 / 利空 -5，封顶 ±15
+    news_pts = max(-12, min(12, bull_n * 4 - bear_n * 4))      # 每条 +4 / -4 封顶 ±12
     bull_r, bear_r, _ = _reports_score(reports)
-    report_pts = max(-15, min(15, bull_r * 5 - bear_r * 5))
-    score += report_pts
+    report_pts = max(-15, min(15, bull_r * 5 - bear_r * 5))    # 每条 +5 / -5 封顶 ±15
+    news_score = news_pts + report_pts
+
+    # 三维权重（环境变量 / 设置页可配，默认 1.0）
+    w = get_weights()
+    w_tech = round(tech_score * w["tech"], 1)
+    w_capital = round(capital_score * w["capital"], 1)
+    w_news = round(news_score * w["news"], 1)
+    score = round(w_tech + w_capital + w_news, 1)
+
+    # ==================== 信号一致性 ====================
+    # 三面方向一致 -> 提高置信度；方向冲突 -> 降置信度并把激进操作降一档
+    def _dir(v: float) -> int:
+        return 1 if v > 0 else (-1 if v < 0 else 0)
+
+    dirs = [d for d in (_dir(tech_score), _dir(capital_score), _dir(news_score)) if d != 0]
+    signal_conflict = len(set(dirs)) > 1          # 三面中有正有负
+    signal_aligned = len(dirs) >= 2 and len(set(dirs)) == 1  # 至少两面同向且无反向
+    signal_note = ""
+    if signal_conflict:
+        signal_note = "技术面/资金面/消息面方向不一致，信号背离，建议观望确认后再操作"
+    elif signal_aligned:
+        signal_note = "技术面/资金面/消息面方向一致，信号共振增强"
 
     if score >= 28:
         action = ACTIONS[0]
@@ -309,6 +375,15 @@ def rule_based(
     else:
         action = ACTIONS[3]
         position = "清空持仓，不留底仓"
+
+    # 信号冲突时激进操作降一档（不做追高/杀跌的激进操作，等方向确认）
+    if signal_conflict:
+        if action == ACTIONS[0]:
+            action = ACTIONS[1]
+            position = "技术/资金/消息面背离，暂不加仓，维持 5-7 成等待方向确认"
+        elif action == ACTIONS[3]:
+            action = ACTIONS[2]
+            position = "技术/资金/消息面背离，暂不清仓，先降至 3 成以下观察"
 
     support = sr.get("support") or (round2(price * 0.95) if price else None)
     resistance = sr.get("resistance") or (round2(price * 1.05) if price else None)
@@ -340,6 +415,15 @@ def rule_based(
         opportunities.append(f"券商研报面偏暖：{bull_r} 条买入/增持评级（含 {bear_r} 条谨慎），机构认可度较高")
     elif bull_r == 1 and bear_r == 0:
         opportunities.append("券商研报面有 1 条买入/增持评级信号，机构关注度提升")
+    if volume_pts > 0 and volume_note:
+        opportunities.append(volume_note)
+    elif volume_pts < 0 and volume_note:
+        risks.append(volume_note)
+    if deviation_note:
+        if "超卖" in deviation_note:
+            opportunities.append(deviation_note + "，超跌反弹空间或已打开")
+        else:
+            risks.append(deviation_note + "，追高风险较大")
 
     if above <= 1:
         risks.append(f"股价仅站上 {above} 条均线，MA20={mval(20)} 压制明显（{mpos(20)}）")
@@ -421,9 +505,12 @@ def rule_based(
                 f"30日主力{yi(main_total)}，{margin.get('sentiment', '两融平稳')}，{sr_state}"
                 + (f"，资讯面 {bull_n} 利好/{bear_n} 利空（计 {news_pts:+d} 分）" if (news or []) else "")
                 + (f"，研报面 {bull_r} 利好/{bear_r} 利空（计 {report_pts:+d} 分）" if (reports or []) else "")
+                + (f"，{signal_note}" if signal_note else "")
                 + "。"
             ),
-            "confidence": max(45, min(92, 68 + int(abs(score) / 3))),
+            "confidence": max(
+                45, min(92, 68 + int(abs(score) / 3) + (8 if signal_aligned else (-12 if signal_conflict else 0)))
+            ),
             "position": position,
             "support": support,
             "resistance": resistance,
@@ -433,6 +520,16 @@ def rule_based(
             "take_profit": take_profit,
             "horizon": "5-10 个交易日",
             "score": score,
+            # 三维分面明细（已加权）与信号一致性（供前端展示与用户溯源）
+            "scores": {
+                "tech": w_tech,
+                "capital": w_capital,
+                "news": w_news,
+                "total": score,
+            },
+            "weights": w,
+            "signal": "conflict" if signal_conflict else ("aligned" if signal_aligned else "neutral"),
+            "signal_note": signal_note,
         },
     }
 

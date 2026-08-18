@@ -166,6 +166,100 @@ def test_reports_interpret() -> None:
     check("研报评级分布统计", dist == {"买入": 1, "增持": 2, "--": 1}, str(dist))
 
 
+# ------------------------------------------------------------------ 规则引擎精准化
+def _mk_detail(**kw) -> dict:
+    d = {
+        "quote": {"code": "600000", "name": "浦发银行", "price": 9.0, "prev_close": 9.1, "change_pct": -1.1},
+        "boards": [], "kline": [], "ma": [],
+        "ma_summary": {"arrangement": "交织", "above_count": 0, "above": [], "below": [], "series": {}},
+        "support_resistance": {}, "fund_flow": {"rows": [], "summary": {}},
+        "margin": {"rows": [], "summary": {}},
+        "status": {"tags": [], "trend": {}},
+    }
+    d.update(kw)
+    return d
+
+
+def _ma_item(w: int, v: float, slope: str = "上行") -> dict:
+    return {"window": w, "value": v, "slope": slope, "position": "站上", "deviation_pct": 0.0}
+
+
+def test_rule_precision() -> None:
+    # 1) 量能确认：放量上涨 +6 / 放量下跌 -6 / 缩量下跌 +3 / 缩量上涨 -3 / 数据不足 0
+    def bars(closes: list, vols: list) -> list:
+        return [{"date": f"2026-08-{i+1:02d}", "close": c, "volume": v} for i, (c, v) in enumerate(zip(closes, vols))]
+
+    vol_bull = analysis._volume_confirm(bars([9, 9.1, 9.2, 9.3, 9.4, 9.5], [100, 100, 100, 100, 100, 150]))
+    check("量能确认: 放量上涨 +6", vol_bull[0] == 6, str(vol_bull))
+    vol_bear = analysis._volume_confirm(bars([9.5, 9.4, 9.3, 9.2, 9.1, 9.0], [100, 100, 100, 100, 100, 150]))
+    check("量能确认: 放量下跌 -6", vol_bear[0] == -6, str(vol_bear))
+    vol_shrink_dn = analysis._volume_confirm(bars([9.5, 9.4, 9.3, 9.2, 9.1, 9.0], [100, 100, 100, 100, 100, 60]))
+    check("量能确认: 缩量下跌 +3", vol_shrink_dn[0] == 3, str(vol_shrink_dn))
+    vol_shrink_up = analysis._volume_confirm(bars([9, 9.1, 9.2, 9.3, 9.4, 9.5], [100, 100, 100, 100, 100, 60]))
+    check("量能确认: 缩量上涨 -3", vol_shrink_up[0] == -3, str(vol_shrink_up))
+    check("量能确认: 数据不足 0", analysis._volume_confirm([])[0] == 0)
+
+    # 2) 乖离修正：价格超 MA20 8% -> 超买风险进 risks + tech 扣分
+    detail_over = _mk_detail(
+        quote={"code": "600000", "name": "浦发银行", "price": 10.0, "prev_close": 9.9},
+        ma=[_ma_item(5, 9.2), _ma_item(10, 9.1), _ma_item(20, 9.0), _ma_item(60, 8.8)],
+    )
+    fb_over = analysis.rule_based(detail_over)
+    check("乖离修正: 超买进风险面", any("超买" in r for r in fb_over["risk"]["risks"]), str(fb_over["risk"]["risks"]))
+    detail_low = _mk_detail(
+        quote={"code": "600000", "name": "浦发银行", "price": 8.0, "prev_close": 8.1},
+        ma=[_ma_item(5, 8.8), _ma_item(10, 8.9), _ma_item(20, 9.0), _ma_item(60, 9.1)],
+    )
+    fb_low = analysis.rule_based(detail_low)
+    check("乖离修正: 超卖进机会面", any("超卖" in o for o in fb_low["risk"]["opportunities"]), str(fb_low["risk"]["opportunities"]))
+
+    # 3) 三维分面明细输出
+    check("分面分数输出", set(fb_over["advice"]["scores"].keys()) == {"tech", "capital", "news", "total"}, str(fb_over["advice"]["scores"]))
+
+    # 4) 信号冲突降档：技术/资金偏空 + 消息强多 -> signal=conflict、降档、置信度压低
+    detail_cf = _mk_detail(
+        ma=[_ma_item(5, 9.2, "持平"), _ma_item(10, 9.1, "持平"), _ma_item(20, 9.0, "持平"), _ma_item(60, 8.8, "持平")],
+        ma_summary={"arrangement": "交织", "above_count": 2, "above": ["MA5", "MA10"], "below": [], "series": {}},
+        fund_flow={"rows": [], "summary": {"main_total": -1e8, "main_last5": 0, "streak": 0, "streak_dir": ""}},
+        status={"tags": [], "trend": {"chg_20d": -3}},
+    )
+    news_cf = [{"title": "重大利好" + str(i), "date": f"2026-08-{i+1:02d}",
+                 "interpretation": {"sentiment": "利好", "impact": "高", "summary": "s"}} for i in range(2)]
+    reports_cf = [{"rating": "买入", "title": "业绩预增" + str(i), "date": f"2026-08-{i+1:02d}",
+                   "interpretation": {"sentiment": "利好", "impact": "高", "summary": "s"}} for i in range(2)]
+    fb_cf = analysis.rule_based(detail_cf, news_cf, reports_cf)
+    check("信号冲突标记", fb_cf["advice"]["signal"] == "conflict", str(fb_cf["advice"]["signal"]))
+    check("冲突时提示背离", "背离" in fb_cf["advice"]["reason"], fb_cf["advice"]["reason"])
+    check("冲突时不清仓", fb_cf["advice"]["action"] != "清仓离场", fb_cf["advice"]["action"])
+    check("冲突时置信度压低", fb_cf["advice"]["confidence"] < 60, str(fb_cf["advice"]["confidence"]))
+    # 5) 信号一致增强：技术/资金/消息同向 -> signal=aligned 且置信度上修
+    detail_al = _mk_detail(
+        ma=[_ma_item(5, 8.6, "上行"), _ma_item(10, 8.5, "上行"), _ma_item(20, 8.4, "上行"), _ma_item(60, 8.2, "上行")],
+        ma_summary={"arrangement": "多头排列", "above_count": 4, "above": ["MA5", "MA10", "MA20", "MA60"], "below": [], "series": {}},
+        fund_flow={"rows": [], "summary": {"main_total": 3e8, "main_last5": 1e8, "streak": 4, "streak_dir": "流入"}},
+    )
+    fb_al = analysis.rule_based(detail_al, news_cf, reports_cf)
+    check("信号一致标记", fb_al["advice"]["signal"] == "aligned", str(fb_al["advice"]["signal"]))
+    check("一致时提示共振", "共振" in fb_al["advice"]["reason"], fb_al["advice"]["reason"])
+    check("一致时置信度上修", fb_al["advice"]["confidence"] > 80, str(fb_al["advice"]["confidence"]))
+
+    # 6) 三维权重：clamp 越界 + 权重影响分面分
+    from backend import scorecfg
+    check("权重 clamp 下限", scorecfg._clamp(0.01, 1.0) == 0.2)
+    check("权重 clamp 上限", scorecfg._clamp(9.9, 1.0) == 3.0)
+    check("权重 clamp 正常值", scorecfg._clamp(1.5, 1.0) == 1.5)
+    # 默认权重 1.0 时 score 与分面和一致
+    detail_w = _mk_detail(
+        ma=[_ma_item(5, 8.6, "上行"), _ma_item(10, 8.5, "上行"), _ma_item(20, 8.4, "上行"), _ma_item(60, 8.2, "上行")],
+        ma_summary={"arrangement": "多头排列", "above_count": 4, "above": ["MA5", "MA10", "MA20", "MA60"], "below": [], "series": {}},
+        fund_flow={"rows": [], "summary": {"main_total": 3e8, "main_last5": 1e8, "streak": 4, "streak_dir": "流入"}},
+    )
+    fb_w = analysis.rule_based(detail_w)
+    s = fb_w["advice"]["scores"]
+    check("默认权重下总分=分面和", abs(s["tech"] + s["capital"] + s["news"] - s["total"]) < 0.05, str(s))
+    check("权重字段输出", fb_w["advice"]["weights"] == {"tech": 1.0, "capital": 1.0, "news": 1.0}, str(fb_w["advice"]["weights"]))
+
+
 # ------------------------------------------------------------------ K 线滞后判定
 def test_kline_stale() -> None:
     from datetime import datetime
@@ -260,6 +354,7 @@ def main() -> int:
     test_model_filter()
     test_news_interpret()
     test_reports_interpret()
+    test_rule_precision()
     test_kline_stale()
     test_cache()
     test_ai_lock()

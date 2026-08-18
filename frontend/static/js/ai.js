@@ -187,6 +187,29 @@
       levels.appendChild(node);
     });
     verdict.appendChild(levels);
+
+    // ---- 三维分面评分（技术面 / 资金面 / 消息面 + 信号一致性）
+    const scores = adv.scores;
+    if (scores && scores.tech != null) {
+      const srow = U.el('div', 'ai-scores');
+      const mk = function (label, v) {
+        const node = U.el('span', 'ai-score ' + (v > 0 ? 'up' : v < 0 ? 'down' : 'flat'));
+        node.appendChild(U.el('b', '', (v > 0 ? '+' : '') + v));
+        node.appendChild(document.createTextNode(' ' + label));
+        return node;
+      };
+      srow.appendChild(mk('技术面', scores.tech));
+      srow.appendChild(mk('资金面', scores.capital));
+      srow.appendChild(mk('消息面', scores.news));
+      const sig = adv.signal;
+      if (sig) {
+        const sigNode = U.el('span', 'ai-signal ' + sig,
+          sig === 'conflict' ? '⚠ 信号背离' : sig === 'aligned' ? '信号共振' : '信号中性');
+        sigNode.title = adv.signal_note || '';
+        srow.appendChild(sigNode);
+      }
+      verdict.appendChild(srow);
+    }
     host.appendChild(verdict);
 
     // ---- 券商研报面（情绪统计 + 最近关键研报）
@@ -358,6 +381,13 @@
       + ' / 介入 ' + (adv.entry_zone || '--') + ' / 离场 ' + (adv.exit_zone || '--'));
     lines.push('  止损 ' + U.price(adv.stop_loss) + ' / 止盈 ' + U.price(adv.take_profit)
       + ' / 置信度 ' + (adv.confidence != null ? adv.confidence + '%' : '--'));
+    const sc = adv.scores;
+    if (sc && sc.tech != null) {
+      lines.push('  三面评分：技术 ' + (sc.tech > 0 ? '+' : '') + sc.tech
+        + ' / 资金 ' + (sc.capital > 0 ? '+' : '') + sc.capital
+        + ' / 消息 ' + (sc.news > 0 ? '+' : '') + sc.news
+        + (adv.signal === 'conflict' ? '（⚠ 信号背离，建议观望确认）' : ''));
+    }
     lines.push('');
 
     const t = a.trend || {};

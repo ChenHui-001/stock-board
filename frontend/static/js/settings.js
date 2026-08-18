@@ -2,8 +2,57 @@
 (function (global) {
   'use strict';
 
-  const state = { vendors: [], config: null, testing: false, models: [] };
+  const state = { vendors: [], config: null, testing: false, models: [], weights: null };
   let menuActive = -1;   // 菜单当前高亮项索引
+
+  function weightInputs() {
+    return {
+      tech: document.getElementById('w-tech'),
+      capital: document.getElementById('w-capital'),
+      news: document.getElementById('w-news')
+    };
+  }
+  function weightResult() { return document.getElementById('w-result'); }
+
+  function fillWeights(w) {
+    const inputs = weightInputs();
+    inputs.tech.value = w.tech;
+    inputs.capital.value = w.capital;
+    inputs.news.value = w.news;
+    weightResult().textContent = w.source === 'env' ? '（环境变量）' : '（界面配置）';
+  }
+
+  async function saveWeights() {
+    const inputs = weightInputs();
+    try {
+      const res = await API.scoreWeightsSave({
+        tech: inputs.tech.value,
+        capital: inputs.capital.value,
+        news: inputs.news.value
+      });
+      state.weights = res;
+      fillWeights(res);
+      weightResult().textContent = '已保存 ✓（AI 缓存已失效）';
+      weightResult().className = 'cfg-test-result ok';
+      U.toast('评分权重已保存，AI 分析缓存已刷新', 'ok');
+    } catch (err) {
+      U.toast('保存权重失败：' + err.message, 'err');
+    }
+  }
+
+  async function resetWeights() {
+    if (!confirm('恢复评分权重为默认（环境变量）？')) return;
+    try {
+      const res = await API.scoreWeightsReset();
+      state.weights = res;
+      fillWeights(res);
+      weightResult().textContent = '已恢复默认 ✓';
+      weightResult().className = 'cfg-test-result ok';
+      U.toast('评分权重已恢复默认', 'ok');
+    } catch (err) {
+      U.toast('恢复权重失败：' + err.message, 'err');
+    }
+  }
 
   function root() { return document.getElementById('modal-settings'); }
   function vendorSel() { return document.getElementById('cfg-vendor'); }
@@ -71,6 +120,11 @@
       testResult().textContent = '';
       root().hidden = false;
       document.body.style.overflow = 'hidden';
+      try {
+        const w = await API.scoreWeights();
+        state.weights = w;
+        fillWeights(w);
+      } catch (e) { /* 权重加载失败不阻塞设置弹窗 */ }
     } catch (err) {
       U.toast('读取配置失败：' + err.message, 'err');
     }
@@ -226,6 +280,8 @@
     document.getElementById('cfg-test').addEventListener('click', testConnection);
     document.getElementById('cfg-save').addEventListener('click', save);
     document.getElementById('cfg-reset').addEventListener('click', reset);
+    document.getElementById('w-save').addEventListener('click', saveWeights);
+    document.getElementById('w-reset').addEventListener('click', resetWeights);
 
     // 输入框：聚焦/输入打开菜单，键盘上下选择、回车确认
     model().addEventListener('focus', openMenu);

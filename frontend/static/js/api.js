@@ -95,6 +95,15 @@
       if (days != null) q.push('days=' + days);
       return request('/api/reports/' + encodeURIComponent(code) + (q.length ? '?' + q.join('&') : ''));
     },
+    scoreWeights: function () {
+      return request('/api/score/weights');
+    },
+    scoreWeightsSave: function (w) {
+      return request('/api/score/weights', { method: 'POST', body: w });
+    },
+    scoreWeightsReset: function () {
+      return request('/api/score/weights/reset', { method: 'POST' });
+    },
     llmConfig: function () {
       return request('/api/llm/config');
     },
