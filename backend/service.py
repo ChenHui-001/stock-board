@@ -98,6 +98,47 @@ async def get_quote(code: str, market: str | None = None, force: bool = False) -
 
 # ------------------------------------------------------------------ 自选股看板
 
+def watch_monitor(data: dict[str, Any]) -> dict[str, str]:
+    """根据实时行情生成首页关键监测提示。
+
+    只在信号足够明确时给出加减仓提示，其余情况保持观察，避免用单一涨跌幅
+    把普通波动误报成操作信号。
+    """
+    status = data.get("status") or "unknown"
+    if status != "normal":
+        return {
+            "action": "继续观察",
+            "tone": "warn",
+            "reason": data.get("status_text") or "行情状态异常，暂不判断",
+        }
+
+    change = data.get("change_pct")
+    volume_ratio = data.get("volume_ratio")
+    if not isinstance(change, (int, float)):
+        return {"action": "继续观察", "tone": "flat", "reason": "涨跌幅暂无数据"}
+
+    if change <= -3:
+        return {
+            "action": "应减仓",
+            "tone": "down",
+            "reason": f"跌幅 {change:+.2f}%，短线风险升高",
+        }
+    if change >= 3 and isinstance(volume_ratio, (int, float)) and volume_ratio >= 1.5:
+        return {
+            "action": "可加仓",
+            "tone": "up",
+            "reason": f"涨幅 {change:+.2f}% 且量比 {volume_ratio:.2f}，动能较强",
+        }
+    volume_text = (
+        f"，量比 {volume_ratio:.2f}" if isinstance(volume_ratio, (int, float)) else ""
+    )
+    return {
+        "action": "继续观察",
+        "tone": "flat",
+        "reason": f"涨跌幅 {change:+.2f}%{volume_text}，未形成明确信号",
+    }
+
+
 async def watchlist_board(force: bool = False) -> dict[str, Any]:
     rows = storage.list_watchlist()
     if not rows:
@@ -146,6 +187,7 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
         if board and board != row.get("board"):
             storage.update_meta(row["code"], None, board)
         data["board"] = board
+        data["monitor"] = watch_monitor(data)
         data["sort_no"] = row["sort_no"]
         items.append(data)
 
@@ -205,7 +247,7 @@ def session_info() -> dict[str, Any]:
         "state": state,
         "trading": trading,
         "auto_refresh": trading,
-        "interval_ms": 3000 if trading else 0,
+        "interval_ms": 5000 if trading else 0,
         "label": {
             "open": "盘中交易",
             "lunch_break": "午间休市",

@@ -146,6 +146,7 @@
     row.appendChild(withAlign(U.el('div', 'vr-cell', '量比')));
     row.appendChild(withAlign(U.el('div', 'turnover-cell', '换手')));
     row.appendChild(withAlign(U.el('div', '', '涨跌幅')));
+    row.appendChild(U.el('div', 'monitor-cell', '关键监测'));
     row.appendChild(withAlign(U.el('div', '', '操作')));
     return row;
   }
@@ -153,6 +154,15 @@
   function withAlign(node) {
     node.style.textAlign = 'right';
     return node;
+  }
+
+  function renderMonitorCell(item) {
+    const monitor = item.monitor || {};
+    const cell = U.el('div', 'monitor-cell');
+    const tag = U.el('span', 'monitor-tag ' + (monitor.tone || 'flat'), monitor.action || '继续观察');
+    tag.title = monitor.reason || '暂无监测说明';
+    cell.appendChild(tag);
+    return cell;
   }
 
   function renderRow(item) {
@@ -222,6 +232,9 @@
 
     // 涨跌幅
     row.appendChild(U.el('div', 'pct-cell ' + U.tone(item.change_pct), U.pct(item.change_pct)));
+
+    // 关键监测
+    row.appendChild(renderMonitorCell(item));
 
     // 操作
     const actions = U.el('div', 'row-actions');
@@ -361,6 +374,7 @@
       const prevCell = row.querySelector('.prev-cell');
       const vrCell = row.querySelector('.vr-cell');
       const turnoverCell = row.querySelector('.turnover-cell');
+      const monitorCell = row.querySelector('.monitor-cell');
       if (!priceCell) return;
 
       const prev = state.lastPrices[item.code];
@@ -381,6 +395,10 @@
       if (prevCell) prevCell.textContent = U.price(item.prev_close);
       if (vrCell) vrCell.textContent = U.ratio(item.volume_ratio);
       if (turnoverCell) turnoverCell.textContent = U.turnover(item.turnover);
+      if (monitorCell) {
+        const next = renderMonitorCell(item);
+        monitorCell.replaceWith(next);
+      }
     });
   }
 

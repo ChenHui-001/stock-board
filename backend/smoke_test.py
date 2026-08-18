@@ -18,7 +18,7 @@ os.environ["DATA_DIR"] = _tmp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend import analysis, api, cache, llm, llmcfg, news, reports, storage  # noqa: E402
+from backend import analysis, api, cache, llm, llmcfg, news, reports, service, storage  # noqa: E402
 from backend.indicators import build_ma, summarize_flow, support_resistance  # noqa: E402
 from backend.providers import registry  # noqa: E402
 from backend.providers.base import Bar  # noqa: E402
@@ -558,6 +558,24 @@ def test_registry() -> None:
     check("资讯源装配（东财+新浪兜底）", news_caps == ["eastmoney", "sina"], str(news_caps))
 
 
+def test_watch_monitor() -> None:
+    add = service.watch_monitor({"status": "normal", "change_pct": 3.2, "volume_ratio": 1.8})
+    reduce = service.watch_monitor({"status": "normal", "change_pct": -3.0, "volume_ratio": 1.0})
+    observe = service.watch_monitor({"status": "normal", "change_pct": 1.2, "volume_ratio": 1.0})
+    delayed = service.watch_monitor({"status": "delayed", "status_text": "数据更新延迟"})
+    check("关键监测: 放量上涨提示可加仓", add["action"] == "可加仓" and add["tone"] == "up", str(add))
+    check("关键监测: 下跌提示应减仓", reduce["action"] == "应减仓" and reduce["tone"] == "down", str(reduce))
+    check("关键监测: 普通波动继续观察", observe["action"] == "继续观察", str(observe))
+    check("关键监测: 异常行情不误报加减仓", delayed["action"] == "继续观察" and delayed["tone"] == "warn", str(delayed))
+    old_trading, old_session = service.is_trading_now, service.session_state
+    try:
+        service.is_trading_now = lambda: True
+        service.session_state = lambda: "open"
+        check("首页刷新周期: 5秒", service.session_info()["interval_ms"] == 5000)
+    finally:
+        service.is_trading_now, service.session_state = old_trading, old_session
+
+
 def test_items_fingerprint() -> None:
     """解读缓存指纹：条目内容一变指纹即变，防止新标题配旧解读的缓存错位。"""
     from backend.utils import items_fingerprint
@@ -754,6 +772,7 @@ def main() -> int:
     test_ai_cache_freshness()
     test_indicators()
     test_registry()
+    test_watch_monitor()
     test_items_fingerprint()
     test_backtest_selftest()
     test_check_sources_backtest_struct()
