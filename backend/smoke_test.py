@@ -409,6 +409,24 @@ def test_registry() -> None:
     check("资讯源装配（东财+新浪兜底）", news_caps == ["eastmoney", "sina"], str(news_caps))
 
 
+# ------------------------------------------------------------------ 盘口回测脚本自测（不触网，合成日线）
+def test_backtest_selftest() -> None:
+    import subprocess
+    import sys as _sys
+
+    root = Path(__file__).resolve().parent.parent
+    try:
+        proc = subprocess.run(
+            [_sys.executable, str(root / "backtest_intraday.py"), "--selftest"],
+            capture_output=True, text=True, timeout=30,
+        )
+        detail = (proc.stdout or "")[-200:] + (proc.stderr or "")[-200:]
+    except subprocess.TimeoutExpired as exc:
+        check("盘口回测脚本自测", False, f"超时: {exc}")
+        return
+    check("盘口回测脚本自测", proc.returncode == 0, detail)
+
+
 def main() -> int:
     test_json_repair()
     test_fingerprint()
@@ -421,6 +439,7 @@ def main() -> int:
     test_ai_lock()
     test_indicators()
     test_registry()
+    test_backtest_selftest()
     print()
     if FAILED:
         print(f"失败 {len(FAILED)} 项 / 共 {TOTAL} 项检查: {FAILED}")

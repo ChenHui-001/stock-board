@@ -286,16 +286,20 @@ def _intraday_score(q: dict[str, Any]) -> tuple[int, str]:
     bits: list[str] = []
 
     # 盘中位置 × 涨跌方向：高位强势/冲高回落、低位弱势/空头衰竭
+    # 权重经离线回测校准（12 只×133 日≈1596 样本，日线近似收盘时点）：
+    # 看空信号可靠（低位下跌命中率 53.8%、高于基线 5pct+），看多信号偏弱
+    # （高位强势 43.5%、振幅收敛 42.2% 均低于基线 46%，冲高后均值回归），
+    # 故看多加分收敛、看空减分加强。
     if pos >= 75:
         if chg > 0:
-            score += 4
-            bits.append(f"现价运行至当日高位（{pos:.0f}%）且上涨，多头强势")
+            score += 2
+            bits.append(f"现价运行至当日高位（{pos:.0f}%）且上涨，多头强势（注意冲高后回归压力）")
         else:
             score -= 4
             bits.append(f"现价自当日高位回落（{pos:.0f}%）转跌，短线抛压显现")
     elif pos <= 25:
         if chg < 0:
-            score -= 3
+            score -= 4
             bits.append(f"现价贴近当日低位（{pos:.0f}%）且下跌，弱势明显")
         else:
             score += 2
@@ -318,21 +322,20 @@ def _intraday_score(q: dict[str, Any]) -> tuple[int, str]:
                 score += 1
                 bits.append(f"量比 {vr:.2f} 缩量下跌，抛压有所减轻")
 
-    # 振幅：剧烈波动是风险 / 收敛趋稳偏多
+    # 振幅：剧烈波动是风险；收敛不进分（回测显示振幅收敛次日上涨率 42.2% 反向，撤销看多）
     if amp >= 8:
         score -= 2
         bits.append(f"当日振幅 {amp:.1f}%，波动剧烈")
     elif amp <= 1.5:
-        score += 1
         bits.append(f"当日振幅 {amp:.1f}%，走势收敛")
 
-    # 换手：极高警惕分歧出货 / 极低交投清淡
+    # 换手：极高警惕分歧出货；极低交投清淡（回测命中率 54.3% 有效，减分加强）
     if turnover is not None:
         if turnover >= 10:
             score += (-2 if chg < 0 else 1)
             bits.append(f"换手率 {turnover:.1f}% 偏高，{'分歧出货风险' if chg < 0 else '交投活跃'}")
         elif turnover <= 0.8:
-            score -= 1
+            score -= 2
             bits.append(f"换手率 {turnover:.1f}% 过低，交投清淡")
 
     return max(-8, min(8, score)), "；".join(bits)

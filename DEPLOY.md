@@ -100,7 +100,7 @@ HOST_PORT=8898 LLM_API_KEY=sk-xxx docker compose up -d --build
 | `LLM_JSON_MODE` | `true` | 不兼容 `response_format` 的端点设 `false` |
 | `LLM_TIMEOUT` / `LLM_MAX_TOKENS` / `LLM_TEMPERATURE` | `45` / `4000` / `0.25` | 请求超时/最大 token/温度 |
 | `LLM_THINKING_MAX_TOKENS` | `8192` | 思考类模型（deepseek-reasoner 等）输出配额；思考过程占用配额导致正文为空时自动放大到此值重试 |
-| `PROVIDER_ORDER` | `eastmoney,tencent,sina,ths,akshare` | 行情数据源故障转移顺序 |
+| `PROVIDER_ORDER` | `eastmoney,ths,tencent,sina,akshare` | 行情数据源故障转移顺序（同花顺 K 线为网页数据文件，东财不可用时优先回退） |
 | `ENABLE_AKSHARE` | `true` | 启用 AkShare 兜底（需镜像以 `WITH_AKSHARE=true` 构建） |
 | `HTTP_TIMEOUT` / `HTTP_RETRY` | `6` / `2` | 数据源请求超时（秒）/ 重试次数 |
 | `QUOTE_TTL_OPEN` / `QUOTE_TTL_CLOSED` | `2.5` / `60` | 行情缓存（盘中秒 / 盘后秒） |
@@ -141,6 +141,17 @@ python backend/check_sources.py --json          # JSON 输出（脚本/监控用
 
 退出码：`0`=至少一个行情源可用，`1`=全部行情源不可用，`2`=参数错误。
 每次输出会标注各源 K 线/资金流最新日期、行情日期是否滞后（已判延迟的数据会在页面显示「数据更新延迟」），以及被限流的主机与冷却剩余时间。
+
+**盘口分项离线回测**（验证 AI 分析里盘中位置/量比/振幅/换手信号对次日涨跌的预测能力，输出命中率与权重校准建议）：
+
+```bash
+python backtest_intraday.py                          # 默认 12 只样本股 × 250 根日线
+python backtest_intraday.py --codes 600000,601179 --days 200   # 自定义股票池/天数
+python backtest_intraday.py --json report.json       # 额外输出机器可读报告（脚本/监控用）
+python backtest_intraday.py --selftest               # 离线自测（不触网，CI 冒烟已覆盖）
+```
+
+报告含：总分分桶 vs 次日表现（看评分方向单调性）、各信号（高位强势/冲高回落/放量上攻/交投清淡等）的样本数/命中率/校准建议。用日线近似收盘时点，盘中实时信号强弱可能更强；样本 <50 的信号结论仅作参考。
 
 ---
 
