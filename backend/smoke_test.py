@@ -571,6 +571,9 @@ def test_items_fingerprint() -> None:
           f"{items_fingerprint(a)} vs {items_fingerprint(b)}")
     check("指纹: 标题变化指纹变化",
           items_fingerprint([{"id": "1", "title": "A"}]) != items_fingerprint([{"id": "1", "title": "B"}]))
+    collision_a = [{"id": "1", "date": "2026:08", "title": "18"}]
+    collision_b = [{"id": "1", "date": "2026", "title": "08:18"}]
+    check("指纹: 字段分隔符不会碰撞", items_fingerprint(collision_a) != items_fingerprint(collision_b))
     check("指纹: 空列表稳定不报错", isinstance(items_fingerprint([]), str) and len(items_fingerprint([])) == 12)
 
 

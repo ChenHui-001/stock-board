@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import date, datetime, time, timedelta
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
@@ -143,9 +144,11 @@ def items_fingerprint(
     原始数据刷新后新条目会命中旧解读（错位）。把条目指纹并入缓存 key 后，
     条目一变 key 就变，旧解读自然失效、按新条目重新解读。
     """
-    raw = "|".join(
-        ":".join(str(item.get(f, "")) for f in fields) for item in items
-    )
+    payload = [
+        {field: str(item.get(field, "")) for field in fields}
+        for item in items
+    ]
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
 
