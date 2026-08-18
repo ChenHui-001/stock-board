@@ -88,17 +88,29 @@ def build_payload(
         """元 -> 亿元，便于模型理解量级。"""
         return None if v is None else round(float(v) / 1e8, 4)
 
+    # 当日实时盘口：振幅 / 盘中位置 / 今开跳空
+    price, prev = q.get("price"), q.get("prev_close")
+    hi, lo, opn = q.get("high"), q.get("low"), q.get("open")
+    amp = round((hi - lo) / prev * 100, 2) if (hi and lo and prev) else None
+    intraday_pos = round((price - lo) / (hi - lo) * 100, 1) if (price and hi and lo and hi > lo) else None
+    gap = round((opn - prev) / prev * 100, 2) if (opn and prev) else None
+
     return {
         "基础数据": {
             "股票名称": q.get("name"),
             "股票代码": q.get("code"),
             "所属板块": detail.get("boards") or ([q.get("board")] if q.get("board") else []),
-            "现价": q.get("price"),
-            "昨收": q.get("prev_close"),
+            "现价": price,
+            "昨收": prev,
+            "涨跌额": q.get("change"),
             "涨跌幅%": q.get("change_pct"),
-            "今开": q.get("open"),
-            "最高": q.get("high"),
-            "最低": q.get("low"),
+            "今开": opn,
+            "最高": hi,
+            "最低": lo,
+            "今开跳空%": gap,
+            "当日振幅%": amp,
+            "盘中位置%": intraday_pos,  # 现价处于当日高低区间的相对位置 0-100
+            "量比": q.get("volume_ratio"),
             "成交量_万手": round((q.get("volume") or 0) / 1e6, 2),
             "成交额_亿元": yi(q.get("amount")),
             "换手率%": q.get("turnover"),
@@ -269,6 +281,17 @@ def rule_based(
     sr = detail.get("support_resistance", {})
     trend = detail.get("status", {}).get("trend", {})
     price = q.get("price") or 0.0
+
+    # 当日实时盘口：振幅 / 盘中位置 / 今开跳空 / 量比 / 换手
+    prev_close = q.get("prev_close")
+    hi, lo, opn = q.get("high"), q.get("low"), q.get("open")
+    amp = (hi - lo) / prev_close * 100 if (hi and lo and prev_close) else None
+    intraday_pos = (price - lo) / (hi - lo) * 100 if (price and hi and lo and hi > lo) else None
+    gap = (opn - prev_close) / prev_close * 100 if (opn and prev_close) else None
+    vol_ratio = q.get("volume_ratio")
+    turnover = q.get("turnover")
+    change = q.get("change")
+    change_pct = q.get("change_pct")
 
     def yi(v: Any) -> str:
         if v is None:
@@ -453,9 +476,41 @@ def rule_based(
     if not risks:
         risks.append(f"上方 {resistance} 为 {sr.get('resistance_from') or '近期高点'}，突破前存在震荡消化需求")
 
+    # 当日盘中实时描述（供前端「当日盘中」行展示）
+    intraday_text = (
+        f"现价 {price:.2f}"
+        + (f"（{change:+.2f} / {change_pct:+.2f}%）" if change is not None and change_pct is not None else "")
+        + (f"，今开 {opn:.2f}（" + ("高开" if (gap or 0) > 0 else "低开" if (gap or 0) < 0 else "平开")
+           + f"{abs(gap or 0):.2f}%）" if opn else "")
+        + (f"，最高 {hi:.2f} / 最低 {lo:.2f}" if (hi and lo) else "")
+        + (f"，当日振幅 {amp:.2f}%" if amp is not None else "")
+        + (f"，现价处于当日区间 {intraday_pos:.0f}% 位置" if intraday_pos is not None else "")
+        + (f"，量比 {vol_ratio:.2f}" if vol_ratio is not None else "")
+        + (f"，换手率 {turnover:.2f}%" if turnover is not None else "")
+    )
+    intraday_activity = (
+        f"当日成交额 {yi(q.get('amount'))}"
+        + (f"，量比 {vol_ratio:.2f}" if vol_ratio is not None else "")
+        + (f"，换手率 {turnover:.2f}%" if turnover is not None else "")
+        + ("，放量活跃" if (vol_ratio or 0) >= 2 else "，交投清淡" if (vol_ratio or 0) <= 0.6 else "")
+    )
+
+    # 当日盘口提示（机会/风险）
+    if intraday_pos is not None and intraday_pos >= 80:
+        risks.append(f"现价已运行至当日区间高位（{intraday_pos:.0f}%），短线追高需谨慎")
+    if intraday_pos is not None and intraday_pos <= 20:
+        opportunities.append(f"现价接近当日区间低位（{intraday_pos:.0f}%），日内存在反弹修复空间")
+    if amp is not None and amp >= 7:
+        risks.append(f"当日振幅 {amp:.2f}%，波动剧烈，注意仓位控制")
+    if (vol_ratio or 0) >= 2 and change_pct is not None and change_pct > 0:
+        opportunities.append(f"量比 {vol_ratio:.2f} 放量配合上行，短线动能较强")
+    if (vol_ratio or 0) >= 2 and change_pct is not None and change_pct < 0:
+        risks.append(f"量比 {vol_ratio:.2f} 放量下挫，抛压集中释放")
+
     return {
         "trend": {
             "summary": f"{trend.get('label', '震荡整理')}，{arrangement or '均线交织'}",
+            "intraday": intraday_text,
             "short": (
                 f"近5日涨跌 {trend.get('chg_5d')}%，MA5={mval(5)}（{(ma.get(5) or {}).get('slope', '--')}）、"
                 f"MA10={mval(10)}，股价{mpos(5)} MA5、{mpos(10)} MA10，短期判定为{trend.get('short', '震荡')}。"
@@ -474,6 +529,7 @@ def rule_based(
         },
         "capital": {
             "summary": f"{flow.get('state', '资金观望')}，{margin.get('sentiment', '两融情绪平稳')}",
+            "intraday": intraday_activity,
             "main_force": (
                 f"近30日主力净额合计 {yi(main_total)}（流入 {flow.get('inflow_days', 0)} 天 / "
                 f"流出 {flow.get('outflow_days', 0)} 天），近5日 {yi(main_last5)}，"

@@ -133,7 +133,7 @@
       '<div class="ai-loading">'
       + '<div class="ai-spinner"></div>'
       + '<div class="ai-loading-text">AI 智能分析中，请稍候</div>'
-      + '<div class="ai-loading-sub">正在读取均线形态、30 日资金流向与两融数据…</div>'
+      + '<div class="ai-loading-sub">正在读取当日实时盘口、均线形态、30 日资金流向与两融数据…</div>'
       + '</div>';
   }
 
@@ -212,17 +212,14 @@
     }
     host.appendChild(verdict);
 
-    // ---- 券商研报面（情绪统计 + 最近关键研报）
-    host.appendChild(reportSection(report));
-
-    // ---- 行情趋势分析
+    // ---- 行情趋势分析（含当日盘中实时盘口）
     host.appendChild(textSection('一、行情趋势分析', a.trend, [
-      ['短期', 'short'], ['中期', 'mid'], ['中长期', 'long'], ['技术形态', 'pattern']
+      ['当日盘中', 'intraday'], ['短期', 'short'], ['中期', 'mid'], ['中长期', 'long'], ['技术形态', 'pattern']
     ]));
 
-    // ---- 资金与两融情绪
+    // ---- 资金与两融情绪（含当日资金活跃）
     host.appendChild(textSection('二、资金与两融情绪分析', a.capital, [
-      ['主力资金', 'main_force'], ['散户情绪', 'retail'], ['两融多空', 'margin']
+      ['当日资金活跃', 'intraday'], ['主力资金', 'main_force'], ['散户情绪', 'retail'], ['两融多空', 'margin']
     ]));
 
     // ---- 风险与机会
@@ -260,6 +257,9 @@
       st.appendChild(tags);
       host.appendChild(st);
     }
+
+    // ---- 券商研报面（情绪统计 + 最近关键研报，放最后）
+    host.appendChild(reportSection(report));
 
     // ---- 元信息
     const meta = report.meta || {};
@@ -392,7 +392,7 @@
 
     const t = a.trend || {};
     lines.push('■ 行情趋势分析：' + (t.summary || ''));
-    ['short:短期', 'mid:中期', 'long:中长期', 'pattern:技术形态'].forEach(function (pair) {
+    ['intraday:当日盘中', 'short:短期', 'mid:中期', 'long:中长期', 'pattern:技术形态'].forEach(function (pair) {
       const kv = pair.split(':');
       if (t[kv[0]]) lines.push('  ' + kv[1] + '：' + t[kv[0]]);
     });
@@ -400,7 +400,7 @@
 
     const c = a.capital || {};
     lines.push('■ 资金与两融情绪：' + (c.summary || ''));
-    ['main_force:主力资金', 'retail:散户情绪', 'margin:两融多空'].forEach(function (pair) {
+    ['intraday:当日资金活跃', 'main_force:主力资金', 'retail:散户情绪', 'margin:两融多空'].forEach(function (pair) {
       const kv = pair.split(':');
       if (c[kv[0]]) lines.push('  ' + kv[1] + '：' + c[kv[0]]);
     });

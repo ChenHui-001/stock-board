@@ -243,6 +243,27 @@ def test_rule_precision() -> None:
     check("一致时提示共振", "共振" in fb_al["advice"]["reason"], fb_al["advice"]["reason"])
     check("一致时置信度上修", fb_al["advice"]["confidence"] > 80, str(fb_al["advice"]["confidence"]))
 
+    # 5.5) 当日实时盘口数据：趋势/资金段含 intraday，盘口提示进机会/风险
+    detail_intra = _mk_detail(
+        quote={
+            "code": "600000", "name": "浦发银行", "price": 9.55, "prev_close": 9.1,
+            "change": 0.45, "change_pct": 4.95, "open": 9.2, "high": 9.6, "low": 9.0,
+            "volume": 5e7, "amount": 4.8e8, "turnover": 3.2, "volume_ratio": 2.5,
+        },
+    )
+    fb_intra = analysis.rule_based(detail_intra)
+    check("当日盘中数据进趋势段", "当日振幅" in fb_intra["trend"].get("intraday", ""), fb_intra["trend"].get("intraday", ""))
+    check("盘中位置/量比/换手", "区间" in fb_intra["trend"]["intraday"] and "量比" in fb_intra["trend"]["intraday"]
+          and "换手率" in fb_intra["trend"]["intraday"], fb_intra["trend"]["intraday"])
+    check("当日资金活跃进资金段", "当日成交额" in fb_intra["capital"].get("intraday", ""), fb_intra["capital"].get("intraday", ""))
+    check("放量上攻提示进机会面", any("量比" in o and "放量" in o for o in fb_intra["risk"]["opportunities"]),
+          str(fb_intra["risk"]["opportunities"]))
+    check("高位追高提示进风险面", any("高位" in r for r in fb_intra["risk"]["risks"]), str(fb_intra["risk"]["risks"]))
+    # 数据缺失时 intraday 字段仍存在且不报错
+    fb_no_intra = analysis.rule_based(_mk_detail())
+    check("无盘口数据时字段兜底", "intraday" in fb_no_intra["trend"] and "intraday" in fb_no_intra["capital"],
+          str(fb_no_intra["trend"].get("intraday")))
+
     # 6) 三维权重：clamp 越界 + 权重影响分面分
     from backend import scorecfg
     check("权重 clamp 下限", scorecfg._clamp(0.01, 1.0) == 0.2)
