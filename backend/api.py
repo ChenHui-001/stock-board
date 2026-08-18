@@ -118,14 +118,18 @@ _health_lock = asyncio.Lock()
 
 
 @router.get("/health/check")
-async def health_check() -> dict[str, Any]:
+async def health_check(with_backtest: int = 1) -> dict[str, Any]:
+    """数据源健康自检。with_backtest=0 时跳过盘口回测段（更快）。"""
     from . import check_sources
 
     if _health_lock.locked():
         raise HTTPException(status_code=409, detail="已有自检正在进行，请稍候")
     async with _health_lock:
         try:
-            return await asyncio.wait_for(check_sources.run_diagnostics(None), timeout=90)
+            return await asyncio.wait_for(
+                check_sources.run_diagnostics(None, with_backtest=bool(with_backtest)),
+                timeout=90,
+            )
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="自检超时（>90s），请稍后重试")
         except Exception as exc:  # noqa: BLE001

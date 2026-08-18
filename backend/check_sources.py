@@ -307,7 +307,10 @@ def _status_line(ok: bool, detail: str) -> str:
     return f"  {'✅' if ok else '❌'} {detail}"
 
 
-async def run_diagnostics(code: str | None) -> dict[str, Any]:
+async def run_diagnostics(code: str | None, with_backtest: bool = True) -> dict[str, Any]:
+    """数据源健康自检。with_backtest=False 时跳过盘口回测段（更快、省数据源配额），
+    回测可单独用 backtest_intraday.py 或前端「仅回测」执行。
+    """
     reg = registry()
     sample: list[tuple[str, str | None]] = [(code, None)] if code else SAMPLE  # type: ignore[assignment]
     ts = now()
@@ -390,8 +393,12 @@ async def run_diagnostics(code: str | None) -> dict[str, Any]:
     if not quote_ok:
         report["issues"].append("全部行情源不可用，看板/详情将无法获取行情")
 
-    # 盘口信号近期命中率（样本股快速回测；失败不阻塞自检）
-    report["backtest"] = await check_backtest(sample)
+    # 盘口信号近期命中率（样本股快速回测；失败不阻塞自检）。
+    # 可分离：with_backtest=False 时跳过（面板「仅数据源」/ CLI --no-backtest）
+    if with_backtest:
+        report["backtest"] = await check_backtest(sample)
+    else:
+        report["backtest"] = {"ok": False, "skipped": True, "error": "已跳过回测（仅数据源自检）"}
 
     return report
 
@@ -483,7 +490,11 @@ def render_text(report: dict[str, Any]) -> str:
               f"{s['hit_rate']:>8.1f}%{s['up_rate']:>9.1f}%{s['avg_ret']:>+8.2f}%  {s['advice']}")
         a("提示: 命中=看多信号次日涨/看空信号次日跌；日线近似收盘时点，样本<50 仅参考。")
     else:
-        a(_status_line(False, f"盘口回测: {(bt or {}).get('error', '未执行')}"))
+        err = (bt or {}).get("error", "未执行")
+        if (bt or {}).get("degraded"):
+            a(_status_line(False, f"盘口回测: ⚠已降级 {err}（其余自检正常）"))
+        else:
+            a(_status_line(False, f"盘口回测: {err}"))
 
     a("")
     a("-" * 62)
@@ -506,6 +517,8 @@ async def main() -> int:
     parser = argparse.ArgumentParser(description="数据源健康自检")
     parser.add_argument("--code", help="指定单只股票代码（默认 4 只样本股）")
     parser.add_argument("--json", action="store_true", help="输出 JSON")
+    parser.add_argument("--no-backtest", action="store_true",
+                        help="跳过盘口回测段（仅数据源自检，更快）")
     args = parser.parse_args()
 
     if args.code:
@@ -514,7 +527,7 @@ async def main() -> int:
             return 2
 
     try:
-        report = await run_diagnostics(args.code)
+        report = await run_diagnostics(args.code, with_backtest=not args.no_backtest)
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:

@@ -47,9 +47,11 @@
     meta: function () {
       return request('/api/meta');
     },
-    healthCheck: function () {
-      // 数据源逐源实测，耗时较长（10-30s），给足超时
-      return request('/api/health/check', { timeout: 120000 });
+    healthCheck: function (withBacktest) {
+      // 数据源逐源实测，耗时较长（10-30s），给足超时；
+      // withBacktest=false 跳过盘口回测段（更快、省数据源配额）
+      const qs = withBacktest === false ? '?with_backtest=0' : '';
+      return request('/api/health/check' + qs, { timeout: 120000 });
     },
     watchlist: function (refresh) {
       return request('/api/watchlist' + (refresh ? '?refresh=1' : ''));

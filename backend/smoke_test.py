@@ -522,6 +522,24 @@ def test_check_sources_backtest_struct() -> None:
         "latest_trade_date": "", "issues": [], "backtest": {"ok": False, "error": "回测失败: x"},
     })
     check("自检渲染: 回测失败分支", "回测失败" in text_no)
+    text_dg = check_sources.render_text({
+        "time": "2026-08-18 12:00:00", "session": "closed", "trading": False,
+        "sample": ["600000.SH"], "providers": [], "quote_sources_ok": ["tencent"],
+        "latest_trade_date": "", "issues": [],
+        "backtest": {"ok": False, "error": "回测脚本未打包进镜像（ModuleNotFoundError）", "degraded": True},
+    })
+    check("自检渲染: 回测降级分支", "已降级" in text_dg and "其余自检正常" in text_dg, text_dg[:300])
+    text_sk = check_sources.render_text({
+        "time": "2026-08-18 12:00:00", "session": "closed", "trading": False,
+        "sample": ["600000.SH"], "providers": [], "quote_sources_ok": ["tencent"],
+        "latest_trade_date": "", "issues": [],
+        "backtest": {"ok": False, "skipped": True, "error": "已跳过回测（仅数据源自检）"},
+    })
+    check("自检渲染: 回测跳过分支", "已跳过回测" in text_sk, text_sk[:300])
+    # run_diagnostics 分离：with_backtest=False 时返回 skipped 且不执行回测
+    report_fast = asyncio.run(check_sources.run_diagnostics("600000", with_backtest=False))
+    check("自检分离: 仅数据源跳过回测", report_fast["backtest"].get("skipped") is True,
+          str(report_fast["backtest"])[:120])
 
     # _summarize_backtest_safe 兜底：异常样本结构不抛错，返回 ok=False
     bad_summary = check_sources._summarize_backtest_safe(

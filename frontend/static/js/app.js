@@ -211,6 +211,29 @@
       ' 个' + ((result.quote_sources_ok || []).length ? '（' + result.quote_sources_ok.join('、') + '）' : '') +
       '<br>最新行情日期：' + (result.latest_trade_date || '--'));
 
+    // ---- 数据源限流降级提示（与回测降级提示同风格：ds-bt-note.warn）
+    // 自检实测：某源任一能力报「限流冷却/频控」即视为限流；再叠加实时熔断状态兜底
+    const thSrcs = (result.providers || []).filter(function (p) {
+      return Object.keys(p.results || {}).some(function (c) {
+        const e = (p.results[c] || {}).error || '';
+        return e.indexOf('限流') >= 0 || e.indexOf('频控') >= 0;
+      });
+    }).map(function (p) { return p.name; });
+    const thLive = Object.keys(state.meta.throttled_hosts || {})
+      .filter(function (h) { return thSrcs.indexOf(h) < 0; });
+    if (thSrcs.length || thLive.length) {
+      const tlist = [];
+      if (thSrcs.length) tlist.push(U.escapeHtml(thSrcs.join('、')) + ' 已触发频控');
+      if (thLive.length) {
+        tlist.push(thLive.map(function (h) {
+          const s = (state.meta.throttled_hosts || {})[h];
+          return U.escapeHtml(h) + (s > 0 ? '（冷却剩余 ' + Math.ceil(s) + 's）' : '');
+        }).join('、') + ' 冷却中');
+      }
+      parts.push('<div class="ds-sub ds-bt-note warn">⚠ 数据源限流降级：' + tlist.join('；') +
+        '，行情已自动切换备用源，其余功能不受影响</div>');
+    }
+
     // ---- 盘口信号近期命中率（与回测脚本同口径）
     const bt = result.backtest;
     if (bt && bt.ok) {
@@ -251,8 +274,19 @@
       btParts.push('<button class="btn btn-ghost btn-sm" id="ds-bt-toggle">' +
         (bt.signals || []).length + ' 个信号明细</button>');
       parts.push('<div class="ds-bt">' + btParts.join('') + '</div>');
+    } else if (bt && bt.skipped) {
+      // 仅数据源自检（跳过回测）——灰字提示 + 补跑按钮
+      parts.push('<div class="ds-sub ds-bt-note"><span class="ds-faint">盘口回测已跳过（仅数据源自检）</span></div>' +
+        '<div class="ds-actions"><button class="btn btn-sm" id="ds-bt-run">📊 补跑回测</button></div>');
     } else if (bt && bt.error) {
-      parts.push('<div class="ds-sub ds-issues">盘口回测：' + U.escapeHtml(bt.error) + '</div>');
+      // degraded：回测脚本未打包进镜像等环境问题——明确提示降级原因，其余自检正常
+      if (bt.degraded) {
+        parts.push('<div class="ds-sub ds-bt-note warn">⚠ 盘口回测已降级：' +
+          U.escapeHtml(bt.error) +
+          '<br><span class="ds-faint">其余数据源探测不受影响，如需回测功能请在镜像中打包 backtest_intraday.py</span></div>');
+      } else {
+        parts.push('<div class="ds-sub ds-issues">盘口回测：' + U.escapeHtml(bt.error) + '</div>');
+      }
     }
 
     const issues = result.issues || [];
@@ -308,18 +342,22 @@
       (ai.enabled ? U.escapeHtml(ai.model || 'LLM') : '内置规则引擎（未配置 API Key）') +
       '<br>刷新周期：行情 ' + (state.meta.refresh ? state.meta.refresh.quote_ttl : '--') + 's / 历史 ' +
       (state.meta.refresh ? state.meta.refresh.history_ttl : '--') + 's</div>');
-    parts.push('<div class="ds-actions"><button class="btn btn-sm" id="ds-check">🔍 立即自检</button></div>');
+    parts.push('<div class="ds-actions">' +
+      '<button class="btn btn-sm" id="ds-check">🔍 立即自检</button>' +
+      '<button class="btn btn-ghost btn-sm" id="ds-check-fast" title="跳过盘口回测，仅数据源健康检查（更快）">⚡ 仅数据源</button>' +
+      '</div>');
     pop.innerHTML = parts.join('');
     bindDsActions();
   }
 
-  async function runDsCheck() {
+  async function runDsCheck(withBacktest) {
     if (dsState.checking) return;
     dsState.checking = true;
     dsState.view = 'check';
+    dsState.withBacktest = withBacktest !== false;
     renderDsCheckLoading();
     try {
-      const result = await API.healthCheck();
+      const result = await API.healthCheck(dsState.withBacktest);
       dsState.lastResult = result;
       renderDsCheckResult(result);
     } catch (err) {
@@ -341,9 +379,11 @@
       return function (e) { e.stopPropagation(); fn(); };
     };
     const checkBtn = document.getElementById('ds-check');
-    if (checkBtn) checkBtn.addEventListener('click', stop(runDsCheck));
+    if (checkBtn) checkBtn.addEventListener('click', stop(function () { runDsCheck(true); }));
+    const checkFast = document.getElementById('ds-check-fast');
+    if (checkFast) checkFast.addEventListener('click', stop(function () { runDsCheck(false); }));
     const recheckBtn = document.getElementById('ds-recheck');
-    if (recheckBtn) recheckBtn.addEventListener('click', stop(runDsCheck));
+    if (recheckBtn) recheckBtn.addEventListener('click', stop(function () { runDsCheck(dsState.withBacktest !== false); }));
     const btToggle = document.getElementById('ds-bt-toggle');
     if (btToggle) btToggle.addEventListener('click', stop(function () {
       const detail = document.querySelector('#ds-popover .ds-bt-detail');
@@ -352,6 +392,8 @@
       detail.style.display = open ? 'block' : 'none';
       btToggle.textContent = open ? '收起信号明细' : (document.querySelectorAll('#ds-popover .ds-bt-row').length) + ' 个信号明细';
     }));
+    const btRun = document.getElementById('ds-bt-run');
+    if (btRun) btRun.addEventListener('click', stop(function () { runDsCheck(true); }));
     const backBtn = document.getElementById('ds-back');
     if (backBtn) backBtn.addEventListener('click', stop(function () {
       dsState.view = 'meta';
