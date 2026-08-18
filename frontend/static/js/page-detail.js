@@ -95,10 +95,7 @@
     const q = d.quote;
     const wrap = U.el('div', 'detail-head');
 
-    const nav = U.el('div');
-    nav.style.marginBottom = '12px';
-    nav.style.display = 'flex';
-    nav.style.gap = '8px';
+    const nav = U.el('div', 'detail-nav');
     const back = U.el('button', 'btn btn-sm', '← 返回首页');
     back.onclick = function () { location.hash = '#/home'; };
     nav.appendChild(back);

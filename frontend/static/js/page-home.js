@@ -104,7 +104,10 @@
       };
       bar.appendChild(done);
     } else {
-      bar.appendChild(U.el('span', 'wl-count', '自选股 ' + state.items.length + ' 只'));
+      const heading = U.el('div', 'wl-heading');
+      heading.appendChild(U.el('div', 'wl-heading-title', '我的自选'));
+      heading.appendChild(U.el('div', 'wl-heading-sub', state.items.length + ' 只股票 · 关键监测一览'));
+      bar.appendChild(heading);
     }
 
     const sorters = U.el('div', 'sorters');

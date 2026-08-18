@@ -1331,3 +1331,190 @@ main {
   .cfg-actions { flex-wrap: wrap; }
   .cfg-test-result { flex-basis: 100%; }
 }
+
+/* ------------------------------------------------------------ 视觉层优化 */
+/* 保持原有深色信息密度，同时强化层级、留白和关键操作的视觉焦点。 */
+body {
+  background:
+    radial-gradient(circle at 8% -10%, rgba(59, 130, 246, .12), transparent 28rem),
+    radial-gradient(circle at 92% 0%, rgba(99, 102, 241, .08), transparent 24rem),
+    var(--bg);
+}
+
+.topbar {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+}
+.topbar-inner {
+  height: 62px;
+}
+.brand-mark {
+  box-shadow: 0 5px 16px rgba(59, 130, 246, .28);
+}
+.nav-item {
+  position: relative;
+  padding: 7px 15px;
+}
+.nav-item.active {
+  background: transparent;
+  color: #fff;
+}
+.nav-item.active::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(59, 130, 246, .6);
+}
+
+main {
+  padding-top: 26px;
+  padding-bottom: 40px;
+}
+.card {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .12);
+}
+.card-head {
+  min-height: 52px;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .025), transparent);
+}
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card-title::before {
+  content: "";
+  width: 3px;
+  height: 15px;
+  border-radius: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(59, 130, 246, .45);
+}
+.card-body { padding: 18px; }
+
+.wl-toolbar {
+  min-height: 64px;
+  padding: 12px 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .025), transparent);
+}
+.wl-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.wl-heading-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: .2px;
+}
+.wl-heading-sub {
+  color: var(--text-faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.wl-count { font-weight: 600; color: var(--text); }
+.sorters { gap: 6px; }
+.sorter {
+  padding: 4px 11px;
+  background: rgba(255, 255, 255, .015);
+  transition: background .15s, border-color .15s, color .15s, transform .15s;
+}
+.sorter:hover { transform: translateY(-1px); }
+.wl-row {
+  padding: 13px 18px;
+  gap: 12px;
+}
+.wl-head {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  font-weight: 500;
+  letter-spacing: .1px;
+}
+.wl-row:not(.wl-head):hover {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.monitor-tag {
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.row-actions .btn {
+  min-width: 48px;
+}
+
+.detail-head {
+  margin-bottom: 20px;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgba(59, 130, 246, .11), transparent 45%),
+    var(--bg-elev);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .15);
+}
+.detail-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 17px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.detail-title-row { gap: 10px 14px; }
+.detail-name { font-size: 26px; letter-spacing: .2px; }
+.detail-price-row { margin-top: 14px; }
+.detail-price { letter-spacing: -.5px; }
+.detail-change { padding: 4px 10px; border-radius: 8px; background: rgba(255, 255, 255, .035); }
+
+.section { margin-bottom: 16px; }
+.status-tag, .ma-card, .stat { box-shadow: 0 5px 16px rgba(0, 0, 0, .1); }
+.status-tag { padding: 10px 15px; }
+.stat { padding: 11px 13px; }
+.data-table tbody tr { transition: background .12s; }
+.data-table tbody tr:hover { background: rgba(255, 255, 255, .035); }
+.table-scroll::-webkit-scrollbar, .modal-body::-webkit-scrollbar, .ds-popover::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.table-scroll::-webkit-scrollbar-thumb, .modal-body::-webkit-scrollbar-thumb, .ds-popover::-webkit-scrollbar-thumb {
+  background: #364154;
+  border-radius: 8px;
+}
+.table-scroll::-webkit-scrollbar-track, .modal-body::-webkit-scrollbar-track, .ds-popover::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal {
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .62), 0 0 0 1px rgba(59, 130, 246, .06);
+}
+.modal-head {
+  min-height: 58px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .03), transparent);
+}
+.ai-verdict {
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .14);
+}
+.ai-action { letter-spacing: .2px; }
+
+@media (max-width: 700px) {
+  .topbar-inner { height: 58px; }
+  .wl-heading { flex-direction: column; align-items: flex-start; gap: 0; }
+  .sorters { margin-left: 0; width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+  .sorter { flex: 0 0 auto; }
+}
+
+@media (max-width: 560px) {
+  main { padding-top: 16px; padding-bottom: 28px; }
+  .card-body { padding: 14px; }
+  .detail-head { padding: 14px; }
+  .detail-nav { margin-bottom: 14px; padding-bottom: 11px; overflow-x: auto; }
+  .detail-nav .btn { flex: 0 0 auto; }
+  .detail-name { font-size: 22px; }
+}
