@@ -14,6 +14,7 @@ from ..config import settings
 from ..utils import chunked, data_is_stale, full_code, normalize_code, resolve_market, session_state
 from .base import (
     Bar,
+    FinancialPeriod,
     FlowDay,
     MarginDay,
     NewsItem,
@@ -98,10 +99,15 @@ class Registry:
             p for p in self.providers
             if cap in p.caps and self._blocked_until.get(p.name, 0) <= now
         ]
-        if ready:
-            return ready
-        # 全部处于熔断中：放行以免整站不可用
-        return [p for p in self.providers if cap in p.caps]
+        if not ready:
+            # 全部处于熔断中：放行以免整站不可用
+            ready = [p for p in self.providers if cap in p.caps]
+        # 资讯、研报和财报按用户指定的来源优先级独立调度：同花顺主，
+        # 东方财富辅；不改变行情/资金等其他能力的 PROVIDER_ORDER。
+        if cap in {"news", "reports", "financials"}:
+            priority = {"ths": 0, "eastmoney": 1}
+            ready.sort(key=lambda p: priority.get(p.name, 2))
+        return ready
 
     def _mark_ok(self, name: str) -> None:
         self._fail.pop(name, None)
@@ -326,9 +332,18 @@ class Registry:
     async def reports(
         self, code: str, market: str, limit: int = 15
     ) -> tuple[list[ReportItem], str]:
-        """券商研报 + 实际生效数据源（目前同花顺网页数据）。"""
+        """券商研报 + 实际生效数据源（同花顺主、东方财富辅）。"""
         items, src = await self._first(
             "reports", lambda p: p.reports(code, market, limit)
+        )
+        return items, src
+
+    async def financials(
+        self, code: str, market: str, limit: int = 12
+    ) -> tuple[list[FinancialPeriod], str]:
+        """定期报告核心指标 + 实际生效数据源（同花顺主、东方财富辅）。"""
+        items, src = await self._first(
+            "financials", lambda p: p.financials(code, market, limit)
         )
         return items, src
 
@@ -349,6 +364,7 @@ async def shutdown() -> None:
 
 __all__ = [
     "Bar",
+    "FinancialPeriod",
     "FlowDay",
     "MarginDay",
     "NewsItem",

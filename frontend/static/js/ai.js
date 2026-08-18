@@ -201,6 +201,7 @@
       srow.appendChild(mk('技术面', scores.tech));
       srow.appendChild(mk('资金面', scores.capital));
       srow.appendChild(mk('消息面', scores.news));
+      if (scores.fundamental != null) srow.appendChild(mk('基本面', scores.fundamental));
       if (scores.intraday != null && scores.intraday !== 0) {
         // 当日盘口分项（盘中位置/量比/振幅/换手），已计入技术面
         const intra = U.el('span', 'ai-score intra ' + (scores.intraday > 0 ? 'up' : 'down'));
@@ -230,10 +231,15 @@
       ['当日资金活跃', 'intraday'], ['主力资金', 'main_force'], ['散户情绪', 'retail'], ['两融多空', 'margin']
     ]));
 
+    // ---- 财报与基本面
+    host.appendChild(textSection('三、财报与基本面', a.fundamental, [
+      ['报告期', 'period'], ['增长', 'growth'], ['质量', 'quality']
+    ]));
+
     // ---- 风险与机会
     const risk = a.risk || {};
     const rs = U.el('div', 'ai-section');
-    rs.appendChild(U.el('div', 'ai-section-title', '三、风险与机会拆解'));
+    rs.appendChild(U.el('div', 'ai-section-title', '四、风险与机会拆解'));
     // 机会/风险条目兼容两种结构：纯字符串（旧格式）或 {text, strength, hit, note}
     // （盘口信号带历史命中率强度标注）
     function sigLi(x) {
@@ -274,7 +280,7 @@
     // ---- 状态标签
     if ((report.status_tags || []).length) {
       const st = U.el('div', 'ai-section');
-      st.appendChild(U.el('div', 'ai-section-title', '四、当前状态标签'));
+      st.appendChild(U.el('div', 'ai-section-title', '五、当前状态标签'));
       const tags = U.el('div', 'status-tags');
       report.status_tags.forEach(function (t) {
         const node = U.el('div', 'status-tag ' + (t.tone || 'flat'));
@@ -433,6 +439,13 @@
       const kv = pair.split(':');
       if (c[kv[0]]) lines.push('  ' + kv[1] + '：' + c[kv[0]]);
     });
+    lines.push('');
+
+    const f = a.fundamental || {};
+    lines.push('■ 财报与基本面：' + (f.summary || ''));
+    if (f.period) lines.push('  报告期：' + f.period);
+    if (f.growth) lines.push('  增长：' + f.growth);
+    if (f.quality) lines.push('  质量：' + f.quality);
     lines.push('');
 
     const r = a.risk || {};

@@ -34,6 +34,7 @@ def history_ttl() -> float:
 # 上一次成功的数据保留 24 小时。数据源被频控/宕机时，宁可展示带「延迟」标记的
 # 旧数据，也不要给用户一片空白（K线、资金、两融都是日频数据，隔夜可用）。
 STALE_TTL = 86400.0
+FINANCIAL_TTL = 21600.0  # 定期报告发布频率低，网页数据 6 小时内可复用
 
 
 async def cached_pack(
@@ -290,6 +291,17 @@ async def _margin(code: str, market: str, force: bool) -> dict[str, Any]:
     )
 
 
+async def _financials(code: str, market: str, force: bool) -> dict[str, Any]:
+    async def loader() -> Any:
+        rows, src = await registry().financials(code, market, 12)
+        return {"rows": rows, "source": src}
+
+    return await cached_pack(
+        f"financials:{code}.{market}", FINANCIAL_TTL, loader, force,
+        empty={"rows": [], "source": ""},
+    )
+
+
 async def _boards(code: str, market: str, force: bool) -> list[str]:
     async def loader() -> Any:
         return {"names": await registry().boards(code, market)}
@@ -318,6 +330,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
         "kline": asyncio.create_task(_kline(code, market, force)),
         "flow": asyncio.create_task(_flow(code, market, force)),
         "margin": asyncio.create_task(_margin(code, market, force)),
+        "financials": asyncio.create_task(_financials(code, market, force)),
         "boards": asyncio.create_task(_boards(code, market, force)),
     }
     done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_EXCEPTION)
@@ -334,6 +347,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     kline_pack = tasks["kline"].result()
     flow_pack = tasks["flow"].result()
     margin_pack = tasks["margin"].result()
+    financial_pack = tasks["financials"].result()
     boards = tasks["boards"].result()
 
     bars = kline_pack["bars"]
@@ -392,15 +406,22 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
             "stale": margin_pack.get("stale", False),
             "error": margin_pack.get("error", ""),
         },
+        "financials": {
+            "rows": [asdict(r) for r in financial_pack["rows"]],
+            "source": financial_pack.get("source", ""),
+            "stale": financial_pack.get("stale", False),
+            "error": financial_pack.get("error", ""),
+        },
         "status": status,
         "sources": {
             "quote": quote.source,
             "kline": kline_pack.get("source", ""),
             "fund_flow": flow_pack.get("source", ""),
             "margin": margin_pack.get("source", ""),
+            "financials": financial_pack.get("source", ""),
             "stale": [
                 name for name, pack in
-                (("K线", kline_pack), ("资金流向", flow_pack), ("两融", margin_pack))
+                (("K线", kline_pack), ("资金流向", flow_pack), ("两融", margin_pack), ("财报", financial_pack))
                 if pack.get("stale")
             ],
         },

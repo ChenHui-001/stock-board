@@ -10,6 +10,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # 用临时数据目录，避免污染工作区 / CI 环境
@@ -184,6 +185,58 @@ def _ma_item(w: int, v: float, slope: str = "上行") -> dict:
     return {"window": w, "value": v, "slope": slope, "position": "站上", "deviation_pct": 0.0}
 
 
+def test_financials() -> None:
+    from backend.providers.webparse import parse_financial_html, parse_news_html, parse_report_html
+
+    ths_json = (
+        '<p id="main">{"title":["科目\\\\时间",["营业总收入","元",0,false,true],'
+        '["营业总收入同比增长率","",0,false,true]],'
+        '"report":[["2026-06-30","2026-03-31"],["12.5亿","10亿"],["25%","20%"]]}</p>'
+    )
+    embedded_rows = parse_financial_html(ths_json, "ths")
+    check("同花顺财报内嵌JSON", embedded_rows[0].revenue == 1.25e9 and embedded_rows[0].revenue_yoy == 25, str(embedded_rows))
+    linkage = (
+        f'<div id="linkagedata">[{{"seq":1,"ctime":{int(time.time())},'
+        '"curl":"http://news.10jqka.com.cn/field/test.shtml",'
+        '"title":"公司签订重大订单","source":"测试媒体"}]</div>'
+    )
+    linkage_rows = parse_news_html(linkage, "ths", 30, 5)
+    check("同花顺资讯内嵌JSON", linkage_rows[0].title == "公司签订重大订单" and linkage_rows[0].source == "测试媒体", str(linkage_rows))
+    eastmoney_json = (
+        '<script>var initdata = {"data":[{"title":"业绩增长点评",'
+        '"orgSName":"国金证券","publishDate":"2026-08-18 00:00:00.000",'
+        '"infoCode":"APTEST001","sRatingName":"增持",'
+        '"researcher":"张三"}]};</script>'
+    )
+    embedded_reports = parse_report_html(eastmoney_json, "eastmoney", 5)
+    check("东财研报内嵌JSON", embedded_reports[0].rating == "增持" and embedded_reports[0].source == "国金证券", str(embedded_reports))
+
+    detail = _mk_detail(financials={"source": "ths", "rows": [
+        {"period": "2026H1", "date": "2026-06-30", "revenue": 1.25e9, "revenue_yoy": 25,
+         "net_profit": 2.5e8, "net_profit_yoy": 25, "roe": 11.2, "debt_ratio": 40},
+    ]})
+    fb = analysis.rule_based(detail)
+    scores = fb["advice"]["scores"]
+    check("财报分析: 基本面加分", scores["fundamental"] > 0 and "2026H1" in fb["fundamental"]["period"], str(fb["fundamental"]))
+    check("财报分析: 纳入机会", any("基本面偏强" in str(x) for x in fb["risk"]["opportunities"]), str(fb["risk"]["opportunities"]))
+    reversed_detail = _mk_detail(financials={"rows": [
+        {"period": "2025FY", "date": "2025-12-31", "revenue_yoy": -20, "net_profit_yoy": -20},
+        {"period": "2026H1", "date": "2026-06-30", "revenue_yoy": 10, "net_profit_yoy": 10},
+    ]})
+    reversed_fb = analysis.rule_based(reversed_detail)
+    check("财报分析: 按报告日期取最新", reversed_fb["fundamental"]["period"] == "2026H1", str(reversed_fb["fundamental"]))
+    payload = analysis.build_payload(detail)
+    fin_payload = payload.get("财报数据_季报中报") or {}
+    check("财报分析: LLM投喂报告期", fin_payload.get("最新报告期") == "2026H1", str(fin_payload))
+    stale_detail = _mk_detail(financials={"source": "ths", "stale": True, "error": "网页暂不可用", "rows": [
+        {"period": "2026H1", "date": "2026-06-30", "revenue_yoy": 10, "net_profit_yoy": 10},
+    ]})
+    stale_payload = analysis.build_payload(stale_detail)["财报数据_季报中报"]
+    stale_fb = analysis.rule_based(stale_detail)
+    check("财报分析: 缓存状态投喂", "使用上次成功缓存" in stale_payload.get("数据状态", ""), str(stale_payload))
+    check("财报分析: 缓存状态提示", "缓存数据" in stale_fb["fundamental"]["summary"], str(stale_fb["fundamental"]))
+
+
 def test_rule_precision() -> None:
     # 1) 量能确认：放量上涨 +6 / 放量下跌 -6 / 缩量下跌 +3 / 缩量上涨 -3 / 数据不足 0
     def bars(closes: list, vols: list) -> list:
@@ -214,7 +267,7 @@ def test_rule_precision() -> None:
     check("乖离修正: 超卖进机会面", any("超卖" in o for o in fb_low["risk"]["opportunities"]), str(fb_low["risk"]["opportunities"]))
 
     # 3) 三维分面明细输出（含当日盘口分项）
-    check("分面分数输出", set(fb_over["advice"]["scores"].keys()) == {"tech", "capital", "news", "intraday", "total"},
+    check("分面分数输出", set(fb_over["advice"]["scores"].keys()) == {"tech", "capital", "news", "fundamental", "intraday", "total"},
           str(fb_over["advice"]["scores"]))
 
     # 4) 信号冲突降档：技术/资金偏空 + 消息强多 -> signal=conflict、降档、置信度压低
@@ -553,9 +606,17 @@ def test_registry() -> None:
     names = [p.name for p in reg.providers]
     check("数据源装配", "eastmoney" in names and len(names) >= 3, str(names))
     check("健康度接口（不触网）", len(reg.health()) == len(names))
-    # 资讯能力：东财主源 + 新浪网页兜底（东财不可用时自动回退）
+    # 资讯/研报/财报能力：同花顺主源，东方财富辅源，资讯保留新浪末级兜底
     news_caps = sorted(p.name for p in reg.providers if "news" in p.caps)
-    check("资讯源装配（东财+新浪兜底）", news_caps == ["eastmoney", "sina"], str(news_caps))
+    report_caps = sorted(p.name for p in reg.providers if "reports" in p.caps)
+    financial_caps = sorted(p.name for p in reg.providers if "financials" in p.caps)
+    check("资讯源装配（同花顺+东财+新浪兜底）", news_caps == ["eastmoney", "sina", "ths"], str(news_caps))
+    check("研报源装配（同花顺+东财兜底）", report_caps == ["eastmoney", "ths"], str(report_caps))
+    check("财报源装配（同花顺+东财兜底）", financial_caps == ["eastmoney", "ths"], str(financial_caps))
+    ordered_news = [p.name for p in reg._available("news")]
+    ordered_reports = [p.name for p in reg._available("reports")]
+    check("资讯研报优先级: 同花顺在东财前", ordered_news[:2] == ["ths", "eastmoney"] and ordered_reports[:2] == ["ths", "eastmoney"],
+          str((ordered_news, ordered_reports)))
 
 
 def test_watch_monitor() -> None:
@@ -765,6 +826,7 @@ def main() -> int:
     test_model_filter()
     test_news_interpret()
     test_reports_interpret()
+    test_financials()
     test_rule_precision()
     test_kline_stale()
     test_cache()
