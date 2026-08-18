@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 
 from ..utils import normalize_code, resolve_market, to_float
-from .base import Bar, Provider, ProviderError, ReportItem, fetch
+from .base import Bar, FinancialPeriod, NewsItem, Provider, ProviderError, ReportItem, fetch
+from .webparse import parse_financial_html, parse_news_html
 
 KLINE_URL = "https://d.10jqka.com.cn/v6/line/{sym}/01/last.js"
 HEADERS = {"Referer": "http://stockpage.10jqka.com.cn/"}
@@ -37,7 +38,7 @@ def _ths_symbol(code: str, market: str | None = None) -> str:
 
 class ThsProvider(Provider):
     def __init__(self) -> None:
-        super().__init__(name="ths", caps={"kline", "reports"})
+        super().__init__(name="ths", caps={"kline", "news", "reports", "financials"})
 
     async def kline(self, code: str, market: str, limit: int) -> list[Bar]:
         resp = await fetch(KLINE_URL.format(sym=_ths_symbol(code, market)), headers=HEADERS)
@@ -74,6 +75,20 @@ class ThsProvider(Provider):
             if prev:
                 bars[i].change_pct = round((bars[i].close - prev) / prev * 100, 2)
         return bars[-limit:]
+
+    # ------------------------------------------------------------ 个股资讯
+    async def news(
+        self, code: str, market: str, name: str, days: int = 30, limit: int = 15
+    ) -> list[NewsItem]:
+        """同花顺个股页新闻（网页 HTML），作为资讯主源。"""
+        resp = await fetch(
+            f"https://basic.10jqka.com.cn/{normalize_code(code)}/news.html",
+            headers=HEADERS,
+        )
+        try:
+            return parse_news_html(_decode(resp.content), "ths", days, limit)
+        except ValueError as exc:
+            raise ProviderError("同花顺未返回该股票的近期资讯") from exc
 
     # ------------------------------------------------------------ 券商研报
     async def reports(self, code: str, market: str, limit: int = 15) -> list[ReportItem]:
@@ -149,3 +164,16 @@ class ThsProvider(Provider):
         if not out:
             raise ProviderError("同花顺未返回研报")
         return out[:max(limit, 200)]
+
+    # ------------------------------------------------------------ 定期报告
+    async def financials(self, code: str, market: str, limit: int = 12) -> list[FinancialPeriod]:
+        """同花顺 F10 财务概况页（网页 HTML），提取季报/中报/年报核心指标。"""
+        resp = await fetch(
+            f"https://basic.10jqka.com.cn/{normalize_code(code)}/finance.html",
+            headers=HEADERS,
+        )
+        try:
+            rows = parse_financial_html(_decode(resp.content), "ths")
+        except ValueError as exc:
+            raise ProviderError("同花顺财报页面未返回可识别指标") from exc
+        return rows[:limit]

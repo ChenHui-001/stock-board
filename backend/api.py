@@ -88,7 +88,7 @@ _REQUIRED_REPORT_FIELDS = ("report_sentiment", "rating_dist", "reports_preview")
 # AI 报告结构版本：机会/风险条目升级为 {text,strength,hit,confidence} 后引入。
 # 带版本号的缓存直接命中，不带的一律作废重建——比逐条结构检查更可靠
 # （某些股票机会/风险恰好无盘口信号、全是字符串条目，也会被旧检查误判）。
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 
 
 def _cache_fresh(cached_at: str) -> bool:

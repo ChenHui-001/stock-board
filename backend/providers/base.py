@@ -264,6 +264,25 @@ class ReportItem:
 
 
 @dataclass
+class FinancialPeriod:
+    """上市公司定期报告核心指标（季报/中报/三季报/年报）。"""
+
+    date: str = ""                  # 报告期末 YYYY-MM-DD
+    period: str = ""                # 2026Q1 / 2026H1 / 2026Q3 / 2025FY
+    revenue: float | None = None
+    revenue_yoy: float | None = None
+    net_profit: float | None = None
+    net_profit_yoy: float | None = None
+    net_profit_deduct: float | None = None
+    net_profit_deduct_yoy: float | None = None
+    eps: float | None = None
+    roe: float | None = None
+    gross_margin: float | None = None
+    debt_ratio: float | None = None
+    source: str = ""
+
+
+@dataclass
 class Provider:
     name: str = "base"
     caps: set[str] = field(default_factory=set)
@@ -300,5 +319,9 @@ class Provider:
         raise NotSupported
 
     async def reports(self, code: str, market: str, limit: int = 15) -> list[ReportItem]:
-        """券商研报（同花顺数据），按日期倒序。"""
+        """券商研报，按日期倒序。"""
+        raise NotSupported
+
+    async def financials(self, code: str, market: str, limit: int = 12) -> list[FinancialPeriod]:
+        """上市公司定期报告核心指标，按报告期倒序。"""
         raise NotSupported
