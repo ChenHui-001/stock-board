@@ -435,16 +435,37 @@
   }
 
   // ---------------------------------------------------------- 数据源
+  // 来源 id -> 中文名；同花顺 K 线来自其行情网页加载的数据文件（web 层），单独标注
+  const SOURCE_NAME = {
+    eastmoney: '东方财富',
+    ths: '同花顺(网页)',
+    sina: '新浪财经',
+    tencent: '腾讯财经',
+    akshare: 'AkShare',
+    '': '未知'
+  };
+
+  function sourceLabel(id) {
+    return SOURCE_NAME[id] || id || '未知';
+  }
+
   function renderSourceFooter(d) {
     const s = d.sources || {};
     const node = U.el('div', 'search-hint');
     node.style.marginTop = '4px';
     const parts = [];
-    if (s.quote) parts.push('行情:' + s.quote);
-    if (s.kline) parts.push('K线:' + s.kline);
-    if (s.fund_flow) parts.push('资金:' + s.fund_flow);
-    if (s.margin) parts.push('两融:' + s.margin);
-    node.textContent = '数据源 — ' + (parts.join(' | ') || '未知');
+    if (s.quote) parts.push('行情:' + sourceLabel(s.quote));
+    if (s.kline) parts.push('K线:' + sourceLabel(s.kline));
+    if (s.fund_flow) parts.push('资金:' + sourceLabel(s.fund_flow));
+    if (s.margin) parts.push('两融:' + sourceLabel(s.margin));
+    node.textContent = '数据来源 — ' + (parts.join(' | ') || '未知');
+    const tip = U.el('div', 'search-hint');
+    tip.style.marginTop = '2px';
+    tip.style.color = 'var(--text-faint)';
+    tip.style.fontSize = '11.5px';
+    tip.textContent = '数据来自对应网站的网页公开数据，同花顺K线为其行情网页加载的数据文件；盘中行情为相应网站实时行情通道。';
+    node.appendChild(document.createElement('br'));
+    node.appendChild(tip);
     return node;
   }
 

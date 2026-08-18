@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, llm, llmcfg, service, storage
+from . import analysis, llm, llmcfg, news as news_mod, service, storage
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import normalize_code, resolve_market
@@ -273,6 +273,26 @@ async def stock_quote(code: str, refresh: bool = Query(False)) -> dict[str, Any]
     return {"quote": quote.to_dict(), "session": service.session_info()}
 
 
+# ------------------------------------------------------------------ 个股资讯
+
+@router.get("/news/{code}")
+async def stock_news(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
+    """近一个月个股资讯，逐条附 AI 解读（LLM 不可用/失败时规则引擎兜底）。"""
+    code = normalize_code(code)
+    if not code:
+        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    name = ""
+    try:
+        quote = await service.get_quote(code, resolve_market(code))
+        name = quote.name or ""
+    except ProviderError:
+        pass  # 资讯检索不依赖名称，拿不到也能按代码搜
+    try:
+        return await news_mod.get_stock_news(code, name, force=refresh)
+    except Exception as exc:  # noqa: BLE001
+        raise _fail(exc, "获取资讯失败") from exc
+
+
 # ------------------------------------------------------------------ AI 分析
 
 @router.post("/ai/{code}")
@@ -293,7 +313,14 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
         except ProviderError as exc:
             raise _fail(exc, "AI 分析取数失败") from exc
 
-        result = await analysis.analyze(detail)
+        # 近一个月资讯（缓存命中即复用，失败不阻塞分析）：供 AI 判断资讯面权重
+        news_items: list[dict[str, Any]] = []
+        try:
+            news_items = (await news_mod.get_stock_news(code, detail["quote"].get("name", "")))["items"]
+        except Exception as exc:  # noqa: BLE001
+            log.info("AI 分析取资讯失败（忽略，不影响分析）：%s", exc)
+
+        result = await analysis.analyze(detail, news_items)
         quote = detail["quote"]
         report = {
             "code": code,

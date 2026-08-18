@@ -239,6 +239,18 @@ class SearchItem:
 
 
 @dataclass
+class NewsItem:
+    """个股资讯条目。"""
+
+    id: str = ""            # 文章 ID
+    date: str = ""          # 发布时间 YYYY-MM-DD HH:MM:SS
+    source: str = ""        # 来源媒体
+    title: str = ""
+    summary: str = ""       # 内容摘要
+    url: str = ""
+
+
+@dataclass
 class Provider:
     name: str = "base"
     caps: set[str] = field(default_factory=set)
@@ -266,4 +278,10 @@ class Provider:
 
     async def industry(self, keys: list[tuple[str, str]]) -> dict[str, str]:
         """批量返回所属行业（细分行业）：{code.market: 行业名}，一次请求覆盖多只。"""
+        raise NotSupported
+
+    async def news(
+        self, code: str, market: str, name: str, days: int = 30, limit: int = 15
+    ) -> list[NewsItem]:
+        """个股资讯（近 days 天），按时间倒序。"""
         raise NotSupported

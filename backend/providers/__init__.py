@@ -16,6 +16,7 @@ from .base import (
     Bar,
     FlowDay,
     MarginDay,
+    NewsItem,
     NotSupported,
     Provider,
     ProviderError,
@@ -306,6 +307,14 @@ class Registry:
         data, _ = await self._first("hot", lambda p: p.hot(limit))
         return data
 
+    async def news(
+        self, code: str, market: str, name: str, days: int = 30, limit: int = 15
+    ) -> list[NewsItem]:
+        items, _ = await self._first(
+            "news", lambda p: p.news(code, market, name, days, limit)
+        )
+        return items
+
 
 _registry: Registry | None = None
 
@@ -325,6 +334,7 @@ __all__ = [
     "Bar",
     "FlowDay",
     "MarginDay",
+    "NewsItem",
     "Provider",
     "ProviderError",
     "Quote",

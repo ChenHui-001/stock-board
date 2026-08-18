@@ -813,6 +813,85 @@ main {
   line-height: 1.6;
 }
 
+/* ------------------------------------------------------------ 资讯弹窗 */
+.news-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--bg-elev-1);
+}
+.news-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.news-date { color: var(--text-dim); }
+.news-source {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+.news-index {
+  margin-left: auto;
+  font-family: var(--mono, monospace);
+  color: var(--text-faint);
+  opacity: .7;
+}
+.news-title {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.55;
+  color: var(--text);
+  text-decoration: none;
+  margin-bottom: 6px;
+}
+.news-title:hover { color: var(--accent); text-decoration: underline; }
+.news-summary {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-dim);
+  margin-bottom: 9px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.news-interp {
+  background: var(--bg-elev-2);
+  border-left: 3px solid var(--line);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 8px 10px;
+}
+.news-interp-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  flex-wrap: wrap;
+}
+.sent-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+.sent-bull { background: rgba(245, 70, 93, .16); color: #ff8fa0; border: 1px solid rgba(245, 70, 93, .4); }
+.sent-bear { background: rgba(23, 178, 106, .14); color: #6ee7a8; border: 1px solid rgba(23, 178, 106, .4); }
+.sent-flat { background: rgba(148, 163, 184, .14); color: #b6c2d4; border: 1px solid rgba(148, 163, 184, .35); }
+.interp-engine { font-size: 11px; color: var(--text-faint); }
+.news-interp-text {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+
 /* ------------------------------------------------------------ Toast */
 .toast-root {
   position: fixed;

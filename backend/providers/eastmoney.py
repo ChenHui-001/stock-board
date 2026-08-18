@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,7 @@ from .base import (
     Bar,
     FlowDay,
     MarginDay,
+    NewsItem,
     Provider,
     ProviderError,
     Quote,
@@ -61,7 +63,7 @@ class EastmoneyProvider(Provider):
     def __init__(self) -> None:
         super().__init__(
             name="eastmoney",
-            caps={"quotes", "search", "kline", "fund_flow", "margin", "hot", "boards", "industry"},
+            caps={"quotes", "search", "kline", "fund_flow", "margin", "hot", "boards", "industry", "news"},
         )
 
     # ------------------------------------------------------------ 实时行情
@@ -320,6 +322,82 @@ class EastmoneyProvider(Provider):
             name = str(row.get("f100") or "").strip(" -")
             if name:
                 out[f"{code}.{market}"] = name
+        return out
+
+    # ------------------------------------------------------------ 个股资讯
+    async def news(
+        self, code: str, market: str, name: str, days: int = 30, limit: int = 15
+    ) -> list[NewsItem]:
+        """东财搜索接口（与 AkShare stock_news_em 同源）：按股票名称检索财经新闻。
+
+        用代码检索会命中正文含该数字的无关文章（如"回购 600000 股"），
+        因此优先用股票名称；名称缺失时才退回代码。返回按时间倒序。
+        """
+        keyword = (name or "").strip() or normalize_code(code)
+        param = {
+            "uid": "",
+            "keyword": keyword,
+            "type": ["cmsArticleWebOld"],
+            "client": "web",
+            "clientType": "web",
+            "clientVersion": "curr",
+            "param": {
+                "cmsArticleWebOld": {
+                    "searchScope": "default",
+                    "sort": "default",
+                    "pageIndex": 1,
+                    "pageSize": max(limit * 3, 30),  # 多拉一些，过滤非本股/超期文章
+                    "preTag": "<em>",
+                    "postTag": "</em>",
+                }
+            },
+        }
+        resp = await fetch(
+            "https://search-api-web.eastmoney.com/search/jsonp",
+            headers={"Referer": "https://so.eastmoney.com/"},
+            params={
+                "cb": "jQuery35109092213424858634_1653090224873",
+                "param": json.dumps(param, ensure_ascii=False),
+                "_": str(int(time.time() * 1000)),
+            },
+        )
+        text = resp.text or ""
+        start, end = text.find("("), text.rfind(")")
+        if start < 0 or end <= start:
+            raise ProviderError("东方财富资讯接口返回非 JSONP")
+        try:
+            payload = json.loads(text[start + 1 : end])
+        except json.JSONDecodeError as exc:
+            raise ProviderError("东方财富资讯接口 JSON 解析失败") from exc
+        rows = ((payload or {}).get("result") or {}).get("cmsArticleWebOld") or []
+
+        def _clean(s: Any) -> str:
+            return str(s or "").replace("<em>", "").replace("</em>", "").strip()
+
+        out: list[NewsItem] = []
+        today = datetime.now(TZ).date()
+        for row in rows:
+            date = str(row.get("date") or "").strip()
+            try:
+                day = datetime.strptime(date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if (today - day).days > days:
+                continue
+            out.append(
+                NewsItem(
+                    id=str(row.get("code") or ""),
+                    date=date,
+                    source=_clean(row.get("mediaName")),
+                    title=_clean(row.get("title")),
+                    summary=_clean(row.get("content")),
+                    url=str(row.get("url") or "").strip(),
+                )
+            )
+            if len(out) >= limit:
+                break
+        if not out:
+            raise ProviderError("东方财富未返回该股票的近期资讯")
         return out
 
     # ------------------------------------------------------------ 热门榜

@@ -18,7 +18,7 @@ os.environ["DATA_DIR"] = _tmp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend import api, cache, llm, llmcfg, storage  # noqa: E402
+from backend import analysis, api, cache, llm, llmcfg, news, storage  # noqa: E402
 from backend.indicators import build_ma, support_resistance  # noqa: E402
 from backend.providers import registry  # noqa: E402
 from backend.providers.base import Bar  # noqa: E402
@@ -84,15 +84,55 @@ def test_model_filter() -> None:
           f"keep误杀={bad_keep} drop漏网={bad_drop}")
 
 
+# ------------------------------------------------------------------ 资讯解读
+def test_news_interpret() -> None:
+    # 规则解读关键词情绪
+    bull = news.rule_interpret({"title": "公司中标大订单", "summary": "业绩预增 50%"})
+    bear = news.rule_interpret({"title": "股东减持", "summary": "收到处罚决定书"})
+    flat = news.rule_interpret({"title": "召开股东大会", "summary": "审议日常议案"})
+    check("资讯规则解读: 利好词", bull["sentiment"] == "利好" and bull["engine"] == "rule", str(bull))
+    check("资讯规则解读: 利空词", bear["sentiment"] == "利空", str(bear))
+    check("资讯规则解读: 中性", flat["sentiment"] == "中性", str(flat))
+
+    # 资讯评分进规则引擎：利好加分、封顶 ±12、无资讯不引用
+    detail = {
+        "quote": {"code": "600000", "name": "浦发银行", "price": 9.0, "prev_close": 9.1, "change_pct": -1.1},
+        "boards": [], "kline": [], "ma": [],
+        "ma_summary": {"arrangement": "交织", "above_count": 0, "above": [], "below": [], "series": {}},
+        "support_resistance": {}, "fund_flow": {"rows": [], "summary": {}},
+        "margin": {"rows": [], "summary": {}},
+        "status": {"tags": [], "trend": {}},
+    }
+    news_items = [
+        {"title": "中标大单", "summary": "s", "date": "2026-08-17 10:00:00",
+         "interpretation": {"sentiment": "利好", "impact": "高", "summary": "正面"}},
+        {"title": "获准收购", "summary": "s", "date": "2026-08-16 10:00:00",
+         "interpretation": {"sentiment": "利好", "impact": "中", "summary": "正面"}},
+        {"title": "被罚款", "summary": "s", "date": "2026-08-15 10:00:00",
+         "interpretation": {"sentiment": "利空", "impact": "中", "summary": "负面"}},
+    ]
+    fb = analysis.rule_based(detail, news_items)
+    check("资讯评分写入建议依据", "资讯面 2 利好/1 利空（计 +4 分）" in fb["advice"]["reason"], fb["advice"]["reason"])
+    check("资讯情绪进机会面", any("资讯面偏暖" in o for o in fb["risk"]["opportunities"]))
+    fb0 = analysis.rule_based(detail, None)
+    check("无资讯不引用", "资讯面" not in fb0["advice"]["reason"])
+    payload = analysis.build_payload(detail, news_items)
+    check("投喂数据含资讯段", len(payload.get("市场资讯_近30日") or []) == 3)
+
+
 # ------------------------------------------------------------------ K 线滞后判定
 def test_kline_stale() -> None:
+    from datetime import datetime
     from backend.utils import kline_is_stale
 
-    # 周一收盘（2026-08-17）：K线停在周五应判滞后，含今天则正常
-    check("K线滞后判定: 周一收盘缺周五->周一(停08-14)", kline_is_stale("2026-08-14") is True)
-    check("K线滞后判定: 周一收盘已含今天(08-17)", kline_is_stale("2026-08-17") is False)
-    check("K线滞后判定: 空日期不滞后", kline_is_stale("") is False)
-    check("K线滞后判定: 非法日期不滞后", kline_is_stale("abc") is False)
+    # 固定注入时间，避免 CI 在任意时刻运行时判据漂移
+    mon_close = datetime(2026, 8, 17, 16, 0)   # 周一收盘后
+    # 周一收盘：K线停在周五应判滞后，含今天则正常
+    check("K线滞后判定: 周一收盘缺周五->周一(停08-14)", kline_is_stale("2026-08-14", mon_close) is True)
+    check("K线滞后判定: 周一收盘已含今天(08-17)", kline_is_stale("2026-08-17", mon_close) is False)
+    check("K线滞后判定: 盘中不判定", kline_is_stale("2026-08-14", datetime(2026, 8, 17, 11, 0)) is False)
+    check("K线滞后判定: 空日期不滞后", kline_is_stale("", mon_close) is False)
+    check("K线滞后判定: 非法日期不滞后", kline_is_stale("abc", mon_close) is False)
 
 
 # ------------------------------------------------------------------ 缓存
@@ -169,6 +209,7 @@ def main() -> int:
     test_json_repair()
     test_fingerprint()
     test_model_filter()
+    test_news_interpret()
     test_kline_stale()
     test_cache()
     test_ai_lock()

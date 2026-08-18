@@ -235,8 +235,14 @@
       e.stopPropagation();
       AI.open(item.code, item.name, aiBtn);
     };
+    const newsBtn = U.el('button', 'btn btn-sm', '资讯');
+    newsBtn.onclick = function (e) {
+      e.stopPropagation();
+      News.open(item.code, item.name, newsBtn);
+    };
     actions.appendChild(detailBtn);
     actions.appendChild(aiBtn);
+    actions.appendChild(newsBtn);
     row.appendChild(actions);
 
     // 价格变动闪烁

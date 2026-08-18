@@ -52,7 +52,7 @@ services:
       LLM_TEMPERATURE: "${LLM_TEMPERATURE:-0.25}"
 
       # ---------- 数据源 ----------
-      PROVIDER_ORDER: "${PROVIDER_ORDER:-eastmoney,tencent,sina,ths,akshare}"
+      PROVIDER_ORDER: "${PROVIDER_ORDER:-eastmoney,ths,tencent,sina,akshare}"
       ENABLE_AKSHARE: "${ENABLE_AKSHARE:-true}"
       HTTP_TIMEOUT: "${HTTP_TIMEOUT:-6}"
       HTTP_RETRY: "${HTTP_RETRY:-2}"
