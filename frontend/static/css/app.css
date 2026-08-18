@@ -233,6 +233,67 @@ button { font-family: inherit; }
 .ds-actions { margin-top: 10px; display: flex; gap: 8px; }
 .ds-faint { color: var(--text-faint); font-size: 11px; }
 .ds-issues { color: var(--warn); }
+
+/* 盘口信号近期命中率区块 */
+.ds-bt {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.ds-bt-head {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ds-bt-buckets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.ds-bt-bucket {
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+}
+.ds-bt-bucket.up { color: var(--up); border-color: rgba(245, 70, 93, .35); }
+.ds-bt-bucket.down { color: var(--down); border-color: rgba(23, 178, 106, .35); }
+.ds-bt-note {
+  font-size: 11.5px;
+  margin-bottom: 6px;
+  line-height: 1.6;
+}
+.ds-bt-note.ok { color: var(--down); }
+.ds-bt-note.warn { color: var(--warn); }
+.ds-bt-detail {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+  margin-bottom: 7px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.ds-bt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ds-bt-row:last-child { border-bottom: none; }
+.ds-bt-row span:nth-child(1) { flex: 1; }
+.ds-bt-row span:nth-child(2) { color: var(--text-faint); font-family: var(--mono); }
+.ds-bt-row span.up { color: var(--up); font-weight: 600; }
+.ds-bt-row span.down { color: var(--down); font-weight: 600; }
+.ds-bt-row .ds-faint { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ds-head .ds-faint { font-weight: 400; margin-left: auto; }
 .ds-head { justify-content: space-between; }
 

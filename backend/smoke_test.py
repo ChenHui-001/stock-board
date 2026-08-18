@@ -426,6 +426,55 @@ def test_backtest_selftest() -> None:
         return
     check("盘口回测脚本自测", proc.returncode == 0, detail)
 
+    # 盘中 vs 收盘对照实验脚本自测（不触网，合成日线+分钟线）
+    try:
+        proc2 = subprocess.run(
+            [_sys.executable, str(root / "backtest_compare.py"), "--selftest"],
+            capture_output=True, text=True, timeout=30,
+        )
+        detail2 = (proc2.stdout or "")[-200:] + (proc2.stderr or "")[-200:]
+    except subprocess.TimeoutExpired as exc:
+        check("盘中对照实验脚本自测", False, f"超时: {exc}")
+        return
+    check("盘中对照实验脚本自测", proc2.returncode == 0, detail2)
+
+
+# ------------------------------------------------------------------ 自检报告含回测段落（不触网，仅结构）
+def test_check_sources_backtest_struct() -> None:
+    from backend import check_sources
+
+    # _backtest_advice 口径与回测脚本一致
+    check("回测校准建议: 有效可上调", check_sources._backtest_advice(0.60, 0.46, 200) == "有效，可维持或上调权重")
+    check("回测校准建议: 有效可维持", check_sources._backtest_advice(0.49, 0.46, 200) == "有效，权重可维持")
+    check("回测校准建议: 偏弱下调", check_sources._backtest_advice(0.44, 0.46, 200) == "偏弱，建议下调权重")
+    check("回测校准建议: 反向", check_sources._backtest_advice(0.38, 0.46, 200) == "反向/无效，建议大幅下调或检查方向")
+    check("回测校准建议: 样本不足", check_sources._backtest_advice(0.90, 0.46, 10) == "样本不足，暂不调整")
+
+    # check_backtest 失败分支（空样本）返回 ok=False 且不抛错
+    async def _probe_empty() -> dict:
+        return await check_sources.check_backtest([("600000", "SH")], days=5)
+
+    res = asyncio.run(_probe_empty())
+    check("回测探测: 样本不足返回 ok=False", res.get("ok") is False, str(res))
+
+    # 渲染函数能处理含回测段/无回测段的报告
+    text_with = check_sources.render_text({
+        "time": "2026-08-18 12:00:00", "session": "closed", "trading": False,
+        "sample": ["600000.SH"], "providers": [], "quote_sources_ok": ["tencent"],
+        "latest_trade_date": "2026-08-17", "issues": [],
+        "backtest": {
+            "ok": True, "samples": 100, "stocks": 1, "base_up_rate": 46.0,
+            "base_avg_ret": 0.1, "buckets": [], "signals": [],
+        },
+    })
+    check("自检渲染: 含回测标题", "盘口信号近期命中率" in text_with, text_with[:200])
+    text_no = check_sources.render_text({
+        "time": "2026-08-18 12:00:00", "session": "closed", "trading": False,
+        "sample": ["600000.SH"], "providers": [], "quote_sources_ok": [],
+        "latest_trade_date": "", "issues": [], "backtest": {"ok": False, "error": "回测失败: x"},
+    })
+    check("自检渲染: 回测失败分支", "回测失败" in text_no)
+
 
 def main() -> int:
     test_json_repair()
@@ -440,6 +489,7 @@ def main() -> int:
     test_indicators()
     test_registry()
     test_backtest_selftest()
+    test_check_sources_backtest_struct()
     print()
     if FAILED:
         print(f"失败 {len(FAILED)} 项 / 共 {TOTAL} 项检查: {FAILED}")

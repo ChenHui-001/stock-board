@@ -155,7 +155,8 @@ class EastmoneyProvider(Provider):
         return items
 
     # ------------------------------------------------------------ K 线
-    async def kline(self, code: str, market: str, limit: int) -> list[Bar]:
+    async def kline(self, code: str, market: str, limit: int, klt: int = 101) -> list[Bar]:
+        """日线（默认）/分钟线。klt=5 五分钟线等；分钟线日期带时间戳（YYYY-MM-DD HH:MM）。"""
         resp = await fetch(
             f"{PUSH_HIS}/stock/kline/get",
             headers=REFERER,
@@ -163,7 +164,7 @@ class EastmoneyProvider(Provider):
                 "secid": secid(code, market),
                 "fields1": "f1,f2,f3,f4,f5,f6",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-                "klt": 101,   # 日线
+                "klt": klt,
                 "fqt": 1,     # 前复权
                 "end": "20500101",
                 "lmt": limit,

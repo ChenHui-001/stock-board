@@ -170,6 +170,103 @@ async def check_news(p: Any) -> dict[str, Any]:
     return {"ok": True, "count": len(items), "last_date": items[0].date[:10] if items else ""}
 
 
+# ------------------------------------------------------------------ 盘口信号回测
+
+async def check_backtest(sample: list[tuple[str, str | None]], days: int = 120) -> dict[str, Any]:
+    """近期盘口信号命中率：用样本股的日线直接复用线上 _intraday_score。
+
+    与独立回测脚本 backtest_intraday.py 同一套逻辑（该脚本支持完整股票池/自测），
+    这里仅取样本股快速估算：总分分桶单调性 + 各信号命中率与校准建议。
+    不触网失败时返回 ok=False，不影响整体自检。
+    """
+    from backtest_intraday import run_backtest, signal_labels
+    import statistics
+
+    codes = [c for c, _m in sample]
+    try:
+        res = await asyncio.wait_for(run_backtest(codes, days), timeout=TIMEOUT + 10)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"回测失败: {_err_text(exc)}"}
+    samples = res.get("samples") or []
+    if len(samples) < 30:
+        return {"ok": False, "error": f"回测样本不足（{len(samples)} 个）", "samples": len(samples)}
+
+    base_up = sum(1 for s in samples if s["next_ret"] > 0) / len(samples)
+    base_avg = statistics.mean(s["next_ret"] for s in samples)
+
+    # 总分分桶：看评分方向单调性
+    buckets: list[dict[str, Any]] = []
+    for label, fn in [
+        ("≥+6",  lambda s: s["score"] >= 6),
+        ("+3~+5", lambda s: 3 <= s["score"] <= 5),
+        ("+1~+2", lambda s: 1 <= s["score"] <= 2),
+        ("0",     lambda s: s["score"] == 0),
+        ("-1~-2", lambda s: -2 <= s["score"] <= -1),
+        ("-3~-5", lambda s: -5 <= s["score"] <= -3),
+        ("≤-6",   lambda s: s["score"] <= -6),
+    ]:
+        sub = [s for s in samples if fn(s)]
+        if not sub:
+            continue
+        up = sum(1 for s in sub if s["next_ret"] > 0) / len(sub)
+        buckets.append({
+            "bucket": label, "n": len(sub),
+            "up_rate": round(up * 100, 1),
+            "vs_base": round((up - base_up) * 100, 1),
+            "avg_ret": round(statistics.mean(s["next_ret"] for s in sub), 2),
+        })
+
+    # 各信号命中率
+    from backtest_intraday import SIGNAL_RULES
+    grouped: dict[str, list[dict]] = {}
+    for s in samples:
+        for label, bullish in s.get("labels", []):
+            grouped.setdefault(label, []).append({**s, "bullish": bullish})
+    signals: list[dict[str, Any]] = []
+    for label, _fn, bullish in SIGNAL_RULES:
+        sub = grouped.get(label, [])
+        n = len(sub)
+        if not n:
+            continue
+        hit = sum(1 for s in sub if (s["next_ret"] > 0) == s["bullish"])
+        hit_rate = hit / n
+        up = sum(1 for s in sub if s["next_ret"] > 0) / n
+        signals.append({
+            "signal": label,
+            "bullish": bullish,
+            "n": n,
+            "hit_rate": round(hit_rate * 100, 1),
+            "up_rate": round(up * 100, 1),
+            "avg_ret": round(statistics.mean(s["next_ret"] for s in sub), 2),
+            "advice": _backtest_advice(hit_rate, base_up, n),
+        })
+    signals.sort(key=lambda x: (-x["hit_rate"], x["signal"]))
+
+    return {
+        "ok": True,
+        "samples": len(samples),
+        "stocks": len(res.get("per_stock") or []),
+        "base_up_rate": round(base_up * 100, 1),
+        "base_avg_ret": round(base_avg, 2),
+        "buckets": buckets,
+        "signals": signals,
+    }
+
+
+def _backtest_advice(hit_rate: float, base_rate: float, n: int) -> str:
+    """与回测脚本同口径的校准建议。"""
+    if n < 50:
+        return "样本不足，暂不调整"
+    delta = hit_rate - base_rate
+    if delta >= 0.05:
+        return "有效，可维持或上调权重"
+    if delta >= 0.02:
+        return "有效，权重可维持"
+    if delta >= -0.03:
+        return "偏弱，建议下调权重"
+    return "反向/无效，建议大幅下调或检查方向"
+
+
 # ------------------------------------------------------------------ 报告
 
 def _cap_label(cap: str) -> str:
@@ -260,6 +357,9 @@ async def run_diagnostics(code: str | None) -> dict[str, Any]:
     if not quote_ok:
         report["issues"].append("全部行情源不可用，看板/详情将无法获取行情")
 
+    # 盘口信号近期命中率（样本股快速回测；失败不阻塞自检）
+    report["backtest"] = await check_backtest(sample)
+
     return report
 
 
@@ -332,6 +432,25 @@ def render_text(report: dict[str, Any]) -> str:
         if n is not None:
             a(_status_line(n["ok"], f"资讯 {'✓' if n['ok'] else n['error']}"
                                     f"{(' 条数:' + str(n['count']) + ' 最新:' + str(n['last_date'])) if n.get('ok') else ''}"))
+
+    # ---- 盘口信号近期命中率
+    bt = report.get("backtest")
+    a("")
+    a("-" * 62)
+    a("盘口信号近期命中率（样本股快速回测）")
+    if bt and bt.get("ok"):
+        a(f"样本: {bt['samples']} 个 / {bt['stocks']} 只 | 基线次日上涨率 {bt['base_up_rate']}% "
+          f"平均涨跌 {bt['base_avg_ret']:+.2f}%")
+        a(f"{'分桶':<7}{'样本':>6}{'次日涨率':>10}{'vs基线':>9}{'平均涨跌':>9}")
+        for b in bt["buckets"]:
+            a(f"{b['bucket']:<7}{b['n']:>6}{b['up_rate']:>9.1f}%{b['vs_base']:>+8.1f}%{b['avg_ret']:>+8.2f}%")
+        a(f"{'信号':<7}{'方向':<4}{'样本':>6}{'命中率':>9}{'次日涨率':>10}{'平均涨跌':>9}  校准建议")
+        for s in bt["signals"]:
+            a(f"{s['signal']:<7}{'看多' if s['bullish'] else '看空':<4}{s['n']:>6}"
+              f"{s['hit_rate']:>8.1f}%{s['up_rate']:>9.1f}%{s['avg_ret']:>+8.2f}%  {s['advice']}")
+        a("提示: 命中=看多信号次日涨/看空信号次日跌；日线近似收盘时点，样本<50 仅参考。")
+    else:
+        a(_status_line(False, f"盘口回测: {(bt or {}).get('error', '未执行')}"))
 
     a("")
     a("-" * 62)

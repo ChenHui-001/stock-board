@@ -125,6 +125,7 @@
     const errs = providers.filter(function (p) { return providerHealth(p) === 'err'; });
     const warns = providers.filter(function (p) { return providerHealth(p) === 'warn'; });
     const unhealthy = errs.length + (warns.length ? 1 : 0) + (tkeys.length ? 1 : 0);
+
     let cls = 'ok';
     if (errs.length || !providers.length) cls = 'err';
     else if (unhealthy) cls = 'warn';
@@ -209,6 +210,51 @@
     parts.push('<div class="ds-sub">行情源可用：' + (result.quote_sources_ok || []).length +
       ' 个' + ((result.quote_sources_ok || []).length ? '（' + result.quote_sources_ok.join('、') + '）' : '') +
       '<br>最新行情日期：' + (result.latest_trade_date || '--'));
+
+    // ---- 盘口信号近期命中率（与回测脚本同口径）
+    const bt = result.backtest;
+    if (bt && bt.ok) {
+      const btParts = [];
+      btParts.push('<div class="ds-bt-head">盘口信号近期命中率 <span class="ds-faint">' +
+        bt.samples + ' 样本 / ' + bt.stocks + ' 只 · 基线 ' + bt.base_up_rate + '%</span></div>');
+      // 分桶：vs基线>0 绿色、<0 红色
+      const buckRow = bt.buckets || [];
+      if (buckRow.length) {
+        btParts.push('<div class="ds-bt-buckets">' + buckRow.map(function (b) {
+          const cls = b.vs_base >= 2 ? 'up' : (b.vs_base <= -2 ? 'down' : 'flat');
+          return '<span class="ds-bt-bucket ' + cls + '" title="样本 ' + b.n + ' · 平均涨跌 ' + b.avg_ret + '%">' +
+            U.escapeHtml(b.bucket) + ' ' + b.up_rate + '%</span>';
+        }).join('') + '</div>');
+      }
+      // 有效/反向信号摘要（样本≥50 才提示）
+      const solid = (bt.signals || []).filter(function (s) { return s.n >= 50; });
+      const strong = solid.filter(function (s) {
+        return s.advice.indexOf('上调') >= 0 || s.advice.indexOf('维持') >= 0;
+      });
+      const weak = solid.filter(function (s) { return s.advice.indexOf('下调') >= 0 || s.advice.indexOf('反向') >= 0; });
+      if (strong.length) {
+        btParts.push('<div class="ds-bt-note ok">有效：' +
+          strong.map(function (s) { return U.escapeHtml(s.signal) + ' ' + s.hit_rate + '%'; }).join('、') + '</div>');
+      }
+      if (weak.length) {
+        btParts.push('<div class="ds-bt-note warn">偏弱/反向：' +
+          weak.map(function (s) { return U.escapeHtml(s.signal) + ' ' + s.hit_rate + '%'; }).join('、') + '</div>');
+      }
+      btParts.push('<div class="ds-bt-detail" style="display:none">');
+      btParts.push((bt.signals || []).map(function (s) {
+        return '<div class="ds-bt-row"><span>' + U.escapeHtml(s.signal) +
+          (s.bullish ? ' 看多' : ' 看空') + '</span><span>n=' + s.n + '</span>' +
+          '<span class="' + (s.hit_rate >= bt.base_up_rate + 2 ? 'up' : s.hit_rate <= bt.base_up_rate - 2 ? 'down' : '') + '">命中 ' + s.hit_rate + '%</span>' +
+          '<span class="ds-faint">' + U.escapeHtml(s.advice) + '</span></div>';
+      }).join(''));
+      btParts.push('</div>');
+      btParts.push('<button class="btn btn-ghost btn-sm" id="ds-bt-toggle">' +
+        (bt.signals || []).length + ' 个信号明细</button>');
+      parts.push('<div class="ds-bt">' + btParts.join('') + '</div>');
+    } else if (bt && bt.error) {
+      parts.push('<div class="ds-sub ds-issues">盘口回测：' + U.escapeHtml(bt.error) + '</div>');
+    }
+
     const issues = result.issues || [];
     if (issues.length) {
       parts.push('<div class="ds-sub ds-issues">⚠ 发现 ' + issues.length + ' 个问题：<br>' +
@@ -298,6 +344,14 @@
     if (checkBtn) checkBtn.addEventListener('click', stop(runDsCheck));
     const recheckBtn = document.getElementById('ds-recheck');
     if (recheckBtn) recheckBtn.addEventListener('click', stop(runDsCheck));
+    const btToggle = document.getElementById('ds-bt-toggle');
+    if (btToggle) btToggle.addEventListener('click', stop(function () {
+      const detail = document.querySelector('#ds-popover .ds-bt-detail');
+      if (!detail) return;
+      const open = detail.style.display !== 'block';
+      detail.style.display = open ? 'block' : 'none';
+      btToggle.textContent = open ? '收起信号明细' : (document.querySelectorAll('#ds-popover .ds-bt-row').length) + ' 个信号明细';
+    }));
     const backBtn = document.getElementById('ds-back');
     if (backBtn) backBtn.addEventListener('click', stop(function () {
       dsState.view = 'meta';

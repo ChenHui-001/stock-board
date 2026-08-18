@@ -96,13 +96,15 @@ async def fetch_bars(code: str, days: int) -> tuple[str, list[Bar]]:
         return f"失败({exc})", []
 
 
-async def run(codes: list[str], days: int) -> dict:
+async def run_backtest(codes: list[str], days: int, verbose: bool = False) -> dict:
+    """核心回测：拉日线逐日打分，统计次日表现。供 CLI / 数据源自检 / 面板复用。"""
     samples: list[dict] = []
     per_stock: list[dict] = []
     for code in codes:
         src, bars = await fetch_bars(code, days)
         if len(bars) < 30:
-            print(f"  [{code}] K线不足: {src}")
+            if verbose:
+                print(f"  [{code}] K线不足: {src}")
             continue
         # 需要前一根收盘价与前 5 日均量，且要留一根给「次日」
         usable = 0
@@ -128,9 +130,14 @@ async def run(codes: list[str], days: int) -> dict:
             })
             usable += 1
         per_stock.append({"code": code, "source": src, "usable": usable})
-        print(f"  [{code}] 源={src} 有效样本={usable}")
+        if verbose:
+            print(f"  [{code}] 源={src} 有效样本={usable}")
 
     return {"per_stock": per_stock, "samples": samples}
+
+
+# 兼容旧调用名
+run = run_backtest
 
 
 def render(report: dict) -> str:
@@ -248,7 +255,7 @@ def main() -> int:
 
     codes = [normalize_code(c) for c in args.codes.split(",") if normalize_code(c)]
     print(f"拉取 {len(codes)} 只股票 × {args.days} 根日线（东财→同花顺→新浪故障转移）...")
-    report = asyncio.run(run(codes, args.days))
+    report = asyncio.run(run_backtest(codes, args.days, verbose=True))
 
     text = render(report)
     print()
