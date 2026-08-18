@@ -42,6 +42,19 @@ def _fail(exc: Exception, hint: str) -> HTTPException:
     return HTTPException(status_code=503, detail=f"{hint}：{exc}")
 
 
+def _sentiment_stats(items: list[dict[str, Any]]) -> dict[str, int]:
+    """统计资讯/研报情绪分布与评分（与规则引擎口径一致：利好 +5 / 利空 -5 封顶 ±15）。"""
+    bull = sum(1 for it in items if (it.get("interpretation") or {}).get("sentiment") == "利好")
+    bear = sum(1 for it in items if (it.get("interpretation") or {}).get("sentiment") == "利空")
+    neutral = len(items) - bull - bear
+    return {
+        "bull": bull,
+        "bear": bear,
+        "neutral": neutral,
+        "score": max(-15, min(15, bull * 5 - bear * 5)),
+    }
+
+
 # ------------------------------------------------------------------ AI 并发去重
 # 同一股票并发触发分析时只执行一次 LLM 调用，其余请求等待并复用其结果。
 class _AILock:
@@ -69,13 +82,19 @@ async def _with_ai_lock(code: str, work: Callable[[], Awaitable[Any]]) -> Any:
             _ai_locks.pop(code, None)
 
 
+# AI 报告必含字段：升级后旧格式缓存缺新字段时自动作废（重新生成）
+_REQUIRED_REPORT_FIELDS = ("report_sentiment", "rating_dist", "reports_preview")
+
+
 def _cached_report(code: str) -> dict[str, Any] | None:
-    """当日缓存命中；但 LLM 配置变化后旧缓存作废（如规则引擎降级结果 -> 已配置大模型）。"""
+    """当日缓存命中；但 LLM 配置变化或字段缺失时旧缓存作废。"""
     cached = storage.get_report(code)
     if not cached:
         return None
     meta = cached.get("meta") or {}
     if meta.get("fingerprint") != llmcfg.fingerprint():
+        return None
+    if any(k not in cached for k in _REQUIRED_REPORT_FIELDS):
         return None
     return cached
 
@@ -276,11 +295,20 @@ async def stock_quote(code: str, refresh: bool = Query(False)) -> dict[str, Any]
 # ------------------------------------------------------------------ 个股资讯
 
 @router.get("/news/{code}")
-async def stock_news(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
-    """近一个月个股资讯，逐条附 AI 解读（LLM 不可用/失败时规则引擎兜底）。"""
+async def stock_news(
+    code: str,
+    days: int = Query(30, description="时间范围（天）：7/30"),
+    refresh: bool = Query(False),
+) -> dict[str, Any]:
+    """个股资讯（近一个月），逐条附 AI 解读（LLM 不可用/失败时规则引擎兜底）。
+
+    days 控制时间范围（近7天=7 / 近30天=30），资讯列表随范围联动。
+    """
     code = normalize_code(code)
     if not code:
         raise HTTPException(status_code=400, detail="股票代码不能为空")
+    if days not in (7, 30):
+        raise HTTPException(status_code=400, detail="days 仅支持 7/30")
     name = ""
     try:
         quote = await service.get_quote(code, resolve_market(code))
@@ -288,7 +316,7 @@ async def stock_news(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
     except ProviderError:
         pass  # 资讯检索不依赖名称，拿不到也能按代码搜
     try:
-        return await news_mod.get_stock_news(code, name, force=refresh)
+        return await news_mod.get_stock_news(code, name, days=days, force=refresh)
     except Exception as exc:  # noqa: BLE001
         raise _fail(exc, "获取资讯失败") from exc
 
@@ -296,13 +324,23 @@ async def stock_news(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
 # ------------------------------------------------------------------ 券商研报
 
 @router.get("/reports/{code}")
-async def stock_reports(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
-    """券商研报（同花顺个股页数据），按日期倒序：标题/机构/研究员/评级/日期。"""
+async def stock_reports(
+    code: str,
+    days: int = Query(365, description="时间范围（天）：30/90/365，0=全部"),
+    refresh: bool = Query(False),
+) -> dict[str, Any]:
+    """券商研报（同花顺个股页数据），按日期倒序：标题/机构/研究员/评级/日期。
+
+    days 控制时间范围（近1月=30 / 近3月=90 / 近1年=365 / 全部=0），
+    评级分布统计条与研报列表随范围联动。
+    """
     code = normalize_code(code)
     if not code:
         raise HTTPException(status_code=400, detail="股票代码不能为空")
+    if days not in (0, 30, 90, 365):
+        raise HTTPException(status_code=400, detail="days 仅支持 0/30/90/365")
     try:
-        return await reports_mod.get_reports(code, force=refresh)
+        return await reports_mod.get_reports(code, days=days, force=refresh)
     except Exception as exc:  # noqa: BLE001
         raise _fail(exc, "获取研报失败") from exc
 
@@ -334,7 +372,17 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             log.info("AI 分析取资讯失败（忽略，不影响分析）：%s", exc)
 
-        result = await analysis.analyze(detail, news_items)
+        # 券商研报（缓存命中即复用，失败不阻塞分析）：供 AI 判断券商观点面权重
+        report_items: list[dict[str, Any]] = []
+        report_dist: dict[str, int] = {}
+        try:
+            _reports = await reports_mod.get_reports(code, detail["quote"].get("name", ""))
+            report_items = _reports["items"]
+            report_dist = _reports.get("rating_dist") or {}
+        except Exception as exc:  # noqa: BLE001
+            log.info("AI 分析取研报失败（忽略，不影响分析）：%s", exc)
+
+        result = await analysis.analyze(detail, news_items, report_items)
         quote = detail["quote"]
         report = {
             "code": code,
@@ -345,6 +393,19 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
             "analysis": result["analysis"],
             "meta": {**result["meta"], "fingerprint": llmcfg.fingerprint()},
             "status_tags": detail["status"]["tags"],
+            # 研报面统计与关键研报预览（供前端结论下方单独展示）
+            "report_sentiment": _sentiment_stats(report_items),
+            "rating_dist": report_dist,
+            "reports_preview": [
+                {
+                    "date": r.get("date", "")[:10],
+                    "source": r.get("source", ""),
+                    "rating": r.get("rating", ""),
+                    "sentiment": (r.get("interpretation") or {}).get("sentiment", "中性"),
+                    "title": r.get("title", ""),
+                }
+                for r in report_items[:5]
+            ],
             "from_cache": False,
         }
         storage.save_report(code, report)

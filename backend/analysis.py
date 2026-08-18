@@ -17,9 +17,10 @@ ACTIONS = ["积极持仓/加仓", "持有观望", "减仓规避", "清仓离场"
 
 SYSTEM_PROMPT = """你是一名 A 股量化分析师，擅长用均线技术形态、资金流向、两融数据与市场资讯做短中期持仓决策。
 
-你会收到某只股票的全维度实时数据（JSON），其中包含「市场资讯」段（近一个月相关新闻与 AI 情绪标注）。
-请综合基本面与技术面判断：资讯可作为辅助依据，但必须基于数据本身做判断，禁止编造数据中不存在的消息面信息；
-若资讯情绪明显（如连续利好/利空），应在风险机会与操作建议中反映其权重，并在 reason 中提及。
+你会收到某只股票的全维度实时数据（JSON），其中包含「市场资讯」段（近一个月相关新闻与 AI 情绪标注）
+与「券商观点」段（近一个月券商研报与 AI 情绪标注）。
+请综合基本面与技术面判断：资讯与研报可作为辅助依据，但必须基于数据本身做判断，禁止编造数据中不存在的消息面信息；
+若资讯/研报情绪明显（如连续利好/利空、机构集中买入评级），应在风险机会与操作建议中反映其权重，并在 reason 中提及。
 
 【硬性要求】
 1. 只输出一个 JSON 对象，不要输出任何解释文字或 Markdown 代码块。
@@ -67,10 +68,15 @@ SYSTEM_PROMPT = """你是一名 A 股量化分析师，擅长用均线技术形�
 
 # ------------------------------------------------------------------ 投喂数据
 
-def build_payload(detail: dict[str, Any], news: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def build_payload(
+    detail: dict[str, Any],
+    news: list[dict[str, Any]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """把详情页数据压缩成适合投喂 LLM 的紧凑结构（需求 6.2 全维度）。
 
-    news 为近一个月相关资讯（含逐条情绪解读），作为资讯面权重投喂。
+    news 为近一个月相关资讯（含逐条情绪解读），reports 为券商研报（含逐条
+    情绪解读），分别作为资讯面 / 券商观点面权重投喂。
     """
     q = detail["quote"]
     flow_rows = detail.get("fund_flow", {}).get("rows", [])
@@ -168,6 +174,19 @@ def build_payload(detail: dict[str, Any], news: list[dict[str, Any]] | None = No
             }
             for n in (news or [])[:15]
         ],
+        "券商观点_近30日": [
+            {
+                "日期": r.get("date", "")[:10],
+                "机构": r.get("source", ""),
+                "研究员": r.get("researcher", ""),
+                "评级": r.get("rating", ""),
+                "标题": r.get("title", ""),
+                "AI情绪": (r.get("interpretation") or {}).get("sentiment", "中性"),
+                "影响程度": (r.get("interpretation") or {}).get("impact", "低"),
+                "解读": (r.get("interpretation") or {}).get("summary", ""),
+            }
+            for r in (reports or [])[:10]
+        ],
     }
 
 
@@ -190,7 +209,28 @@ def _news_score(news: list[dict[str, Any]] | None) -> tuple[int, int, int]:
     return bull, bear, neutral
 
 
-def rule_based(detail: dict[str, Any], news: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def _reports_score(reports: list[dict[str, Any]] | None) -> tuple[int, int, int]:
+    """统计券商研报情绪：返回 (利好数, 利空数, 中性数)。
+
+    与资讯一致，直接复用每条研报的 interpretation.sentiment（规则/LLM 双路径同维度）。
+    """
+    bull = bear = neutral = 0
+    for r in reports or []:
+        sentiment = (r.get("interpretation") or {}).get("sentiment", "中性")
+        if sentiment == "利好":
+            bull += 1
+        elif sentiment == "利空":
+            bear += 1
+        else:
+            neutral += 1
+    return bull, bear, neutral
+
+
+def rule_based(
+    detail: dict[str, Any],
+    news: list[dict[str, Any]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """无 LLM（或 LLM 失败）时的确定性降级分析，输出结构完全一致。"""
     q = detail["quote"]
     ma = {m["window"]: m for m in detail.get("ma", [])}
@@ -252,6 +292,11 @@ def rule_based(detail: dict[str, Any], news: list[dict[str, Any]] | None = None)
     news_pts = max(-12, min(12, bull_n * 4 - bear_n * 4))
     score += news_pts
 
+    # 券商研报面权重：机构专业判断权威性更高，每条利好 +5 / 利空 -5，封顶 ±15
+    bull_r, bear_r, _ = _reports_score(reports)
+    report_pts = max(-15, min(15, bull_r * 5 - bear_r * 5))
+    score += report_pts
+
     if score >= 28:
         action = ACTIONS[0]
         position = "可持有 7 成以上仓位，回踩不破 MA10 可加仓"
@@ -291,6 +336,10 @@ def rule_based(detail: dict[str, Any], news: list[dict[str, Any]] | None = None)
         opportunities.append(f"近30日资讯面偏暖：{bull_n} 条利好（含 {bear_n} 条利空），情绪支撑明显")
     elif bull_n == 1 and bear_n == 0:
         opportunities.append("近30日资讯面有 1 条利好信号，暂无利空扰动")
+    if bull_r >= 2:
+        opportunities.append(f"券商研报面偏暖：{bull_r} 条买入/增持评级（含 {bear_r} 条谨慎），机构认可度较高")
+    elif bull_r == 1 and bear_r == 0:
+        opportunities.append("券商研报面有 1 条买入/增持评级信号，机构关注度提升")
 
     if above <= 1:
         risks.append(f"股价仅站上 {above} 条均线，MA20={mval(20)} 压制明显（{mpos(20)}）")
@@ -310,6 +359,10 @@ def rule_based(detail: dict[str, Any], news: list[dict[str, Any]] | None = None)
         risks.append(f"近30日资讯面偏冷：{bear_n} 条利空（含 {bull_n} 条利好），情绪面承压")
     elif bear_n == 1 and bull_n == 0:
         risks.append("近30日资讯面有 1 条利空信号，需留意发酵扩散")
+    if bear_r >= 2:
+        risks.append(f"券商研报面偏冷：{bear_r} 条减持/谨慎评级，机构分歧加大，留意预期下修")
+    elif bear_r == 1 and bull_r == 0:
+        risks.append("券商研报面有 1 条减持/谨慎评级，需关注机构预期变化")
 
     if not opportunities:
         opportunities.append(f"当前价 {price:.2f} 距 20 日低点 {sr.get('low_20')} 有安全边际，超跌反弹可期")
@@ -367,6 +420,7 @@ def rule_based(detail: dict[str, Any], news: list[dict[str, Any]] | None = None)
                 f"综合评分 {score}：均线站上 {above}/4 条且{arrangement or '交织'}，"
                 f"30日主力{yi(main_total)}，{margin.get('sentiment', '两融平稳')}，{sr_state}"
                 + (f"，资讯面 {bull_n} 利好/{bear_n} 利空（计 {news_pts:+d} 分）" if (news or []) else "")
+                + (f"，研报面 {bull_r} 利好/{bear_r} 利空（计 {report_pts:+d} 分）" if (reports or []) else "")
                 + "。"
             ),
             "confidence": max(45, min(92, 68 + int(abs(score) / 3))),
@@ -438,9 +492,16 @@ def _sanitize(result: dict[str, Any], fallback: dict[str, Any], price: float | N
 
 # ------------------------------------------------------------------ 入口
 
-async def analyze(detail: dict[str, Any], news: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """news 为近一个月相关资讯（含逐条情绪解读），LLM 路径投喂全文、规则引擎按情绪加权。"""
-    fallback = rule_based(detail, news)
+async def analyze(
+    detail: dict[str, Any],
+    news: list[dict[str, Any]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """news/reports 为近一个月资讯与券商研报（含逐条情绪解读）。
+
+    LLM 路径投喂全文，规则引擎分别按资讯/研报情绪加权。
+    """
+    fallback = rule_based(detail, news, reports)
     price = detail["quote"].get("price")
     meta: dict[str, Any] = {
         "engine": "rule",
@@ -448,13 +509,14 @@ async def analyze(detail: dict[str, Any], news: list[dict[str, Any]] | None = No
         "generated_at": now().strftime("%Y-%m-%d %H:%M:%S"),
         "degraded_reason": "",
         "news_count": len(news or []),
+        "reports_count": len(reports or []),
     }
 
     if not llm.available():
         meta["degraded_reason"] = "未配置 LLM_API_KEY，使用内置规则引擎"
-        return {"analysis": fallback, "meta": meta, "input": build_payload(detail, news)}
+        return {"analysis": fallback, "meta": meta, "input": build_payload(detail, news, reports)}
 
-    payload = build_payload(detail, news)
+    payload = build_payload(detail, news, reports)
     import json as _json
 
     user = (

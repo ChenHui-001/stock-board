@@ -144,8 +144,8 @@ class ThsProvider(Provider):
                     url=str(row.get("url") or "").strip(),
                 )
             )
-        # 按日期倒序（新→旧）
+        # 按日期倒序（新→旧）。返回全量（上限防滥用），由组装层负责截断展示与评级统计
         out.sort(key=lambda r: r.date, reverse=True)
         if not out:
             raise ProviderError("同花顺未返回研报")
-        return out[:limit]
+        return out[:max(limit, 200)]

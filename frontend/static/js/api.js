@@ -83,11 +83,17 @@
         method: 'POST'
       });
     },
-    news: function (code, refresh) {
-      return request('/api/news/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''));
+    news: function (code, refresh, days) {
+      var q = [];
+      if (refresh) q.push('refresh=1');
+      if (days != null) q.push('days=' + days);
+      return request('/api/news/' + encodeURIComponent(code) + (q.length ? '?' + q.join('&') : ''));
     },
-    reports: function (code, refresh) {
-      return request('/api/reports/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''));
+    reports: function (code, refresh, days) {
+      var q = [];
+      if (refresh) q.push('refresh=1');
+      if (days != null) q.push('days=' + days);
+      return request('/api/reports/' + encodeURIComponent(code) + (q.length ? '?' + q.join('&') : ''));
     },
     llmConfig: function () {
       return request('/api/llm/config');

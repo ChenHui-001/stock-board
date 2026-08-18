@@ -9,6 +9,59 @@
     '清仓离场': 'act-sell'
   };
 
+  const RATING_CLASS = {
+    '买入': 'rate-buy',
+    '增持': 'rate-over',
+    '中性': 'rate-flat',
+    '减持': 'rate-bear',
+    '卖出': 'rate-sell'
+  };
+  const SENT_CLASS = { '利好': 'sent-bull', '利空': 'sent-bear', '中性': 'sent-flat' };
+
+  // 评级分布条（与研报页签一致）
+  const RATE_COLOR = {
+    '买入': 'rgba(245,70,93,.85)',
+    '增持': 'rgba(251,191,36,.85)',
+    '中性': 'rgba(148,163,184,.75)',
+    '减持': 'rgba(23,178,106,.8)',
+    '卖出': 'rgba(71,85,105,.8)'
+  };
+  const RATE_ORDER = ['买入', '增持', '中性', '减持', '卖出'];
+
+  function renderRatingDist(dist) {
+    const entries = Object.entries(dist || {}).filter(function (e) { return e[1] > 0; });
+    if (!entries.length) return null;
+    const total = entries.reduce(function (s, e) { return s + e[1]; }, 0);
+    const ordered = RATE_ORDER
+      .map(function (r) { return [r, dist[r] || 0]; })
+      .filter(function (e) { return e[1] > 0; });
+    const others = entries.filter(function (e) { return RATE_ORDER.indexOf(e[0]) < 0; });
+    const all = ordered.concat(others);
+
+    const wrap = U.el('div', 'report-dist');
+    const bar = U.el('div', 'report-dist-bar');
+    all.forEach(function (e) {
+      const seg = U.el('div', 'report-dist-seg');
+      seg.style.width = (e[1] / total * 100).toFixed(1) + '%';
+      seg.style.background = RATE_COLOR[e[0]] || 'rgba(148,163,184,.6)';
+      seg.title = e[0] + ' ' + e[1] + ' 份';
+      bar.appendChild(seg);
+    });
+    wrap.appendChild(bar);
+
+    const legend = U.el('div', 'report-dist-legend');
+    all.forEach(function (e) {
+      const item = U.el('span', 'report-dist-item');
+      const dot = U.el('i', '', '');
+      dot.style.background = RATE_COLOR[e[0]] || 'rgba(148,163,184,.6)';
+      item.appendChild(dot);
+      item.appendChild(document.createTextNode(e[0] + ' ' + e[1] + ' · ' + Math.round(e[1] / total * 100) + '%'));
+      legend.appendChild(item);
+    });
+    wrap.appendChild(legend);
+    return wrap;
+  }
+
   const state = { code: null, name: '', report: null, loading: false };
 
   function root() { return document.getElementById('modal-root'); }
@@ -136,6 +189,9 @@
     verdict.appendChild(levels);
     host.appendChild(verdict);
 
+    // ---- 券商研报面（情绪统计 + 最近关键研报）
+    host.appendChild(reportSection(report));
+
     // ---- 行情趋势分析
     host.appendChild(textSection('一、行情趋势分析', a.trend, [
       ['短期', 'short'], ['中期', 'mid'], ['中长期', 'long'], ['技术形态', 'pattern']
@@ -215,6 +271,59 @@
     acts.appendChild(againBtn);
   }
 
+  function reportSection(report) {
+    const rsent = report.report_sentiment || {};
+    const rprev = report.reports_preview || [];
+    if (rsent.bull == null && !rprev.length) return document.createDocumentFragment();
+
+    const sec = U.el('div', 'ai-section');
+    sec.appendChild(U.el('div', 'ai-section-title', '券商研报面（近 30 日）'));
+
+    // 情绪统计条：利好 / 利空 / 中性 + 评分
+    const stats = U.el('div', 'report-stats');
+    const mk = function (label, n, cls) {
+      const node = U.el('span', 'report-stat ' + cls);
+      node.appendChild(U.el('b', '', String(n)));
+      node.appendChild(document.createTextNode(' ' + label));
+      return node;
+    };
+    stats.appendChild(mk('利好', rsent.bull || 0, 'bull'));
+    stats.appendChild(mk('利空', rsent.bear || 0, 'bear'));
+    stats.appendChild(mk('中性', rsent.neutral || 0, 'flat'));
+    if (rsent.score != null) {
+      const sc = rsent.score;
+      const scNode = U.el('span', 'report-score ' + (sc > 0 ? 'bull' : sc < 0 ? 'bear' : 'flat'));
+      scNode.textContent = (sc > 0 ? '+' : '') + sc + ' 分';
+      stats.appendChild(scNode);
+    }
+    sec.appendChild(stats);
+
+    // 评级分布统计条（近一年，与研报页签一致）
+    const distNode = renderRatingDist(report.rating_dist);
+    if (distNode) sec.appendChild(distNode);
+
+    // 最近关键研报
+    if (rprev.length) {
+      const ul = U.el('ul', 'report-list');
+      rprev.forEach(function (r) {
+        const li = U.el('li', 'report-item');
+        const head = U.el('div', 'report-item-head');
+        if (r.date) head.appendChild(U.el('span', 'report-item-date', r.date));
+        if (r.source) head.appendChild(U.el('span', 'news-source', r.source));
+        if (r.rating) {
+          head.appendChild(U.el('span', 'rate-tag ' + (RATING_CLASS[r.rating] || 'rate-flat'), '评级 ' + r.rating));
+        }
+        const sent = r.sentiment || '中性';
+        head.appendChild(U.el('span', 'sent-tag ' + (SENT_CLASS[sent] || 'sent-flat'), sent));
+        li.appendChild(head);
+        if (r.title) li.appendChild(U.el('div', 'report-item-title', r.title));
+        ul.appendChild(li);
+      });
+      sec.appendChild(ul);
+    }
+    return sec;
+  }
+
   function textSection(title, obj, fields) {
     const sec = U.el('div', 'ai-section');
     sec.appendChild(U.el('div', 'ai-section-title', title));
@@ -272,6 +381,23 @@
     (r.opportunities || []).forEach(function (x) { lines.push('  + ' + x); });
     (r.risks || []).forEach(function (x) { lines.push('  - ' + x); });
     lines.push('');
+
+    // 研报面
+    const rsent = report.report_sentiment || {};
+    const rprev = report.reports_preview || [];
+    if (rsent.bull != null || rprev.length) {
+      lines.push('■ 券商研报面：');
+      if (rsent.bull != null) {
+        lines.push('  情绪统计：利好 ' + (rsent.bull || 0) + ' / 利空 ' + (rsent.bear || 0)
+          + ' / 中性 ' + (rsent.neutral || 0)
+          + (rsent.score != null ? '（计 ' + (rsent.score > 0 ? '+' : '') + rsent.score + ' 分）' : ''));
+      }
+      rprev.forEach(function (x) {
+        lines.push('  [' + (x.date || '') + '] ' + (x.source || '')
+          + (x.rating ? ' ' + x.rating : '') + '（' + (x.sentiment || '中性') + '）' + (x.title || ''));
+      });
+      lines.push('');
+    }
     lines.push('（数据来源：公开行情接口；本内容不构成投资建议）');
     return lines.join('\n');
   }

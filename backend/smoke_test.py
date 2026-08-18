@@ -18,7 +18,7 @@ os.environ["DATA_DIR"] = _tmp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend import analysis, api, cache, llm, llmcfg, news, storage  # noqa: E402
+from backend import analysis, api, cache, llm, llmcfg, news, reports, storage  # noqa: E402
 from backend.indicators import build_ma, support_resistance  # noqa: E402
 from backend.providers import registry  # noqa: E402
 from backend.providers.base import Bar  # noqa: E402
@@ -119,6 +119,52 @@ def test_news_interpret() -> None:
     payload = analysis.build_payload(detail, news_items)
     check("投喂数据含资讯段", len(payload.get("市场资讯_近30日") or []) == 3)
 
+    # 券商研报面进规则引擎：利好加分、封顶 ±15、无研报不引用
+    report_items = [
+        {"rating": "买入", "title": "业绩预增", "source": "国海证券", "date": "2026-08-10 09:00:00",
+         "interpretation": {"sentiment": "利好", "impact": "高", "summary": "正面"}},
+        {"rating": "增持", "title": "盈利增速抬升", "source": "平安证券", "date": "2026-08-05 09:00:00",
+         "interpretation": {"sentiment": "利好", "impact": "中", "summary": "正面"}},
+        {"rating": "减持", "title": "业绩下滑", "source": "某券商", "date": "2026-08-01 09:00:00",
+         "interpretation": {"sentiment": "利空", "impact": "中", "summary": "负面"}},
+    ]
+    fb_r = analysis.rule_based(detail, None, report_items)
+    check("研报评分写入建议依据", "研报面 2 利好/1 利空（计 +5 分）" in fb_r["advice"]["reason"], fb_r["advice"]["reason"])
+    check("研报情绪进机会面", any("券商研报面偏暖" in o for o in fb_r["risk"]["opportunities"]))
+    fb_no_r = analysis.rule_based(detail, None, None)
+    check("无研报不引用", "研报面" not in fb_no_r["advice"]["reason"])
+    payload_r = analysis.build_payload(detail, None, report_items)
+    check("投喂数据含券商观点段", len(payload_r.get("券商观点_近30日") or []) == 3)
+
+
+# ------------------------------------------------------------------ 研报解读
+def test_reports_interpret() -> None:
+    # 规则解读：评级本身即信号 + 标题关键词修正
+    buy = reports.rule_interpret({"rating": "买入", "title": "业绩预增，目标价上调", "source": "国海证券"})
+    over = reports.rule_interpret({"rating": "增持", "title": "盈利增速抬升", "source": "平安证券"})
+    flat = reports.rule_interpret({"rating": "中性", "title": "经营平稳", "source": "华泰证券"})
+    sell = reports.rule_interpret({"rating": "减持", "title": "业绩下滑风险", "source": "某券商"})
+    check("研报规则解读: 买入=利好", buy["sentiment"] == "利好" and buy["engine"] == "rule", str(buy))
+    check("研报规则解读: 增持=利好", over["sentiment"] == "利好", str(over))
+    check("研报规则解读: 中性", flat["sentiment"] == "中性", str(flat))
+    check("研报规则解读: 减持=利空", sell["sentiment"] == "利空", str(sell))
+    # 评级中性但标题强利好词 -> 利好（关键词修正）
+    mixed = reports.rule_interpret({"rating": "中性", "title": "业绩超预期大增", "source": "某券商"})
+    check("研报规则解读: 关键词修正评级", mixed["sentiment"] == "利好", str(mixed))
+
+    # 近一年评级分布统计：只计入 since 之后的条目
+    dist = reports.rating_distribution(
+        [
+            {"date": "2026-08-01", "rating": "买入"},
+            {"date": "2026-07-01", "rating": "增持"},
+            {"date": "2026-06-01", "rating": "增持"},
+            {"date": "2025-06-01", "rating": "买入"},   # 一年前，应排除
+            {"date": "2026-05-01", "rating": ""},        # 无评级 -> --
+        ],
+        "2025-08-17",
+    )
+    check("研报评级分布统计", dist == {"买入": 1, "增持": 2, "--": 1}, str(dist))
+
 
 # ------------------------------------------------------------------ K 线滞后判定
 def test_kline_stale() -> None:
@@ -213,6 +259,7 @@ def main() -> int:
     test_fingerprint()
     test_model_filter()
     test_news_interpret()
+    test_reports_interpret()
     test_kline_stale()
     test_cache()
     test_ai_lock()

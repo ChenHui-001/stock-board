@@ -19,7 +19,13 @@
     '卖出': 'rate-sell'
   };
 
-  const state = { code: null, name: '', loading: false, tab: 'news' };
+  const state = { code: null, name: '', loading: false, tab: 'news', days: 365, newsDays: 30 };
+
+  // 时间范围筛选：资讯（近7天/近30天）+ 研报（近1月/近3月/近1年/全部）
+  const NEWS_RANGE_OPTS = [['近7天', 7], ['近30天', 30]];
+  const REPORT_RANGE_OPTS = [
+    ['近1月', 30], ['近3月', 90], ['近1年', 365], ['全部', 0]
+  ];
 
   function root() { return document.getElementById('modal-root'); }
   function body() { return document.getElementById('modal-body'); }
@@ -42,6 +48,8 @@
     state.code = code;
     state.name = name || code;
     state.tab = 'news';
+    state.days = 365;
+    state.newsDays = 30;
 
     titleNode().textContent = '股票资讯 · ' + state.name + ' (' + code + ')';
     actionsNode().innerHTML = '';
@@ -75,10 +83,10 @@
     actionsNode().innerHTML = '';
     try {
       if (state.tab === 'reports') {
-        const data = await API.reports(state.code, true);
+        const data = await API.reports(state.code, true, state.days);
         renderReports(data);
       } else {
-        const data = await API.news(state.code, true);
+        const data = await API.news(state.code, true, state.newsDays);
         renderNews(data);
       }
     } catch (err) {
@@ -131,14 +139,35 @@
     state.loading = true;
     try {
       const data = tab === 'reports'
-        ? await API.reports(state.code, false)
-        : await API.news(state.code, false);
+        ? await API.reports(state.code, false, state.days)
+        : await API.news(state.code, false, state.newsDays);
       if (tab === 'reports') renderReports(data); else renderNews(data);
     } catch (err) {
       renderError(err.message, tab);
     } finally {
       state.loading = false;
     }
+  }
+
+  // 时间范围筛选条：资讯（近7天/近30天）+ 研报（近1月/近3月/近1年/全部）
+  function renderRangeFilter(tab) {
+    const opts = tab === 'reports' ? REPORT_RANGE_OPTS : NEWS_RANGE_OPTS;
+    const cur = tab === 'reports' ? state.days : state.newsDays;
+    const wrap = U.el('div', 'report-range');
+    wrap.appendChild(U.el('span', 'report-range-label', '时间范围'));
+    opts.forEach(function (opt) {
+      const btn = U.el('button', 'range-btn' + (cur === opt[1] ? ' active' : ''), opt[0]);
+      btn.dataset.days = String(opt[1]);
+      btn.onclick = function (e) {
+        e.stopPropagation();
+        if (state.loading || cur === opt[1]) return;
+        if (tab === 'reports') state.days = opt[1]; else state.newsDays = opt[1];
+        renderLoading(tab);
+        loadTab(tab);
+      };
+      wrap.appendChild(btn);
+    });
+    return wrap;
   }
 
   // ---------------------------------------------------------- 资讯
@@ -148,10 +177,11 @@
     const host = body();
     host.innerHTML = '';
     host.appendChild(renderTabs());
+    host.appendChild(renderRangeFilter('news'));
 
     if (!items.length) {
-      host.appendChild(emptyBox('近一个月暂无相关资讯',
-        (meta && meta.error) || '没有检索到该股票近 30 天的新闻', '🗞️'));
+      host.appendChild(emptyBox('暂无相关资讯',
+        (meta && meta.error) || '该时间范围内没有检索到相关新闻', '🗞️'));
       appendMeta(meta);
       appendActions('refresh');
       return;
@@ -210,12 +240,60 @@
   }
 
   // ---------------------------------------------------------- 研报
+  const RATE_COLOR = {
+    '买入': 'rgba(245,70,93,.85)',
+    '增持': 'rgba(251,191,36,.85)',
+    '中性': 'rgba(148,163,184,.75)',
+    '减持': 'rgba(23,178,106,.8)',
+    '卖出': 'rgba(71,85,105,.8)'
+  };
+  const RATE_ORDER = ['买入', '增持', '中性', '减持', '卖出'];
+
+  function renderRatingDist(dist) {
+    const entries = Object.entries(dist || {}).filter(function (e) { return e[1] > 0; });
+    if (!entries.length) return null;
+    const total = entries.reduce(function (s, e) { return s + e[1]; }, 0);
+    const ordered = RATE_ORDER
+      .map(function (r) { return [r, dist[r] || 0]; })
+      .filter(function (e) { return e[1] > 0; });
+    const others = entries.filter(function (e) { return RATE_ORDER.indexOf(e[0]) < 0; });
+    const all = ordered.concat(others);
+
+    const wrap = U.el('div', 'report-dist');
+    const bar = U.el('div', 'report-dist-bar');
+    all.forEach(function (e) {
+      const seg = U.el('div', 'report-dist-seg');
+      seg.style.width = (e[1] / total * 100).toFixed(1) + '%';
+      seg.style.background = RATE_COLOR[e[0]] || 'rgba(148,163,184,.6)';
+      seg.title = e[0] + ' ' + e[1] + ' 份';
+      bar.appendChild(seg);
+    });
+    wrap.appendChild(bar);
+
+    const legend = U.el('div', 'report-dist-legend');
+    all.forEach(function (e) {
+      const item = U.el('span', 'report-dist-item');
+      const dot = U.el('i', '', '');
+      dot.style.background = RATE_COLOR[e[0]] || 'rgba(148,163,184,.6)';
+      item.appendChild(dot);
+      item.appendChild(document.createTextNode(e[0] + ' ' + e[1] + ' · ' + Math.round(e[1] / total * 100) + '%'));
+      legend.appendChild(item);
+    });
+    wrap.appendChild(legend);
+    return wrap;
+  }
+
   function renderReports(data) {
     const meta = data.meta || {};
     const items = data.items || [];
     const host = body();
     host.innerHTML = '';
     host.appendChild(renderTabs());
+    host.appendChild(renderRangeFilter('reports'));
+
+    // 评级分布统计条（当前时间范围）
+    const distNode = renderRatingDist(data.rating_dist);
+    if (distNode) host.appendChild(distNode);
 
     if (!items.length) {
       host.appendChild(emptyBox('暂无券商研报',
@@ -247,8 +325,15 @@
       const tags = U.el('div', 'news-interp-tags');
       const rating = item.rating || '--';
       tags.appendChild(U.el('span', 'rate-tag ' + (RATING_CLASS[rating] || 'rate-flat'), '评级 ' + rating));
-      tags.appendChild(U.el('span', 'interp-engine', '同花顺研报数据'));
+      // AI 解读（与资讯解读同款：LLM / 规则双路径）
+      const itp = item.interpretation || {};
+      const sentCls = SENTIMENT_CLASS[itp.sentiment] || 'sent-flat';
+      tags.appendChild(U.el('span', 'sent-tag ' + sentCls, (itp.sentiment || '中性') + (itp.impact ? ' · ' + itp.impact + '影响' : '')));
+      tags.appendChild(U.el('span', 'interp-engine', itp.engine === 'llm'
+        ? 'AI 解读' + (itp.model ? ' · ' + itp.model : '')
+        : '规则解读'));
       box.appendChild(tags);
+      if (itp.summary) box.appendChild(U.el('div', 'news-interp-text', itp.summary));
       card.appendChild(box);
 
       host.appendChild(card);

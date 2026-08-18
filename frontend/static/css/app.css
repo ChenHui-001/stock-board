@@ -795,6 +795,65 @@ main {
 .ai-list.good li::marker { color: var(--up); }
 .ai-list.bad li::marker { color: var(--down); }
 
+/* 券商研报面区块 */
+.report-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.report-stat {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+}
+.report-stat b { font-size: 13px; margin-right: 2px; }
+.report-stat.bull b { color: var(--up); }
+.report-stat.bear b { color: var(--down); }
+.report-stat.flat b { color: var(--text-dim); }
+.report-score {
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 3px 12px;
+  border-radius: 10px;
+  margin-left: auto;
+}
+.report-score.bull { background: rgba(245, 70, 93, .16); color: #ff8fa0; border: 1px solid rgba(245, 70, 93, .4); }
+.report-score.bear { background: rgba(23, 178, 106, .14); color: #6ee7a8; border: 1px solid rgba(23, 178, 106, .4); }
+.report-score.flat { background: rgba(148, 163, 184, .14); color: #b6c2d4; border: 1px solid rgba(148, 163, 184, .35); }
+.report-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.report-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--bg-elev-1);
+}
+.report-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.report-item-date { color: var(--text-dim); }
+.report-item-title {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
 .ai-meta {
   margin-top: 16px;
   padding-top: 12px;
@@ -897,6 +956,67 @@ main {
   margin-bottom: 14px;
   border-bottom: 1px solid var(--line);
   padding-bottom: 8px;
+}
+/* 研报时间范围筛选 */
+.report-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.report-range-label {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin-right: 2px;
+}
+.range-btn {
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev-1);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all .15s;
+}
+.range-btn:hover { color: var(--text); border-color: var(--accent); }
+.range-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* 研报评级分布统计条 */
+.report-dist {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-1);
+}
+.report-dist-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+  margin-bottom: 8px;
+}
+.report-dist-seg { height: 100%; min-width: 2px; transition: width .3s; }
+.report-dist-legend {
+  display: flex;
+  gap: 6px 14px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.report-dist-item { display: inline-flex; align-items: center; gap: 5px; }
+.report-dist-item i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 .news-tab {
   font-size: 13px;

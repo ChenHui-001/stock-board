@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import timedelta
 from typing import Any
 
 from . import llm
@@ -174,10 +175,11 @@ async def get_stock_news(
     market = resolve_market(code)
 
     raw_key = f"news:raw:{code}"
-    interp_key = f"news:interp:{code}"
+    interp_key = f"news:interp:{code}:{days}"
 
     async def load_raw() -> tuple[list[dict[str, Any]], str]:
-        items, src = await registry().news_src(code, market, name, days, limit)
+        # 始终抓取 NEWS_DAYS（30 天）全量进缓存，days 过滤在缓存外用内存做（与研报一致）
+        items, src = await registry().news_src(code, market, name, NEWS_DAYS, limit)
         return (
             [
                 {
@@ -194,12 +196,17 @@ async def get_stock_news(
         )
 
     try:
-        items, src_name = await cache.get_or_set(raw_key, RAW_TTL, load_raw, force=force)
+        all_items, src_name = await cache.get_or_set(raw_key, RAW_TTL, load_raw, force=force)
     except ProviderError as exc:
         return {"items": [], "meta": {"error": f"资讯获取失败：{exc}", "engine": "none", "total": 0, "source": ""}}
 
+    # 按时间范围过滤（days 为展示窗口；<=0 或 >=NEWS_DAYS 时不过滤）
+    since = (now() - timedelta(days=days)).strftime("%Y-%m-%d") if 0 < days < NEWS_DAYS else ""
+    ranged = [it for it in all_items if not since or (it.get("date", "") or "")[:10] >= since]
+    items = ranged[:limit]
+
     if not items:
-        return {"items": [], "meta": {"error": "近一个月暂无相关资讯", "engine": "none", "total": 0, "source": src_name}}
+        return {"items": [], "meta": {"error": "该时间范围内暂无相关资讯", "engine": "none", "total": 0, "source": src_name, "days": days}}
 
     async def load_interp() -> list[dict[str, Any]] | None:
         got = await _llm_interpret(items, code, name)
