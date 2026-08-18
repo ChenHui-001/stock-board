@@ -162,12 +162,21 @@ async def check_hot(p: Any) -> dict[str, Any]:
     return {"ok": True, "counts": counts}
 
 
+async def check_news(p: Any) -> dict[str, Any]:
+    ok, result, err = await _probe(p.news("600000", "SH", "浦发银行", 7, 5))
+    if not ok:
+        return {"ok": False, "error": err}
+    items = result or []
+    return {"ok": True, "count": len(items), "last_date": items[0].date[:10] if items else ""}
+
+
 # ------------------------------------------------------------------ 报告
 
 def _cap_label(cap: str) -> str:
     return {
         "quotes": "行情", "kline": "K线", "fund_flow": "资金流", "margin": "两融",
         "search": "搜索", "hot": "热门榜", "boards": "板块", "industry": "行业",
+        "news": "资讯",
     }.get(cap, cap)
 
 
@@ -188,7 +197,7 @@ async def run_diagnostics(code: str | None) -> dict[str, Any]:
         "issues": [],
     }
 
-    caps_order = ["quotes", "kline", "fund_flow", "margin", "search", "hot"]
+    caps_order = ["quotes", "kline", "fund_flow", "margin", "search", "hot", "news"]
 
     async def _check_one(p: Any) -> dict[str, Any]:
         entry: dict[str, Any] = {"name": p.name, "caps": sorted(p.caps), "results": {}}
@@ -207,6 +216,8 @@ async def run_diagnostics(code: str | None) -> dict[str, Any]:
                 entry["results"][cap] = await check_search(p)
             elif cap == "hot":
                 entry["results"][cap] = await check_hot(p)
+            elif cap == "news":
+                entry["results"][cap] = await check_news(p)
         return entry
 
     # 各源并行探测（源间无共享限流，互不干扰），整体更快
@@ -316,6 +327,11 @@ def render_text(report: dict[str, Any]) -> str:
                 a(_status_line(True, f"热门榜 {json.dumps(h['counts'], ensure_ascii=False)}"))
             else:
                 a(_status_line(False, f"热门榜: {h['error']}"))
+
+        n = r.get("news")
+        if n is not None:
+            a(_status_line(n["ok"], f"资讯 {'✓' if n['ok'] else n['error']}"
+                                    f"{(' 条数:' + str(n['count']) + ' 最新:' + str(n['last_date'])) if n.get('ok') else ''}"))
 
     a("")
     a("-" * 62)

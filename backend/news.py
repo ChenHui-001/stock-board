@@ -176,27 +176,30 @@ async def get_stock_news(
     raw_key = f"news:raw:{code}"
     interp_key = f"news:interp:{code}"
 
-    async def load_raw() -> list[dict[str, Any]]:
-        items = await registry().news(code, market, name, days, limit)
-        return [
-            {
-                "id": it.id,
-                "date": it.date,
-                "source": it.source,
-                "title": it.title,
-                "summary": it.summary,
-                "url": it.url,
-            }
-            for it in items
-        ]
+    async def load_raw() -> tuple[list[dict[str, Any]], str]:
+        items, src = await registry().news_src(code, market, name, days, limit)
+        return (
+            [
+                {
+                    "id": it.id,
+                    "date": it.date,
+                    "source": it.source,
+                    "title": it.title,
+                    "summary": it.summary,
+                    "url": it.url,
+                }
+                for it in items
+            ],
+            src,
+        )
 
     try:
-        items = await cache.get_or_set(raw_key, RAW_TTL, load_raw, force=force)
+        items, src_name = await cache.get_or_set(raw_key, RAW_TTL, load_raw, force=force)
     except ProviderError as exc:
-        return {"items": [], "meta": {"error": f"资讯获取失败：{exc}", "engine": "none", "total": 0}}
+        return {"items": [], "meta": {"error": f"资讯获取失败：{exc}", "engine": "none", "total": 0, "source": ""}}
 
     if not items:
-        return {"items": [], "meta": {"error": "近一个月暂无相关资讯", "engine": "none", "total": 0}}
+        return {"items": [], "meta": {"error": "近一个月暂无相关资讯", "engine": "none", "total": 0, "source": src_name}}
 
     async def load_interp() -> list[dict[str, Any]] | None:
         got = await _llm_interpret(items, code, name)
@@ -230,6 +233,7 @@ async def get_stock_news(
             "days": days,
             "total": len(merged),
             "engine": engine,
+            "source": src_name,
             "fetched_at": now().strftime("%Y-%m-%d %H:%M:%S"),
         },
     }

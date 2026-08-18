@@ -891,6 +891,41 @@ main {
   line-height: 1.65;
   color: var(--text-dim);
 }
+.news-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+.news-tab {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-elev-1);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all .15s;
+}
+.news-tab:hover { color: var(--text); border-color: var(--accent); }
+.news-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.rate-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+.rate-buy    { background: rgba(245, 70, 93, .16); color: #ff8fa0; border: 1px solid rgba(245, 70, 93, .4); }
+.rate-over   { background: rgba(251, 191, 36, .14); color: #fcd34d; border: 1px solid rgba(251, 191, 36, .4); }
+.rate-flat   { background: rgba(148, 163, 184, .14); color: #b6c2d4; border: 1px solid rgba(148, 163, 184, .35); }
+.rate-bear   { background: rgba(23, 178, 106, .16); color: #6ee7a8; border: 1px solid rgba(23, 178, 106, .4); }
+.rate-sell   { background: rgba(148, 163, 184, .14); color: #b6c2d4; border: 1px solid rgba(148, 163, 184, .35); }
 
 /* ------------------------------------------------------------ Toast */
 .toast-root {

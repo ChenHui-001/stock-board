@@ -1,10 +1,13 @@
-"""新浪财经数据源（辅）：实时行情 + 日线 K 线 + 资金流向兜底。必须带 Referer，否则 403。"""
+"""新浪财经数据源（辅）：实时行情 + 日线 K 线 + 资金流向 + 个股新闻兜底。必须带 Referer，否则 403。"""
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
+from typing import Any
 
-from ..utils import normalize_code, resolve_market, sina_code, to_float
-from .base import Bar, FlowDay, Provider, ProviderError, Quote, fetch
+from ..utils import TZ, normalize_code, resolve_market, sina_code, to_float
+from .base import Bar, FlowDay, NewsItem, Provider, ProviderError, Quote, fetch
 
 QUOTE_URL = "https://hq.sinajs.cn/list="
 KLINE_URL = (
@@ -26,7 +29,7 @@ def _decode(raw: bytes) -> str:
 
 class SinaProvider(Provider):
     def __init__(self) -> None:
-        super().__init__(name="sina", caps={"quotes", "kline", "fund_flow", "hot"})
+        super().__init__(name="sina", caps={"quotes", "kline", "fund_flow", "hot", "news"})
 
     async def quotes(self, keys: list[tuple[str, str]]) -> dict[str, Quote]:
         if not keys:
@@ -119,6 +122,49 @@ class SinaProvider(Provider):
             if prev:
                 bars[i].change_pct = round((bars[i].close - prev) / prev * 100, 2)
         return bars[-limit:]
+
+    # ------------------------------------------------------------ 个股新闻（网页层）
+    async def news(
+        self, code: str, market: str, name: str, days: int = 30, limit: int = 15
+    ) -> list[NewsItem]:
+        """新浪个股新闻页（vCB_AllNewsStock）抓取：纯网页 HTML，含最新交易日新闻。
+
+        东财搜索接口不可用时兜底；页面按时间倒序，过滤最近 days 天。
+        """
+        resp = await fetch(
+            f"https://vip.stock.finance.sina.com.cn/corp/go.php/vCB_AllNewsStock/symbol/{sina_code(code, market)}.phtml",
+            headers={"Referer": "https://finance.sina.com.cn"},
+        )
+        text = _decode(resp.content)
+        items = re.findall(
+            r"(\d{4}-\d{2}-\d{2})&nbsp;(\d{2}:\d{2})&nbsp;&nbsp;<a[^>]*href='([^']+)'[^>]*>(.*?)</a>",
+            text,
+        )
+        today = datetime.now(TZ).date()
+        out: list[NewsItem] = []
+        for date, ttime, url, title in items:
+            try:
+                day = datetime.strptime(date, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if (today - day).days > days:
+                continue
+            clean = re.sub(r"<[^>]+>", "", title).strip()
+            out.append(
+                NewsItem(
+                    id=url.rsplit("/", 1)[-1] or url,
+                    date=f"{date} {ttime}:00",
+                    source="新浪财经",
+                    title=clean,
+                    summary=clean,
+                    url=url.strip(),
+                )
+            )
+            if len(out) >= limit:
+                break
+        if not out:
+            raise ProviderError("新浪未返回该股票的近期资讯")
+        return out
 
     async def fund_flow(self, code: str, market: str, days: int) -> list[FlowDay]:
         """兜底口径：新浪只提供「净流入总额」与「超大单净额」，

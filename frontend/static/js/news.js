@@ -1,4 +1,7 @@
-/* 个股资讯弹窗：近一个月相关资讯，逐条附 AI 解读（LLM / 规则引擎） */
+/* 个股资讯 / 券商研报弹窗：页签切换
+ * - 资讯：近一个月相关新闻，逐条附 AI 解读（LLM / 规则引擎）
+ * - 研报：同花顺券商研报，展示标题/机构/研究员/评级/日期
+ */
 (function (global) {
   'use strict';
 
@@ -8,7 +11,15 @@
     '中性': 'sent-flat'
   };
 
-  const state = { code: null, name: '', loading: false };
+  const RATING_CLASS = {
+    '买入': 'rate-buy',
+    '增持': 'rate-over',
+    '中性': 'rate-flat',
+    '减持': 'rate-bear',
+    '卖出': 'rate-sell'
+  };
+
+  const state = { code: null, name: '', loading: false, tab: 'news' };
 
   function root() { return document.getElementById('modal-root'); }
   function body() { return document.getElementById('modal-body'); }
@@ -30,10 +41,11 @@
     if (state.loading) return;
     state.code = code;
     state.name = name || code;
+    state.tab = 'news';
 
     titleNode().textContent = '股票资讯 · ' + state.name + ' (' + code + ')';
     actionsNode().innerHTML = '';
-    renderLoading();
+    renderLoading('news');
     show();
 
     if (triggerBtn) {
@@ -44,9 +56,9 @@
 
     try {
       const data = await API.news(code, false);
-      renderList(data);
+      renderNews(data);
     } catch (err) {
-      renderError(err.message);
+      renderError(err.message, 'news');
     } finally {
       state.loading = false;
       if (triggerBtn) {
@@ -59,32 +71,37 @@
   async function refresh() {
     if (state.loading) return;
     state.loading = true;
-    renderLoading();
+    renderLoading(state.tab);
     actionsNode().innerHTML = '';
     try {
-      const data = await API.news(state.code, true);
-      renderList(data);
+      if (state.tab === 'reports') {
+        const data = await API.reports(state.code, true);
+        renderReports(data);
+      } else {
+        const data = await API.news(state.code, true);
+        renderNews(data);
+      }
     } catch (err) {
-      renderError(err.message);
+      renderError(err.message, state.tab);
     } finally {
       state.loading = false;
     }
   }
 
-  function renderLoading() {
+  function renderLoading(tab) {
     body().innerHTML =
       '<div class="ai-loading">'
       + '<div class="ai-spinner"></div>'
-      + '<div class="ai-loading-text">正在获取近一个月相关资讯…</div>'
-      + '<div class="ai-loading-sub">检索财经新闻并生成 AI 解读，请稍候</div>'
+      + '<div class="ai-loading-text">' + (tab === 'reports' ? '正在获取券商研报…' : '正在获取近一个月相关资讯…') + '</div>'
+      + '<div class="ai-loading-sub">' + (tab === 'reports' ? '从同花顺个股页抓取研报数据，请稍候' : '检索财经新闻并生成 AI 解读，请稍候') + '</div>'
       + '</div>';
   }
 
-  function renderError(msg) {
+  function renderError(msg, tab) {
     body().innerHTML =
       '<div class="empty">'
       + '<div class="empty-icon">⚠️</div>'
-      + '<div class="empty-title">资讯获取失败</div>'
+      + '<div class="empty-title">' + (tab === 'reports' ? '研报获取失败' : '资讯获取失败') + '</div>'
       + '<div class="empty-desc">' + U.escapeHtml(msg) + '</div>'
       + '</div>';
     const retry = U.el('button', 'btn btn-sm btn-primary', '重试');
@@ -93,33 +110,50 @@
     actionsNode().appendChild(retry);
   }
 
-  function renderEmpty(meta) {
-    body().innerHTML =
-      '<div class="empty">'
-      + '<div class="empty-icon">🗞️</div>'
-      + '<div class="empty-title">近一个月暂无相关资讯</div>'
-      + '<div class="empty-desc">' + U.escapeHtml((meta && meta.error) || '没有检索到该股票近 30 天的新闻') + '</div>'
-      + '</div>';
-    appendMeta(meta);
+  // ---------------------------------------------------------- 页签
+  function renderTabs() {
+    const tabs = U.el('div', 'news-tabs');
+    [['news', '资讯'], ['reports', '研报']].forEach(function (t) {
+      const btn = U.el('button', 'news-tab' + (state.tab === t[0] ? ' active' : ''), t[1]);
+      btn.onclick = function () {
+        if (state.loading || state.tab === t[0]) return;
+        state.tab = t[0];
+        actionsNode().innerHTML = '';
+        renderLoading(t[0]);
+        loadTab(t[0]);
+      };
+      tabs.appendChild(btn);
+    });
+    return tabs;
   }
 
-  function appendMeta(meta) {
-    if (!meta) return;
-    const m = U.el('div', 'ai-meta');
-    m.appendChild(U.el('span', '', '引擎：' + (meta.engine === 'llm' ? 'AI 大模型' : (meta.engine === 'rule' ? '内置规则引擎' : '--'))));
-    m.appendChild(U.el('span', '', '获取时间：' + (meta.fetched_at || '--')));
-    if (meta.total != null) m.appendChild(U.el('span', '', '共 ' + meta.total + ' 条'));
-    body().appendChild(m);
+  async function loadTab(tab) {
+    state.loading = true;
+    try {
+      const data = tab === 'reports'
+        ? await API.reports(state.code, false)
+        : await API.news(state.code, false);
+      if (tab === 'reports') renderReports(data); else renderNews(data);
+    } catch (err) {
+      renderError(err.message, tab);
+    } finally {
+      state.loading = false;
+    }
   }
 
-  function renderList(data) {
+  // ---------------------------------------------------------- 资讯
+  function renderNews(data) {
     const meta = data.meta || {};
     const items = data.items || [];
     const host = body();
     host.innerHTML = '';
+    host.appendChild(renderTabs());
 
     if (!items.length) {
-      renderEmpty(meta);
+      host.appendChild(emptyBox('近一个月暂无相关资讯',
+        (meta && meta.error) || '没有检索到该股票近 30 天的新闻', '🗞️'));
+      appendMeta(meta);
+      appendActions('refresh');
       return;
     }
 
@@ -166,20 +200,104 @@
     });
 
     appendMeta(meta);
-
     if (meta.error) {
       const warn = U.el('div', 'notice');
       warn.style.marginTop = '10px';
       warn.textContent = meta.error;
       host.appendChild(warn);
     }
+    appendActions('refresh');
+  }
 
-    // 头部操作按钮
+  // ---------------------------------------------------------- 研报
+  function renderReports(data) {
+    const meta = data.meta || {};
+    const items = data.items || [];
+    const host = body();
+    host.innerHTML = '';
+    host.appendChild(renderTabs());
+
+    if (!items.length) {
+      host.appendChild(emptyBox('暂无券商研报',
+        (meta && meta.error) || '该股暂无收录的券商研报', '📄'));
+      appendMeta(meta);
+      appendActions('refresh');
+      return;
+    }
+
+    items.forEach(function (item, idx) {
+      const card = U.el('div', 'news-card');
+
+      const head = U.el('div', 'news-head');
+      head.appendChild(U.el('span', 'news-date', (item.date || '').slice(0, 10)));
+      if (item.source) head.appendChild(U.el('span', 'news-source', item.source));
+      if (item.researcher) head.appendChild(U.el('span', 'interp-engine', item.researcher));
+      head.appendChild(U.el('span', 'news-index', String(idx + 1).padStart(2, '0')));
+      card.appendChild(head);
+
+      const title = U.el('a', 'news-title');
+      title.textContent = item.title || '（无标题）';
+      title.href = item.url || '#';
+      title.target = '_blank';
+      title.rel = 'noopener noreferrer';
+      if (!item.url) title.style.pointerEvents = 'none';
+      card.appendChild(title);
+
+      const box = U.el('div', 'news-interp');
+      const tags = U.el('div', 'news-interp-tags');
+      const rating = item.rating || '--';
+      tags.appendChild(U.el('span', 'rate-tag ' + (RATING_CLASS[rating] || 'rate-flat'), '评级 ' + rating));
+      tags.appendChild(U.el('span', 'interp-engine', '同花顺研报数据'));
+      box.appendChild(tags);
+      card.appendChild(box);
+
+      host.appendChild(card);
+    });
+
+    appendMeta(meta);
+    if (meta.error) {
+      const warn = U.el('div', 'notice');
+      warn.style.marginTop = '10px';
+      warn.textContent = meta.error;
+      host.appendChild(warn);
+    }
+    appendActions('refresh');
+  }
+
+  function emptyBox(title, desc, icon) {
+    const box = U.el('div', 'empty');
+    box.appendChild(U.el('div', 'empty-icon', icon));
+    box.appendChild(U.el('div', 'empty-title', title));
+    box.appendChild(U.el('div', 'empty-desc', U.escapeHtml(desc || '')));
+    return box;
+  }
+
+  function appendActions(kind) {
     const acts = actionsNode();
     acts.innerHTML = '';
-    const againBtn = U.el('button', 'btn btn-sm btn-primary', '刷新');
-    againBtn.onclick = refresh;
-    acts.appendChild(againBtn);
+    if (kind === 'refresh') {
+      const againBtn = U.el('button', 'btn btn-sm btn-primary', '刷新');
+      againBtn.onclick = refresh;
+      acts.appendChild(againBtn);
+    }
+  }
+
+  const NEWS_SOURCE_NAME = {
+    eastmoney: '东方财富',
+    sina: '新浪财经',
+    ths: '同花顺',
+    '': ''
+  };
+
+  function appendMeta(meta) {
+    if (!meta) return;
+    const m = U.el('div', 'ai-meta');
+    if (meta.source) {
+      m.appendChild(U.el('span', '', '来源：' + (NEWS_SOURCE_NAME[meta.source] || meta.source)));
+    }
+    m.appendChild(U.el('span', '', '获取时间：' + (meta.fetched_at || '--')));
+    if (meta.total != null) m.appendChild(U.el('span', '', '共 ' + meta.total + ' 条'));
+    body().appendChild(m);
   }
 
   // 关闭交互（与 AI 弹窗共用 modal-root 的 data-close / Esc 监听）

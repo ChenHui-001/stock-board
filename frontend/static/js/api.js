@@ -86,6 +86,9 @@
     news: function (code, refresh) {
       return request('/api/news/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''));
     },
+    reports: function (code, refresh) {
+      return request('/api/reports/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''));
+    },
     llmConfig: function () {
       return request('/api/llm/config');
     },

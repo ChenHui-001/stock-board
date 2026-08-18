@@ -21,6 +21,7 @@ from .base import (
     Provider,
     ProviderError,
     Quote,
+    ReportItem,
     SearchItem,
     Throttled,
     close_client,
@@ -310,10 +311,26 @@ class Registry:
     async def news(
         self, code: str, market: str, name: str, days: int = 30, limit: int = 15
     ) -> list[NewsItem]:
-        items, _ = await self._first(
+        items, _ = await self.news_src(code, market, name, days, limit)
+        return items
+
+    async def news_src(
+        self, code: str, market: str, name: str, days: int = 30, limit: int = 15
+    ) -> tuple[list[NewsItem], str]:
+        """个股资讯 + 实际生效数据源（东财不可用时自动回退新浪网页新闻）。"""
+        items, src = await self._first(
             "news", lambda p: p.news(code, market, name, days, limit)
         )
-        return items
+        return items, src
+
+    async def reports(
+        self, code: str, market: str, limit: int = 15
+    ) -> tuple[list[ReportItem], str]:
+        """券商研报 + 实际生效数据源（目前同花顺网页数据）。"""
+        items, src = await self._first(
+            "reports", lambda p: p.reports(code, market, limit)
+        )
+        return items, src
 
 
 _registry: Registry | None = None
@@ -338,6 +355,7 @@ __all__ = [
     "Provider",
     "ProviderError",
     "Quote",
+    "ReportItem",
     "SearchItem",
     "Throttled",
     "Registry",

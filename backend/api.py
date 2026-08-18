@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, llm, llmcfg, news as news_mod, service, storage
+from . import analysis, llm, llmcfg, news as news_mod, reports as reports_mod, service, storage
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import normalize_code, resolve_market
@@ -291,6 +291,20 @@ async def stock_news(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
         return await news_mod.get_stock_news(code, name, force=refresh)
     except Exception as exc:  # noqa: BLE001
         raise _fail(exc, "获取资讯失败") from exc
+
+
+# ------------------------------------------------------------------ 券商研报
+
+@router.get("/reports/{code}")
+async def stock_reports(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
+    """券商研报（同花顺个股页数据），按日期倒序：标题/机构/研究员/评级/日期。"""
+    code = normalize_code(code)
+    if not code:
+        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    try:
+        return await reports_mod.get_reports(code, force=refresh)
+    except Exception as exc:  # noqa: BLE001
+        raise _fail(exc, "获取研报失败") from exc
 
 
 # ------------------------------------------------------------------ AI 分析

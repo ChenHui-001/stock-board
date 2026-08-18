@@ -203,6 +203,9 @@ def test_registry() -> None:
     names = [p.name for p in reg.providers]
     check("数据源装配", "eastmoney" in names and len(names) >= 3, str(names))
     check("健康度接口（不触网）", len(reg.health()) == len(names))
+    # 资讯能力：东财主源 + 新浪网页兜底（东财不可用时自动回退）
+    news_caps = sorted(p.name for p in reg.providers if "news" in p.caps)
+    check("资讯源装配（东财+新浪兜底）", news_caps == ["eastmoney", "sina"], str(news_caps))
 
 
 def main() -> int:

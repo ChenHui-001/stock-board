@@ -251,6 +251,19 @@ class NewsItem:
 
 
 @dataclass
+class ReportItem:
+    """券商研报条目（同花顺研报数据）。"""
+
+    id: str = ""
+    date: str = ""          # 研报日期 YYYY-MM-DD
+    source: str = ""        # 券商机构
+    researcher: str = ""    # 研究员
+    rating: str = ""        # 评级（买入/增持/中性…）
+    title: str = ""
+    url: str = ""
+
+
+@dataclass
 class Provider:
     name: str = "base"
     caps: set[str] = field(default_factory=set)
@@ -284,4 +297,8 @@ class Provider:
         self, code: str, market: str, name: str, days: int = 30, limit: int = 15
     ) -> list[NewsItem]:
         """个股资讯（近 days 天），按时间倒序。"""
+        raise NotSupported
+
+    async def reports(self, code: str, market: str, limit: int = 15) -> list[ReportItem]:
+        """券商研报（同花顺数据），按日期倒序。"""
         raise NotSupported
