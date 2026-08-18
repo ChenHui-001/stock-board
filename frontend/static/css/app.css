@@ -432,14 +432,14 @@ main {
 
 .wl-row {
   display: grid;
-  grid-template-columns: 34px minmax(150px, 1.5fr) minmax(90px, 1fr) 88px 96px 70px 84px 100px 150px;
+  grid-template-columns: 34px minmax(150px, 1.5fr) minmax(90px, 1fr) 88px 96px 70px 84px 100px 120px 150px;
   align-items: center;
   gap: 10px;
   padding: 11px 16px;
   border-bottom: 1px solid var(--line-soft);
   transition: background .12s;
   /* 全部字段始终展示：窄屏下表格内部横向滚动，不隐藏任何列 */
-  min-width: 960px;
+  min-width: 1120px;
 }
 .wl-row:last-child { border-bottom: none; }
 .wl-row:hover { background: var(--bg-elev-2); }
@@ -494,6 +494,24 @@ main {
 .prev-cell { text-align: right; font-family: var(--mono); color: var(--text-dim); }
 
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+.monitor-cell { min-width: 0; }
+.monitor-tag {
+  display: inline-block;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+}
+.monitor-tag.up { color: var(--up); border-color: rgba(245, 70, 93, .35); background: rgba(245, 70, 93, .1); }
+.monitor-tag.down { color: var(--down); border-color: rgba(23, 178, 106, .35); background: rgba(23, 178, 106, .1); }
+.monitor-tag.warn { color: var(--warn); border-color: rgba(245, 158, 11, .35); background: rgba(245, 158, 11, .1); }
 
 .vr-cell, .turnover-cell {
   text-align: right;
