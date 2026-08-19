@@ -1308,8 +1308,9 @@ main {
   .topbar-sub { padding: 0 12px; }
 }
 
-@media (max-width: 400px) {
-  /* 极窄窗口：顶栏放不下时段徽标，隐藏（数据源等信息仍在副栏） */
+@media (max-width: 560px) {
+  /* 手机宽度：顶栏放不下时段徽标（品牌+3个导航+数据源/设置/管理/刷新），
+     隐藏时段徽标避免顶栏横向溢出（时段与刷新提示信息在副栏仍有展示） */
   .session { display: none; }
 }
 
@@ -1517,4 +1518,83 @@ main {
   .detail-nav { margin-bottom: 14px; padding-bottom: 11px; overflow-x: auto; }
   .detail-nav .btn { flex: 0 0 auto; }
   .detail-name { font-size: 22px; }
+}
+
+/* ------------------------------------------------------------ 热点追踪页 */
+.hotspot-head { justify-content: space-between; }
+.hotspot-head .card-sub { margin-top: 3px; }
+
+.hotspot-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.chip {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.chip:hover { color: var(--text); border-color: var(--accent); }
+.chip.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 500;
+}
+
+.hotspot-list { padding: 4px 16px; }
+.hotspot-item {
+  display: flex;
+  gap: 14px;
+  padding: 13px 2px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.hotspot-item:last-child { border-bottom: none; }
+.hotspot-item:hover { background: var(--bg-elev); }
+
+.hotspot-time {
+  flex: 0 0 46px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  padding-top: 2px;
+}
+.hotspot-body { flex: 1; min-width: 0; }
+.hotspot-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.hotspot-origin { font-size: 11px; color: var(--text-faint); }
+.tag.hotspot-hot {
+  color: var(--accent);
+  border-color: rgba(59, 130, 246, .4);
+  background: rgba(59, 130, 246, .12);
+  font-weight: 500;
+}
+.hotspot-title {
+  display: block;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  text-decoration: none;
+}
+a.hotspot-title:hover { color: var(--accent); }
+.hotspot-summary {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 560px) {
+  .hotspot-list { padding: 2px 12px; }
+  .hotspot-item { gap: 10px; }
+  .hotspot-time { flex-basis: 40px; }
 }

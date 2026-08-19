@@ -77,6 +77,12 @@
     hot: function (limit) {
       return request('/api/hot?limit=' + (limit || 8));
     },
+    hotspot: function (minutes, refresh) {
+      var q = [];
+      if (minutes != null) q.push('minutes=' + minutes);
+      if (refresh) q.push('refresh=1');
+      return request('/api/hotspot' + (q.length ? '?' + q.join('&') : ''));
+    },
     detail: function (code, refresh) {
       return request('/api/stock/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''));
     },

@@ -10,12 +10,14 @@
     if (!parts.length) return { route: 'home', param: null };
     if (parts[0] === 'stock' && parts[1]) return { route: 'stock', param: parts[1] };
     if (parts[0] === 'search') return { route: 'search', param: null };
+    if (parts[0] === 'hotspot') return { route: 'hotspot', param: null };
     return { route: 'home', param: null };
   }
 
   function currentPage() {
     if (state.route === 'search') return PageSearch;
     if (state.route === 'stock') return PageDetail;
+    if (state.route === 'hotspot') return PageHotspot;
     return PageHome;
   }
 
@@ -42,6 +44,8 @@
       PageSearch.mount();
     } else if (state.route === 'stock') {
       await PageDetail.mount(state.param);
+    } else if (state.route === 'hotspot') {
+      PageHotspot.mount();
     } else {
       await PageHome.mount();
     }
