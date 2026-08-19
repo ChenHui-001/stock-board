@@ -233,6 +233,114 @@ def test_hotspot() -> None:
           f"loads={calls['n']}")
 
 
+# ------------------------------------------------------------------ 热点快讯 AI 分析
+def test_hotspot_ai() -> None:
+    from backend import hotspot_ai
+    from backend.cache import cache as _cache
+    from backend.providers.base import SearchItem
+
+    # 规则路径：情绪 + 行业识别 + 检索关键词
+    sent, bull, bear, watch, kws = hotspot_ai.rule_analyze(
+        "光伏行业迎来政策利好，储能需求爆发", "多家组件厂商订单饱满"
+    )
+    check("快讯规则: 情绪利好", sent == "利好", sent)
+    check("快讯规则: 利好行业含光伏/储能",
+          any(x["industry"] == "光伏" for x in bull) and any(x["industry"] == "储能" for x in bull),
+          str(bull))
+    check("快讯规则: 关键词含光伏/储能", "光伏" in kws and "储能" in kws, str(kws))
+
+    sent2, _b, bear2, _w, kws2 = hotspot_ai.rule_analyze(
+        "煤炭价格大跌，煤企利润承压", "多家煤企下调全年产量目标"
+    )
+    check("快讯规则: 情绪利空", sent2 == "利空", sent2)
+    check("快讯规则: 利空行业归入利空", any(x["industry"] == "煤炭" for x in bear2), str(bear2))
+
+    sent3, _b3, _be3, watch3, _k3 = hotspot_ai.rule_analyze("光伏行业召开行业大会", "会议讨论行业规范")
+    check("快讯规则: 中性归关注行业", sent3 == "中性" and any(x["industry"] == "光伏" for x in watch3), str(watch3))
+
+    # 关键词提取：去重 + 限长 6
+    kws4 = hotspot_ai._extract_keywords(
+        "光伏 光伏 储能 半导体 芯片 医药 白酒 券商 军工 算力 机器人 黄金 煤炭 石油 有色"
+    )
+    check("快讯关键词: 去重限 6", len(kws4) == 6 and kws4.count("光伏") == 1, str(kws4))
+
+    # 股票代码过滤：普通 A 股保留，ETF/LOF/基金剔除（东财 suggest 会把 ETF 标成 A股）
+    check("股票过滤: 沪主板/科创板保留", hotspot_ai._is_stock_code("601012", "SH")
+          and hotspot_ai._is_stock_code("688981", "SH"))
+    check("股票过滤: 深主板/创业板保留", hotspot_ai._is_stock_code("000001", "SZ")
+          and hotspot_ai._is_stock_code("300750", "SZ"))
+    check("股票过滤: 北交所保留", hotspot_ai._is_stock_code("920002", "BJ"))
+    check("股票过滤: 沪 ETF 剔除", not hotspot_ai._is_stock_code("515070", "SH")
+          and not hotspot_ai._is_stock_code("510300", "SH"))
+    check("股票过滤: 深 ETF/LOF 剔除", not hotspot_ai._is_stock_code("159819", "SZ")
+          and not hotspot_ai._is_stock_code("161631", "SZ"))
+
+    # 关联股票解析 + analyze_news 缓存（mock 真实搜索接口，不触网）
+    async def _run() -> None:
+        orig_search, orig_quotes, orig_avail = (
+            hotspot_ai._search_one, hotspot_ai._with_quotes, llm.available,
+        )
+        llm.available = lambda: False
+        try:
+            async def fake_search(kw: str) -> list:
+                if kw == "光伏":
+                    return [SearchItem(code="601012", market="SH", name="隆基绿能"),
+                            SearchItem(code="600438", market="SH", name="通威股份")]
+                if kw == "储能":
+                    return [SearchItem(code="300274", market="SZ", name="阳光电源"),
+                            SearchItem(code="601012", market="SH", name="隆基绿能")]
+                return []
+            async def _noop(s):
+                return s
+            hotspot_ai._search_one = fake_search
+            hotspot_ai._with_quotes = _noop
+
+            stocks = await hotspot_ai._resolve_stocks(["光伏", "储能"])
+            check("关联股: 去重后 3 只", len(stocks) == 3, str(stocks))
+            check("关联股: 命中双关键词排前", stocks[0]["code"] == "601012", str(stocks))
+
+            calls = {"n": 0}
+            async def fake_search2(kw: str) -> list:
+                calls["n"] += 1
+                return [SearchItem(code="601012", market="SH", name="隆基绿能")]
+            hotspot_ai._search_one = fake_search2
+            r1 = await hotspot_ai.analyze_news("光伏政策利好", "")
+            r2 = await hotspot_ai.analyze_news("光伏政策利好", "")
+            check("快讯分析: ok 且引擎 rule", r1["ok"] and r1["engine"] == "rule", str(r1)[:120])
+            check("快讯分析: 缓存命中不重算", calls["n"] == 1, f"n={calls['n']}")
+            check("快讯分析: 关联股为真实代码", r1["stocks"] and r1["stocks"][0]["code"] == "601012",
+                  str(r1["stocks"]))
+        finally:
+            hotspot_ai._search_one = orig_search
+            hotspot_ai._with_quotes = orig_quotes
+            llm.available = orig_avail
+            _cache.drop_prefix("hotspot_ai:")
+
+    asyncio.run(_run())
+
+    # _with_quotes 行情补齐（mock service.get_quotes，防漏 for 推导回归）
+    from backend.providers.base import Quote as _Q
+    async def _quotes_test() -> None:
+        orig_get_quotes = service.get_quotes
+        async def fake_get_quotes(keys, force=False):
+            return {"601012.SH": _Q(code="601012", market="SH", name="隆基绿能",
+                                     price=18.5, change_pct=2.3, board="光伏")}
+        service.get_quotes = fake_get_quotes
+        try:
+            got = await hotspot_ai._with_quotes([
+                {"code": "601012", "market": "SH", "name": "隆基绿能", "keywords": ["光伏"]},
+            ])
+            check("关联股行情: 补齐价格/涨跌/板块", got[0]["price"] == 18.5
+                  and got[0]["change_pct"] == 2.3 and got[0]["board"] == "光伏", str(got))
+            check("关联股行情: 关联理由为关键词", got[0]["reason"] == "光伏", str(got))
+        finally:
+            service.get_quotes = orig_get_quotes
+    asyncio.run(_quotes_test())
+
+    empty = asyncio.run(hotspot_ai.analyze_news("  "))
+    check("快讯分析: 空标题返回错误", empty["ok"] is False, str(empty))
+
+
 # ------------------------------------------------------------------ 研报解读
 def test_reports_interpret() -> None:
     # 规则解读：评级本身即信号 + 标题关键词修正
@@ -939,6 +1047,7 @@ def main() -> int:
     test_model_filter()
     test_news_interpret()
     test_hotspot()
+    test_hotspot_ai()
     test_reports_interpret()
     test_financials()
     test_rule_precision()

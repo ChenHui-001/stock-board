@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, hotspot as hotspot_mod, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
+from . import analysis, hotspot as hotspot_mod, hotspot_ai, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import is_trading_now, normalize_code, resolve_market
@@ -36,6 +36,12 @@ class LLMConfigBody(BaseModel):
     api_key: str = ""
     json_mode: bool = True
     clear_key: bool = False
+
+
+class HotspotAnalyzeBody(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500, description="快讯标题")
+    summary: str = Field("", max_length=2000, description="快讯摘要")
+    source: str = Field("", max_length=100, description="来源媒体")
 
 
 def _fail(exc: Exception, hint: str) -> HTTPException:
@@ -358,7 +364,17 @@ async def hotspot(
     return await hotspot_mod.get_hotspot(minutes=minutes, force=refresh)
 
 
-# ------------------------------------------------------------------ 详情
+@router.post("/hotspot/analyze")
+async def hotspot_analyze(
+    body: HotspotAnalyzeBody, refresh: bool = Query(False)
+) -> dict[str, Any]:
+    """单条快讯 AI 分析：利好/利空哪些行业 + 关联度最高的三只股票。
+
+    LLM 可用时由大模型判断行业影响与检索关键词，否则回退内置行业词典；
+    关联股票一律通过真实搜索接口解析（代码/名称保证真实），按命中关键词数排序。
+    结果按标题+摘要指纹缓存 10 分钟，并发点击同一快讯只执行一次分析。
+    """
+    return await hotspot_ai.analyze_news(body.title, body.summary, body.source, force=refresh)
 
 @router.get("/stock/{code}")
 async def stock_detail(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
