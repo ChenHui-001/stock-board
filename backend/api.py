@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
+from . import analysis, hotspot as hotspot_mod, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import is_trading_now, normalize_code, resolve_market
@@ -341,6 +341,21 @@ async def search(
 @router.get("/hot")
 async def hot(limit: int = Query(8, ge=1, le=20)) -> dict[str, Any]:
     return await service.hot(limit)
+
+
+# ------------------------------------------------------------------ 市场热点追踪
+
+@router.get("/hotspot")
+async def hotspot(
+    minutes: int = Query(30, ge=5, le=120, description="时间窗（分钟）：默认 30"),
+    refresh: bool = Query(False),
+) -> dict[str, Any]:
+    """近 N 分钟市场热点（多源 7x24 快讯聚合：同花顺/东方财富/新浪财经）。
+
+    保留原始媒体署名（彭博社/财联社/财新/澎湃等），命中重点媒体名单的条目
+    带 media_badge 标记；结果整体缓存 HOTSPOT_TTL 秒避免反复打外部快讯接口。
+    """
+    return await hotspot_mod.get_hotspot(minutes=minutes, force=refresh)
 
 
 # ------------------------------------------------------------------ 详情

@@ -138,6 +138,101 @@ def test_news_interpret() -> None:
     check("投喂数据含券商观点段", len(payload_r.get("券商观点_近30日") or []) == 3)
 
 
+# ------------------------------------------------------------------ 市场热点追踪
+def test_hotspot() -> None:
+    from backend import hotspot
+    import json as _json
+
+    now_ts = int(time.time())
+    old_ts = now_ts - 3600  # 一小时前，应在窗口外
+
+    # 同花顺：ctime 为 unix 秒
+    ths_payload = _json.dumps({"code": "200", "data": {"list": [
+        {"id": "1", "title": "富时中国A50指数期货跌2%", "digest": "摘要A",
+         "url": "http://news.10jqka.com.cn/1.shtml", "ctime": now_ts, "source": ""},
+        {"id": "2", "title": "旧闻不展示", "digest": "摘要B",
+         "url": "http://news.10jqka.com.cn/2.shtml", "ctime": old_ts, "source": "测试媒体"},
+        {"id": "bad", "title": "时间缺失", "digest": "x", "url": "", "ctime": None},
+    ]}})
+    ths_rows = hotspot._parse_ths(ths_payload)
+    check("热点解析: 同花顺", len(ths_rows) == 2 and ths_rows[0]["source"] == "同花顺", str(ths_rows))
+
+    # 东方财富：showTime 为字符串
+    em_payload = _json.dumps({"code": "1", "data": {"list": [
+        {"code": "E1", "title": "财联社：央行开展逆回购操作", "summary": "摘要C",
+         "showTime": "2026-08-19 10:30:00", "mediaName": "财联社", "url": "http://finance.eastmoney.com/a/E1.html"},
+        {"code": "E2", "title": "彭博：美股期货上涨", "summary": "摘要D",
+         "showTime": "2026-08-19 10:31:00", "mediaName": "彭博", "url": "http://finance.eastmoney.com/a/E2.html"},
+        {"code": "E3", "title": "坏时间", "summary": "x",
+         "showTime": "not-a-date", "mediaName": "东方财富", "url": ""},
+    ]}})
+    em_rows = hotspot._parse_em(em_payload)
+    check("热点解析: 东方财富", len(em_rows) == 2 and em_rows[0]["source"] == "财联社", str(em_rows))
+
+    # 新浪：rich_text 拆标题/摘要
+    sina_payload = _json.dumps({"result": {"data": {"feed": {"list": [
+        {"id": "S1", "create_time": "2026-08-19 10:32:00",
+         "rich_text": "【澎湃新闻】沪深两市成交额突破万亿", "docurl": "http://finance.sina.com.cn/S1.html"},
+        {"id": "S2", "create_time": "2026-08-19 10:33:00",
+         "rich_text": "无括号纯文本内容", "docurl": ""},
+    ]}}}})
+    sina_rows = hotspot._parse_sina(sina_payload)
+    check("热点解析: 新浪拆标题", sina_rows[0]["title"] == "澎湃新闻" and sina_rows[0]["summary"] == "沪深两市成交额突破万亿",
+          str(sina_rows[0]))
+    check("热点解析: 新浪无括号兜底", sina_rows[1]["title"] == "无括号纯文本内容", str(sina_rows[1]))
+
+    # 窗口过滤：旧条目剔除
+    in_rows = [r for r in ths_rows if hotspot._in_window(r["ts"], 30)]
+    check("热点窗口: 30分钟内保留", len(in_rows) == 1 and in_rows[0]["id"] == "1", str(in_rows))
+    check("热点窗口: 坏时间剔除", hotspot._in_window(None, 30) is False)
+
+    # 跨源去重：同一标题只留一条（取最新时间），其余保留
+    dup = [
+        {"id": "t1", "title": "央行开展逆回购操作", "ts": now_ts - 100, "origin": "同花顺", "source": "同花顺"},
+        {"id": "e1", "title": "央行开展逆回购操作！", "ts": now_ts - 50, "origin": "东方财富", "source": "财联社"},
+        {"id": "s1", "title": "富时中国A50指数期货跌2%", "ts": now_ts - 10, "origin": "新浪财经", "source": "新浪财经"},
+    ]
+    merged = hotspot._merge(dup)
+    check("热点去重: 同标题合并留最新", len(merged) == 2 and any(m["id"] == "e1" for m in merged)
+          and not any(m["id"] == "t1" for m in merged), str(merged))
+    check("热点去重: 按时间倒序", merged[0]["id"] == "s1" and merged[1]["id"] == "e1", str(merged))
+    check("热点标题指纹: 标点归一", hotspot._title_fp("央行开展逆回购操作！") == hotspot._title_fp("央行开展逆回购操作"),
+          hotspot._title_fp("央行开展逆回购操作！"))
+    check("热点标题指纹: 【】包裹归一", hotspot._title_fp("【央行开展逆回购操作】") == hotspot._title_fp("央行开展逆回购操作"),
+          hotspot._title_fp("【央行开展逆回购操作】"))
+
+    # 重点媒体标注
+    check("热点媒体: 财联社命中", hotspot._is_hot_media("财联社") is True)
+    check("热点媒体: 彭博命中", hotspot._is_hot_media("彭博社") is True)
+    check("热点媒体: 普通媒体不命中", hotspot._is_hot_media("某地方日报") is False)
+    check("热点媒体: 空来源不命中", hotspot._is_hot_media("") is False)
+
+    # get_hotspot 兜底：全部源失败时返回结构化错误而非抛异常；
+    # 且失败结果短暂缓存，故障期间反复请求不重打外部快讯接口
+    from backend.cache import cache as _cache
+    calls: dict[str, int] = {"n": 0}
+
+    async def _boom(minutes: int) -> dict:
+        calls["n"] += 1
+        raise hotspot.ProviderError("全部热点快讯源均不可用")
+
+    async def _fail() -> dict:
+        orig = hotspot._load
+        hotspot._load = _boom
+        try:
+            first = await hotspot.get_hotspot(41)
+            second = await hotspot.get_hotspot(41)
+            return first, second
+        finally:
+            hotspot._load = orig
+            _cache.drop("hotspot:41")
+
+    f1, f2 = asyncio.run(_fail())
+    check("热点兜底: 全源失败返回错误结构", f1["items"] == [] and "error" in f1["meta"], str(f1))
+    check("热点兜底: 失败结果缓存不重打", calls["n"] == 1 and f2["meta"]["error"] == f1["meta"]["error"],
+          f"loads={calls['n']}")
+
+
 # ------------------------------------------------------------------ 研报解读
 def test_reports_interpret() -> None:
     # 规则解读：评级本身即信号 + 标题关键词修正
@@ -843,6 +938,7 @@ def main() -> int:
     test_fingerprint()
     test_model_filter()
     test_news_interpret()
+    test_hotspot()
     test_reports_interpret()
     test_financials()
     test_rule_precision()
