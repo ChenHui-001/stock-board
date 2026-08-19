@@ -18,7 +18,7 @@ import hashlib
 import logging
 from typing import Any
 
-from . import llm, news, service
+from . import llm, news, service, storage
 from .cache import cache
 from .providers import registry
 from .utils import full_code, now
@@ -329,7 +329,11 @@ async def analyze_news(
         }
 
     try:
-        return await cache.get_or_set(key, TTL, load, force=force)
+        result = await cache.get_or_set(key, TTL, load, force=force)
+        # 补当前自选状态（在缓存外计算，保证每次打开弹窗都是最新）
+        for s in result.get("stocks") or []:
+            s["watched"] = storage.is_watched(s["code"])
+        return result
     except Exception as exc:  # noqa: BLE001
         log.warning("热点快讯分析失败：%s", exc)
         return {"ok": False, "error": f"分析失败：{exc}"}

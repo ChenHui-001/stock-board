@@ -1703,6 +1703,12 @@ a.hotspot-title:hover { color: var(--accent); }
   max-width: 160px;
   margin-left: auto;
 }
+.hs-stock-watch {
+  flex-shrink: 0;
+  min-width: 64px;
+  font-size: 11.5px;
+  padding: 2px 9px;
+}
 .hs-stock-meta {
   display: flex;
   align-items: center;
@@ -1723,6 +1729,7 @@ a.hotspot-title:hover { color: var(--accent); }
 }
 
 @media (max-width: 560px) {
-  .hs-stock-board { max-width: 96px; }
+  .hs-stock-board { max-width: 72px; }
+  .hs-stock-watch { min-width: 56px; padding: 2px 7px; font-size: 11px; }
   .hs-industry { flex-direction: column; gap: 2px; }
 }

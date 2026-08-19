@@ -306,7 +306,7 @@
     if (stocks.length) {
       const list = U.el('div', 'hs-stocks');
       stocks.forEach(function (s, i) {
-        const card = U.el('button', 'hs-stock');
+        const card = U.el('div', 'hs-stock');
         card.title = '查看 ' + (s.name || '') + ' 详情';
         card.onclick = function () {
           hsClose();
@@ -317,6 +317,15 @@
         head.appendChild(U.el('span', 'hs-stock-name', s.name || s.code));
         head.appendChild(U.el('span', 'hs-stock-code', s.code));
         if (s.board) head.appendChild(U.el('span', 'hs-stock-board', s.board));
+        const watchBtn = U.el('button', 'btn btn-sm hs-stock-watch' + (s.watched ? '' : ' btn-primary'),
+          s.watched ? '已自选' : '加入自选');
+        watchBtn.disabled = !!s.watched;
+        watchBtn.title = s.watched ? '' : '将 ' + (s.name || s.code) + ' 加入自选';
+        watchBtn.onclick = function (ev) {
+          ev.stopPropagation(); // 只入库，不触发卡片跳转详情页
+          hsAddWatch(s, watchBtn);
+        };
+        head.appendChild(watchBtn);
         card.appendChild(head);
         const meta = U.el('div', 'hs-stock-meta');
         if (U.isNum(s.price)) {
@@ -353,6 +362,23 @@
     const again = U.el('button', 'btn btn-sm btn-primary', '重新分析');
     again.onclick = reanalyze;
     acts.appendChild(again);
+  }
+
+  async function hsAddWatch(s, btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.classList.add('loading');
+    try {
+      await API.addWatch(s.code, s.name, s.board);
+      btn.classList.remove('loading', 'btn-primary');
+      btn.textContent = '已自选';
+      btn.title = '';
+      U.toast('已添加「' + (s.name || s.code) + '」到自选', 'ok');
+    } catch (err) {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      U.toast('添加失败：' + err.message, 'err');
+    }
   }
 
   // 关闭交互：与 AI/资讯弹窗共用 modal-root 与 data-close 监听
