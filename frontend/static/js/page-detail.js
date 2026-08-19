@@ -56,6 +56,7 @@
     root.appendChild(section('均线数据（MA5 / MA10 / MA20 / MA60）', renderMa(d), maSubtitle(d)));
     root.appendChild(section('30 天资金流向', renderFlow(d), flowSubtitle(d)));
     root.appendChild(section('30 天两融数据', renderMargin(d), marginSubtitle(d)));
+    root.appendChild(section('财报数据（季报 / 中报 / 三季报 / 年报）', renderFinancials(d), financialsSubtitle(d)));
     root.appendChild(renderSourceFooter(d));
 
     // 图表要在 DOM 挂载后再初始化
@@ -94,10 +95,7 @@
     const q = d.quote;
     const wrap = U.el('div', 'detail-head');
 
-    const nav = U.el('div');
-    nav.style.marginBottom = '12px';
-    nav.style.display = 'flex';
-    nav.style.gap = '8px';
+    const nav = U.el('div', 'detail-nav');
     const back = U.el('button', 'btn btn-sm', '← 返回首页');
     back.onclick = function () { location.hash = '#/home'; };
     nav.appendChild(back);
@@ -449,6 +447,80 @@
     return scroll;
   }
 
+  // ---------------------------------------------------------- 定期报告
+  function financialsSubtitle(d) {
+    const rows = (d.financials && d.financials.rows) || [];
+    if (!rows.length) return '暂无季报/中报/年报数据';
+    const prefix = (d.financials || {}).stale ? '数据源暂不可用，使用缓存 · ' : '';
+    return prefix + '最新报告期 ' + (rows[0].period || rows[0].date || '--') + ' · ' + sourceLabel((d.financials || {}).source);
+  }
+
+  function financialPct(value) {
+    return U.isNum(value) ? (value > 0 ? '+' : '') + value.toFixed(2) + '%' : U.NBSP;
+  }
+
+  function renderFinancials(d) {
+    const pack = d.financials || {};
+    const rows = pack.rows || [];
+    const wrap = U.el('div');
+    if (!rows.length) {
+      wrap.appendChild(U.el('div', 'loading-block',
+        pack.error ? ('财报数据暂不可用：' + pack.error) : '暂无可用季报/中报/年报数据'));
+      return wrap;
+    }
+
+    const latest = rows[0];
+    if (pack.stale) {
+      wrap.appendChild(U.el('div', 'search-hint', '财报源暂不可用，以下为上次成功缓存数据；报告期和同比指标可能不是最新发布值。'));
+    }
+    const stats = U.el('div', 'stat-row');
+    [
+      ['最新报告期', latest.period || latest.date || '--', ''],
+      ['营业收入', U.money(latest.revenue), ''],
+      ['营收同比', financialPct(latest.revenue_yoy), U.tone(latest.revenue_yoy)],
+      ['归母净利润', U.money(latest.net_profit), ''],
+      ['净利润同比', financialPct(latest.net_profit_yoy), U.tone(latest.net_profit_yoy)],
+      ['扣非净利润同比', financialPct(latest.net_profit_deduct_yoy), U.tone(latest.net_profit_deduct_yoy)],
+      ['ROE', financialPct(latest.roe), U.tone(latest.roe)],
+      ['资产负债率', financialPct(latest.debt_ratio), '']
+    ].forEach(function (it) {
+      const node = U.el('div', 'stat');
+      node.appendChild(U.el('div', 'stat-label', it[0]));
+      node.appendChild(U.el('div', 'stat-value ' + it[2], it[1]));
+      stats.appendChild(node);
+    });
+    wrap.appendChild(stats);
+
+    const scroll = U.el('div', 'table-scroll');
+    scroll.style.marginTop = '12px';
+    const table = U.el('table', 'data-table');
+    const thead = U.el('thead');
+    const htr = U.el('tr');
+    ['报告期', '营业收入', '营收同比', '归母净利润', '净利润同比', '扣非同比', 'ROE', '负债率'].forEach(function (c) {
+      htr.appendChild(U.el('th', '', c));
+    });
+    thead.appendChild(htr);
+    table.appendChild(thead);
+    const tbody = U.el('tbody');
+    rows.slice(0, 8).forEach(function (r) {
+      const tr = U.el('tr');
+      tr.appendChild(U.el('td', '', r.period || r.date || '--'));
+      tr.appendChild(U.el('td', '', U.money(r.revenue)));
+      tr.appendChild(U.el('td', U.tone(r.revenue_yoy), financialPct(r.revenue_yoy)));
+      tr.appendChild(U.el('td', '', U.money(r.net_profit)));
+      tr.appendChild(U.el('td', U.tone(r.net_profit_yoy), financialPct(r.net_profit_yoy)));
+      tr.appendChild(U.el('td', U.tone(r.net_profit_deduct_yoy), financialPct(r.net_profit_deduct_yoy)));
+      tr.appendChild(U.el('td', U.tone(r.roe), financialPct(r.roe)));
+      tr.appendChild(U.el('td', '', financialPct(r.debt_ratio)));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    scroll.appendChild(table);
+    wrap.appendChild(scroll);
+    wrap.appendChild(U.el('div', 'search-hint', '同比指标用于跨期比较；Q1/H1/Q3/FY 口径不同，不将报告期绝对值直接横比。'));
+    return wrap;
+  }
+
   // ---------------------------------------------------------- 数据源
   // 来源 id -> 中文名；同花顺 K 线来自其行情网页加载的数据文件（web 层），单独标注
   const SOURCE_NAME = {
@@ -473,6 +545,7 @@
     if (s.kline) parts.push('K线:' + sourceLabel(s.kline));
     if (s.fund_flow) parts.push('资金:' + sourceLabel(s.fund_flow));
     if (s.margin) parts.push('两融:' + sourceLabel(s.margin));
+    if (s.financials) parts.push('财报:' + sourceLabel(s.financials));
     node.textContent = '数据来源 — ' + (parts.join(' | ') || '未知');
     const tip = U.el('div', 'search-hint');
     tip.style.marginTop = '2px';

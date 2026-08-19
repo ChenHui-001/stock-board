@@ -65,6 +65,9 @@ class Settings:
     AI_CACHE_TTL_CLOSED = _float("AI_CACHE_TTL_CLOSED", 3600.0)  # 盘后数据不变，放宽
     SEARCH_TTL = _float("SEARCH_TTL", 300.0)
     HOT_TTL = _float("HOT_TTL", 60.0)
+    # 市场热点追踪：时间窗（分钟）与聚合结果缓存（秒）
+    HOTSPOT_MINUTES = _int("HOTSPOT_MINUTES", 30)
+    HOTSPOT_TTL = _float("HOTSPOT_TTL", 90.0)
 
     # ---------- LLM（OpenAI 兼容协议）----------
     LLM_ENABLED = _bool("LLM_ENABLED", True)

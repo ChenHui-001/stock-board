@@ -10,6 +10,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # 用临时数据目录，避免污染工作区 / CI 环境
@@ -18,7 +19,7 @@ os.environ["DATA_DIR"] = _tmp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend import analysis, api, cache, llm, llmcfg, news, reports, storage  # noqa: E402
+from backend import analysis, api, cache, llm, llmcfg, news, reports, service, storage  # noqa: E402
 from backend.indicators import build_ma, summarize_flow, support_resistance  # noqa: E402
 from backend.providers import registry  # noqa: E402
 from backend.providers.base import Bar  # noqa: E402
@@ -137,6 +138,209 @@ def test_news_interpret() -> None:
     check("投喂数据含券商观点段", len(payload_r.get("券商观点_近30日") or []) == 3)
 
 
+# ------------------------------------------------------------------ 市场热点追踪
+def test_hotspot() -> None:
+    from backend import hotspot
+    import json as _json
+
+    now_ts = int(time.time())
+    old_ts = now_ts - 3600  # 一小时前，应在窗口外
+
+    # 同花顺：ctime 为 unix 秒
+    ths_payload = _json.dumps({"code": "200", "data": {"list": [
+        {"id": "1", "title": "富时中国A50指数期货跌2%", "digest": "摘要A",
+         "url": "http://news.10jqka.com.cn/1.shtml", "ctime": now_ts, "source": ""},
+        {"id": "2", "title": "旧闻不展示", "digest": "摘要B",
+         "url": "http://news.10jqka.com.cn/2.shtml", "ctime": old_ts, "source": "测试媒体"},
+        {"id": "bad", "title": "时间缺失", "digest": "x", "url": "", "ctime": None},
+    ]}})
+    ths_rows = hotspot._parse_ths(ths_payload)
+    check("热点解析: 同花顺", len(ths_rows) == 2 and ths_rows[0]["source"] == "同花顺", str(ths_rows))
+
+    # 东方财富：showTime 为字符串
+    em_payload = _json.dumps({"code": "1", "data": {"list": [
+        {"code": "E1", "title": "财联社：央行开展逆回购操作", "summary": "摘要C",
+         "showTime": "2026-08-19 10:30:00", "mediaName": "财联社", "url": "http://finance.eastmoney.com/a/E1.html"},
+        {"code": "E2", "title": "彭博：美股期货上涨", "summary": "摘要D",
+         "showTime": "2026-08-19 10:31:00", "mediaName": "彭博", "url": "http://finance.eastmoney.com/a/E2.html"},
+        {"code": "E3", "title": "坏时间", "summary": "x",
+         "showTime": "not-a-date", "mediaName": "东方财富", "url": ""},
+    ]}})
+    em_rows = hotspot._parse_em(em_payload)
+    check("热点解析: 东方财富", len(em_rows) == 2 and em_rows[0]["source"] == "财联社", str(em_rows))
+
+    # 新浪：rich_text 拆标题/摘要
+    sina_payload = _json.dumps({"result": {"data": {"feed": {"list": [
+        {"id": "S1", "create_time": "2026-08-19 10:32:00",
+         "rich_text": "【澎湃新闻】沪深两市成交额突破万亿", "docurl": "http://finance.sina.com.cn/S1.html"},
+        {"id": "S2", "create_time": "2026-08-19 10:33:00",
+         "rich_text": "无括号纯文本内容", "docurl": ""},
+    ]}}}})
+    sina_rows = hotspot._parse_sina(sina_payload)
+    check("热点解析: 新浪拆标题", sina_rows[0]["title"] == "澎湃新闻" and sina_rows[0]["summary"] == "沪深两市成交额突破万亿",
+          str(sina_rows[0]))
+    check("热点解析: 新浪无括号兜底", sina_rows[1]["title"] == "无括号纯文本内容", str(sina_rows[1]))
+
+    # 窗口过滤：旧条目剔除
+    in_rows = [r for r in ths_rows if hotspot._in_window(r["ts"], 30)]
+    check("热点窗口: 30分钟内保留", len(in_rows) == 1 and in_rows[0]["id"] == "1", str(in_rows))
+    check("热点窗口: 坏时间剔除", hotspot._in_window(None, 30) is False)
+
+    # 跨源去重：同一标题只留一条（取最新时间），其余保留
+    dup = [
+        {"id": "t1", "title": "央行开展逆回购操作", "ts": now_ts - 100, "origin": "同花顺", "source": "同花顺"},
+        {"id": "e1", "title": "央行开展逆回购操作！", "ts": now_ts - 50, "origin": "东方财富", "source": "财联社"},
+        {"id": "s1", "title": "富时中国A50指数期货跌2%", "ts": now_ts - 10, "origin": "新浪财经", "source": "新浪财经"},
+    ]
+    merged = hotspot._merge(dup)
+    check("热点去重: 同标题合并留最新", len(merged) == 2 and any(m["id"] == "e1" for m in merged)
+          and not any(m["id"] == "t1" for m in merged), str(merged))
+    check("热点去重: 按时间倒序", merged[0]["id"] == "s1" and merged[1]["id"] == "e1", str(merged))
+    check("热点标题指纹: 标点归一", hotspot._title_fp("央行开展逆回购操作！") == hotspot._title_fp("央行开展逆回购操作"),
+          hotspot._title_fp("央行开展逆回购操作！"))
+    check("热点标题指纹: 【】包裹归一", hotspot._title_fp("【央行开展逆回购操作】") == hotspot._title_fp("央行开展逆回购操作"),
+          hotspot._title_fp("【央行开展逆回购操作】"))
+
+    # 重点媒体标注
+    check("热点媒体: 财联社命中", hotspot._is_hot_media("财联社") is True)
+    check("热点媒体: 彭博命中", hotspot._is_hot_media("彭博社") is True)
+    check("热点媒体: 普通媒体不命中", hotspot._is_hot_media("某地方日报") is False)
+    check("热点媒体: 空来源不命中", hotspot._is_hot_media("") is False)
+
+    # get_hotspot 兜底：全部源失败时返回结构化错误而非抛异常；
+    # 且失败结果短暂缓存，故障期间反复请求不重打外部快讯接口
+    from backend.cache import cache as _cache
+    calls: dict[str, int] = {"n": 0}
+
+    async def _boom(minutes: int) -> dict:
+        calls["n"] += 1
+        raise hotspot.ProviderError("全部热点快讯源均不可用")
+
+    async def _fail() -> dict:
+        orig = hotspot._load
+        hotspot._load = _boom
+        try:
+            first = await hotspot.get_hotspot(41)
+            second = await hotspot.get_hotspot(41)
+            return first, second
+        finally:
+            hotspot._load = orig
+            _cache.drop("hotspot:41")
+
+    f1, f2 = asyncio.run(_fail())
+    check("热点兜底: 全源失败返回错误结构", f1["items"] == [] and "error" in f1["meta"], str(f1))
+    check("热点兜底: 失败结果缓存不重打", calls["n"] == 1 and f2["meta"]["error"] == f1["meta"]["error"],
+          f"loads={calls['n']}")
+
+
+# ------------------------------------------------------------------ 热点快讯 AI 分析
+def test_hotspot_ai() -> None:
+    from backend import hotspot_ai
+    from backend.cache import cache as _cache
+    from backend.providers.base import SearchItem
+
+    # 规则路径：情绪 + 行业识别 + 检索关键词
+    sent, bull, bear, watch, kws = hotspot_ai.rule_analyze(
+        "光伏行业迎来政策利好，储能需求爆发", "多家组件厂商订单饱满"
+    )
+    check("快讯规则: 情绪利好", sent == "利好", sent)
+    check("快讯规则: 利好行业含光伏/储能",
+          any(x["industry"] == "光伏" for x in bull) and any(x["industry"] == "储能" for x in bull),
+          str(bull))
+    check("快讯规则: 关键词含光伏/储能", "光伏" in kws and "储能" in kws, str(kws))
+
+    sent2, _b, bear2, _w, kws2 = hotspot_ai.rule_analyze(
+        "煤炭价格大跌，煤企利润承压", "多家煤企下调全年产量目标"
+    )
+    check("快讯规则: 情绪利空", sent2 == "利空", sent2)
+    check("快讯规则: 利空行业归入利空", any(x["industry"] == "煤炭" for x in bear2), str(bear2))
+
+    sent3, _b3, _be3, watch3, _k3 = hotspot_ai.rule_analyze("光伏行业召开行业大会", "会议讨论行业规范")
+    check("快讯规则: 中性归关注行业", sent3 == "中性" and any(x["industry"] == "光伏" for x in watch3), str(watch3))
+
+    # 关键词提取：去重 + 限长 6
+    kws4 = hotspot_ai._extract_keywords(
+        "光伏 光伏 储能 半导体 芯片 医药 白酒 券商 军工 算力 机器人 黄金 煤炭 石油 有色"
+    )
+    check("快讯关键词: 去重限 6", len(kws4) == 6 and kws4.count("光伏") == 1, str(kws4))
+
+    # 股票代码过滤：普通 A 股保留，ETF/LOF/基金剔除（东财 suggest 会把 ETF 标成 A股）
+    check("股票过滤: 沪主板/科创板保留", hotspot_ai._is_stock_code("601012", "SH")
+          and hotspot_ai._is_stock_code("688981", "SH"))
+    check("股票过滤: 深主板/创业板保留", hotspot_ai._is_stock_code("000001", "SZ")
+          and hotspot_ai._is_stock_code("300750", "SZ"))
+    check("股票过滤: 北交所保留", hotspot_ai._is_stock_code("920002", "BJ"))
+    check("股票过滤: 沪 ETF 剔除", not hotspot_ai._is_stock_code("515070", "SH")
+          and not hotspot_ai._is_stock_code("510300", "SH"))
+    check("股票过滤: 深 ETF/LOF 剔除", not hotspot_ai._is_stock_code("159819", "SZ")
+          and not hotspot_ai._is_stock_code("161631", "SZ"))
+
+    # 关联股票解析 + analyze_news 缓存（mock 真实搜索接口，不触网）
+    async def _run() -> None:
+        orig_search, orig_quotes, orig_avail = (
+            hotspot_ai._search_one, hotspot_ai._with_quotes, llm.available,
+        )
+        llm.available = lambda: False
+        try:
+            async def fake_search(kw: str) -> list:
+                if kw == "光伏":
+                    return [SearchItem(code="601012", market="SH", name="隆基绿能"),
+                            SearchItem(code="600438", market="SH", name="通威股份")]
+                if kw == "储能":
+                    return [SearchItem(code="300274", market="SZ", name="阳光电源"),
+                            SearchItem(code="601012", market="SH", name="隆基绿能")]
+                return []
+            async def _noop(s):
+                return s
+            hotspot_ai._search_one = fake_search
+            hotspot_ai._with_quotes = _noop
+
+            stocks = await hotspot_ai._resolve_stocks(["光伏", "储能"])
+            check("关联股: 去重后 3 只", len(stocks) == 3, str(stocks))
+            check("关联股: 命中双关键词排前", stocks[0]["code"] == "601012", str(stocks))
+
+            calls = {"n": 0}
+            async def fake_search2(kw: str) -> list:
+                calls["n"] += 1
+                return [SearchItem(code="601012", market="SH", name="隆基绿能")]
+            hotspot_ai._search_one = fake_search2
+            r1 = await hotspot_ai.analyze_news("光伏政策利好", "")
+            r2 = await hotspot_ai.analyze_news("光伏政策利好", "")
+            check("快讯分析: ok 且引擎 rule", r1["ok"] and r1["engine"] == "rule", str(r1)[:120])
+            check("快讯分析: 缓存命中不重算", calls["n"] == 1, f"n={calls['n']}")
+            check("快讯分析: 关联股为真实代码", r1["stocks"] and r1["stocks"][0]["code"] == "601012",
+                  str(r1["stocks"]))
+        finally:
+            hotspot_ai._search_one = orig_search
+            hotspot_ai._with_quotes = orig_quotes
+            llm.available = orig_avail
+            _cache.drop_prefix("hotspot_ai:")
+
+    asyncio.run(_run())
+
+    # _with_quotes 行情补齐（mock service.get_quotes，防漏 for 推导回归）
+    from backend.providers.base import Quote as _Q
+    async def _quotes_test() -> None:
+        orig_get_quotes = service.get_quotes
+        async def fake_get_quotes(keys, force=False):
+            return {"601012.SH": _Q(code="601012", market="SH", name="隆基绿能",
+                                     price=18.5, change_pct=2.3, board="光伏")}
+        service.get_quotes = fake_get_quotes
+        try:
+            got = await hotspot_ai._with_quotes([
+                {"code": "601012", "market": "SH", "name": "隆基绿能", "keywords": ["光伏"]},
+            ])
+            check("关联股行情: 补齐价格/涨跌/板块", got[0]["price"] == 18.5
+                  and got[0]["change_pct"] == 2.3 and got[0]["board"] == "光伏", str(got))
+            check("关联股行情: 关联理由为关键词", got[0]["reason"] == "光伏", str(got))
+        finally:
+            service.get_quotes = orig_get_quotes
+    asyncio.run(_quotes_test())
+
+    empty = asyncio.run(hotspot_ai.analyze_news("  "))
+    check("快讯分析: 空标题返回错误", empty["ok"] is False, str(empty))
+
+
 # ------------------------------------------------------------------ 研报解读
 def test_reports_interpret() -> None:
     # 规则解读：评级本身即信号 + 标题关键词修正
@@ -184,6 +388,58 @@ def _ma_item(w: int, v: float, slope: str = "上行") -> dict:
     return {"window": w, "value": v, "slope": slope, "position": "站上", "deviation_pct": 0.0}
 
 
+def test_financials() -> None:
+    from backend.providers.webparse import parse_financial_html, parse_news_html, parse_report_html
+
+    ths_json = (
+        '<p id="main">{"title":["科目\\\\时间",["营业总收入","元",0,false,true],'
+        '["营业总收入同比增长率","",0,false,true]],'
+        '"report":[["2026-06-30","2026-03-31"],["12.5亿","10亿"],["25%","20%"]]}</p>'
+    )
+    embedded_rows = parse_financial_html(ths_json, "ths")
+    check("同花顺财报内嵌JSON", embedded_rows[0].revenue == 1.25e9 and embedded_rows[0].revenue_yoy == 25, str(embedded_rows))
+    linkage = (
+        f'<div id="linkagedata">[{{"seq":1,"ctime":{int(time.time())},'
+        '"curl":"http://news.10jqka.com.cn/field/test.shtml",'
+        '"title":"公司签订重大订单","source":"测试媒体"}]</div>'
+    )
+    linkage_rows = parse_news_html(linkage, "ths", 30, 5)
+    check("同花顺资讯内嵌JSON", linkage_rows[0].title == "公司签订重大订单" and linkage_rows[0].source == "测试媒体", str(linkage_rows))
+    eastmoney_json = (
+        '<script>var initdata = {"data":[{"title":"业绩增长点评",'
+        '"orgSName":"国金证券","publishDate":"2026-08-18 00:00:00.000",'
+        '"infoCode":"APTEST001","sRatingName":"增持",'
+        '"researcher":"张三"}]};</script>'
+    )
+    embedded_reports = parse_report_html(eastmoney_json, "eastmoney", 5)
+    check("东财研报内嵌JSON", embedded_reports[0].rating == "增持" and embedded_reports[0].source == "国金证券", str(embedded_reports))
+
+    detail = _mk_detail(financials={"source": "ths", "rows": [
+        {"period": "2026H1", "date": "2026-06-30", "revenue": 1.25e9, "revenue_yoy": 25,
+         "net_profit": 2.5e8, "net_profit_yoy": 25, "roe": 11.2, "debt_ratio": 40},
+    ]})
+    fb = analysis.rule_based(detail)
+    scores = fb["advice"]["scores"]
+    check("财报分析: 基本面加分", scores["fundamental"] > 0 and "2026H1" in fb["fundamental"]["period"], str(fb["fundamental"]))
+    check("财报分析: 纳入机会", any("基本面偏强" in str(x) for x in fb["risk"]["opportunities"]), str(fb["risk"]["opportunities"]))
+    reversed_detail = _mk_detail(financials={"rows": [
+        {"period": "2025FY", "date": "2025-12-31", "revenue_yoy": -20, "net_profit_yoy": -20},
+        {"period": "2026H1", "date": "2026-06-30", "revenue_yoy": 10, "net_profit_yoy": 10},
+    ]})
+    reversed_fb = analysis.rule_based(reversed_detail)
+    check("财报分析: 按报告日期取最新", reversed_fb["fundamental"]["period"] == "2026H1", str(reversed_fb["fundamental"]))
+    payload = analysis.build_payload(detail)
+    fin_payload = payload.get("财报数据_季报中报") or {}
+    check("财报分析: LLM投喂报告期", fin_payload.get("最新报告期") == "2026H1", str(fin_payload))
+    stale_detail = _mk_detail(financials={"source": "ths", "stale": True, "error": "网页暂不可用", "rows": [
+        {"period": "2026H1", "date": "2026-06-30", "revenue_yoy": 10, "net_profit_yoy": 10},
+    ]})
+    stale_payload = analysis.build_payload(stale_detail)["财报数据_季报中报"]
+    stale_fb = analysis.rule_based(stale_detail)
+    check("财报分析: 缓存状态投喂", "使用上次成功缓存" in stale_payload.get("数据状态", ""), str(stale_payload))
+    check("财报分析: 缓存状态提示", "缓存数据" in stale_fb["fundamental"]["summary"], str(stale_fb["fundamental"]))
+
+
 def test_rule_precision() -> None:
     # 1) 量能确认：放量上涨 +6 / 放量下跌 -6 / 缩量下跌 +3 / 缩量上涨 -3 / 数据不足 0
     def bars(closes: list, vols: list) -> list:
@@ -214,7 +470,7 @@ def test_rule_precision() -> None:
     check("乖离修正: 超卖进机会面", any("超卖" in o for o in fb_low["risk"]["opportunities"]), str(fb_low["risk"]["opportunities"]))
 
     # 3) 三维分面明细输出（含当日盘口分项）
-    check("分面分数输出", set(fb_over["advice"]["scores"].keys()) == {"tech", "capital", "news", "intraday", "total"},
+    check("分面分数输出", set(fb_over["advice"]["scores"].keys()) == {"tech", "capital", "news", "fundamental", "intraday", "total"},
           str(fb_over["advice"]["scores"]))
 
     # 4) 信号冲突降档：技术/资金偏空 + 消息强多 -> signal=conflict、降档、置信度压低
@@ -553,9 +809,53 @@ def test_registry() -> None:
     names = [p.name for p in reg.providers]
     check("数据源装配", "eastmoney" in names and len(names) >= 3, str(names))
     check("健康度接口（不触网）", len(reg.health()) == len(names))
-    # 资讯能力：东财主源 + 新浪网页兜底（东财不可用时自动回退）
+    # 资讯/研报/财报能力：同花顺主源，东方财富辅源，资讯保留新浪末级兜底
     news_caps = sorted(p.name for p in reg.providers if "news" in p.caps)
-    check("资讯源装配（东财+新浪兜底）", news_caps == ["eastmoney", "sina"], str(news_caps))
+    report_caps = sorted(p.name for p in reg.providers if "reports" in p.caps)
+    financial_caps = sorted(p.name for p in reg.providers if "financials" in p.caps)
+    check("资讯源装配（同花顺+东财+新浪兜底）", news_caps == ["eastmoney", "sina", "ths"], str(news_caps))
+    check("研报源装配（同花顺+东财兜底）", report_caps == ["eastmoney", "ths"], str(report_caps))
+    check("财报源装配（同花顺+东财兜底）", financial_caps == ["eastmoney", "ths"], str(financial_caps))
+    ordered_news = [p.name for p in reg._available("news")]
+    ordered_reports = [p.name for p in reg._available("reports")]
+    check("资讯研报优先级: 同花顺在东财前", ordered_news[:2] == ["ths", "eastmoney"] and ordered_reports[:2] == ["ths", "eastmoney"],
+          str((ordered_news, ordered_reports)))
+
+
+def test_watch_monitor() -> None:
+    add = service.watch_monitor({"status": "normal", "change_pct": 3.2, "volume_ratio": 1.8})
+    reduce = service.watch_monitor({"status": "normal", "change_pct": -3.0, "volume_ratio": 1.0})
+    observe = service.watch_monitor({"status": "normal", "change_pct": 1.2, "volume_ratio": 1.0})
+    delayed = service.watch_monitor({"status": "delayed", "status_text": "数据更新延迟"})
+    check("关键监测: 放量上涨提示可加仓", add["action"] == "可加仓" and add["tone"] == "up", str(add))
+    check("关键监测: 下跌提示应减仓", reduce["action"] == "应减仓" and reduce["tone"] == "down", str(reduce))
+    check("关键监测: 普通波动继续观察", observe["action"] == "继续观察", str(observe))
+    check("关键监测: 异常行情不误报加减仓", delayed["action"] == "继续观察" and delayed["tone"] == "warn", str(delayed))
+    old_trading, old_session = service.is_trading_now, service.session_state
+    try:
+        service.is_trading_now = lambda: True
+        service.session_state = lambda: "open"
+        check("首页刷新周期: 5秒", service.session_info()["interval_ms"] == 5000)
+    finally:
+        service.is_trading_now, service.session_state = old_trading, old_session
+
+
+def test_watch_monitor() -> None:
+    add = service.watch_monitor({"status": "normal", "change_pct": 3.2, "volume_ratio": 1.8})
+    reduce = service.watch_monitor({"status": "normal", "change_pct": -3.0, "volume_ratio": 1.0})
+    observe = service.watch_monitor({"status": "normal", "change_pct": 1.2, "volume_ratio": 1.0})
+    delayed = service.watch_monitor({"status": "delayed", "status_text": "数据更新延迟"})
+    check("关键监测: 放量上涨提示可加仓", add["action"] == "可加仓" and add["tone"] == "up", str(add))
+    check("关键监测: 下跌提示应减仓", reduce["action"] == "应减仓" and reduce["tone"] == "down", str(reduce))
+    check("关键监测: 普通波动继续观察", observe["action"] == "继续观察", str(observe))
+    check("关键监测: 异常行情不误报加减仓", delayed["action"] == "继续观察" and delayed["tone"] == "warn", str(delayed))
+    old_trading, old_session = service.is_trading_now, service.session_state
+    try:
+        service.is_trading_now = lambda: True
+        service.session_state = lambda: "open"
+        check("首页刷新周期: 5秒", service.session_info()["interval_ms"] == 5000)
+    finally:
+        service.is_trading_now, service.session_state = old_trading, old_session
 
 
 def test_items_fingerprint() -> None:
@@ -746,7 +1046,10 @@ def main() -> int:
     test_fingerprint()
     test_model_filter()
     test_news_interpret()
+    test_hotspot()
+    test_hotspot_ai()
     test_reports_interpret()
+    test_financials()
     test_rule_precision()
     test_kline_stale()
     test_cache()
@@ -754,6 +1057,7 @@ def main() -> int:
     test_ai_cache_freshness()
     test_indicators()
     test_registry()
+    test_watch_monitor()
     test_items_fingerprint()
     test_backtest_selftest()
     test_check_sources_backtest_struct()

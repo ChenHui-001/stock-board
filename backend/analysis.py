@@ -18,10 +18,12 @@ ACTIONS = ["积极持仓/加仓", "持有观望", "减仓规避", "清仓离场"
 
 SYSTEM_PROMPT = """你是一名 A 股量化分析师，擅长用均线技术形态、资金流向、两融数据与市场资讯做短中期持仓决策。
 
-你会收到某只股票的全维度实时数据（JSON），其中包含「市场资讯」段（近一个月相关新闻与 AI 情绪标注）
-与「券商观点」段（近一个月券商研报与 AI 情绪标注）。
-请综合基本面与技术面判断：资讯与研报可作为辅助依据，但必须基于数据本身做判断，禁止编造数据中不存在的消息面信息；
+你会收到某只股票的全维度实时数据（JSON），其中包含「市场资讯」段（近一个月相关新闻与 AI 情绪标注）、
+「券商观点」段（近一个月券商研报与 AI 情绪标注）和「财报数据_季报中报」段（季报、中报、三季报、年报核心指标及同比变化）。
+请综合基本面与技术面判断：资讯、研报和财报可作为辅助依据，但必须基于数据本身做判断，禁止编造数据中不存在的消息面或财务数据；
 若资讯/研报情绪明显（如连续利好/利空、机构集中买入评级），应在风险机会与操作建议中反映其权重，并在 reason 中提及。
+若「财报数据_季报中报」标记为缓存或源不可用，必须明确说明数据可能延迟，不得将其表述为刚发布的最新财报。
+财报分析必须标注最新报告期（Q1/H1/Q3/FY），同比数据优先于跨季度绝对值；单季度、半年报和年报不可混为同一口径，缺失指标不得臆测。营收、归母净利润、扣非净利润、ROE、负债率等指标如出现持续恶化，应在风险中体现；若持续增长，应在机会中体现。
 技术面判断必须结合当日实时盘口（量比、换手率、盘中位置、振幅）验证短线动能，并引用其数值。
 「技术指标_MACD_KDJ」段中的 MACD/KDJ 数值与状态（金叉/死叉/超买超卖）仅作参考展示，
 不作为决策依据（当前市场行情下摆动指标频繁钝化失效）；请勿仅凭 MACD/KDJ 金叉死叉给出操作建议。
@@ -52,6 +54,12 @@ SYSTEM_PROMPT = """你是一名 A 股量化分析师，擅长用均线技术形�
     "main_force": "主力资金动向分析，引用 30 日主力净额与连续流入/流出天数",
     "retail": "散户（中小单）情绪分析，引用小单净额",
     "margin": "两融多空分析，引用融资余额变化率与融券变化"
+  },
+  "fundamental": {
+    "summary": "一句话结论，20 字内",
+    "period": "引用最新财报期别，如 2026H1",
+    "growth": "引用营收/归母净利润/扣非净利润同比变化",
+    "quality": "引用 ROE、毛利率或负债率"
   },
   "risk": {
     "opportunities": ["利好机会 1", "利好机会 2"],
@@ -181,6 +189,7 @@ def build_payload(
             "融资余额占流通市值%": detail.get("margin", {}).get("summary", {}).get("rzyezb_last"),
             "有效交易日数": len(margin_rows),
         },
+        "财报数据_季报中报": _payload_financials(detail.get("financials") or {}),
         "当前状态标签": [
             f"{t['group']}：{t['label']}" for t in detail.get("status", {}).get("tags", [])
         ],
@@ -247,6 +256,58 @@ def _reports_score(reports: list[dict[str, Any]] | None) -> tuple[int, int, int]
         else:
             neutral += 1
     return bull, bear, neutral
+
+
+def _fundamental_score(financials: dict[str, Any] | None) -> tuple[int, list[str], dict[str, Any]]:
+    """按最新定期报告同比与质量指标给出保守基本面分，不跨口径比较绝对值。"""
+    rows = (financials or {}).get("rows") or []
+    if not rows:
+        return 0, [], {"summary": "暂无季报/中报/年报数据", "period": "--", "growth": "暂无同比数据", "quality": "暂无质量指标"}
+    dated_rows = [row for row in rows if str(row.get("date") or "")]
+    latest = max(dated_rows, key=lambda row: str(row.get("date"))) if dated_rows else rows[0]
+    score = 0
+    notes: list[str] = []
+    growth_bits: list[str] = []
+    for label, key in (("营收", "revenue_yoy"), ("归母净利润", "net_profit_yoy"), ("扣非净利润", "net_profit_deduct_yoy")):
+        value = latest.get(key)
+        if not isinstance(value, (int, float)):
+            continue
+        growth_bits.append(f"{label}同比 {value:+.2f}%")
+        if value >= 5:
+            score += 2
+        elif value <= -5:
+            score -= 2
+    roe = latest.get("roe")
+    debt = latest.get("debt_ratio")
+    if isinstance(roe, (int, float)):
+        if roe >= 10:
+            score += 1
+        elif roe < 0:
+            score -= 1
+    if isinstance(debt, (int, float)) and debt >= 70:
+        score -= 1
+    score = max(-8, min(8, score))
+    period = latest.get("period") or latest.get("date") or "未知报告期"
+    growth = "，".join(growth_bits) or "暂无同比数据"
+    stale_note = "财报源暂不可用，以下为上次成功缓存数据；" if financials.get("stale") else ""
+    quality_bits = []
+    if isinstance(roe, (int, float)):
+        quality_bits.append(f"ROE {roe:.2f}%")
+    if isinstance(latest.get("gross_margin"), (int, float)):
+        quality_bits.append(f"毛利率 {latest['gross_margin']:.2f}%")
+    if isinstance(debt, (int, float)):
+        quality_bits.append(f"负债率 {debt:.2f}%")
+    quality = "，".join(quality_bits) or "暂无质量指标"
+    if score > 0:
+        notes.append(f"{stale_note}最新{period}基本面偏强：{growth}")
+    elif score < 0:
+        notes.append(f"{stale_note}最新{period}基本面承压：{growth}")
+    return score, notes, {
+        "summary": stale_note + ("基本面偏强" if score > 0 else "基本面承压" if score < 0 else "基本面分化"),
+        "period": period,
+        "growth": growth,
+        "quality": quality,
+    }
 
 
 def _volume_confirm(bars: list[dict[str, Any]]) -> tuple[int, str]:
@@ -358,6 +419,41 @@ def _annotate_intraday(note: str) -> list[dict[str, Any]]:
                 break
         out.append(item)
     return out
+
+
+def _payload_financials(financials: dict[str, Any]) -> dict[str, Any]:
+    """压缩季报/中报/年报核心指标，保留报告期和同比口径供模型判断。"""
+    rows = financials.get("rows") or []
+    if not rows:
+        return {"说明": "暂无可用季报/中报/年报数据"}
+
+    def yi(v: Any) -> float | None:
+        return None if v is None else round(float(v) / 1e8, 4)
+
+    return {
+        "数据源": financials.get("source", ""),
+        "数据状态": "源暂不可用，使用上次成功缓存" if financials.get("stale") else "当前成功数据",
+        "数据错误": financials.get("error", "") if financials.get("stale") else "",
+        "最新报告期": rows[0].get("period") or rows[0].get("date", ""),
+        "最近报告": [
+            {
+                "报告期": row.get("period") or row.get("date", ""),
+                "报告日期": row.get("date", ""),
+                "营业收入_亿元": yi(row.get("revenue")),
+                "营业收入同比%": row.get("revenue_yoy"),
+                "归母净利润_亿元": yi(row.get("net_profit")),
+                "归母净利润同比%": row.get("net_profit_yoy"),
+                "扣非净利润_亿元": yi(row.get("net_profit_deduct")),
+                "扣非净利润同比%": row.get("net_profit_deduct_yoy"),
+                "基本每股收益": row.get("eps"),
+                "ROE%": row.get("roe"),
+                "毛利率%": row.get("gross_margin"),
+                "负债率%": row.get("debt_ratio"),
+            }
+            for row in rows[:6]
+        ],
+        "分析提示": "同比指标用于跨期比较；Q1/H1/Q3/FY 口径不同，不将报告期绝对值直接横比。",
+    }
 
 
 def _payload_oscillators(osc: dict[str, Any]) -> dict[str, Any]:
@@ -484,9 +580,11 @@ def rule_based(
     detail: dict[str, Any],
     news: list[dict[str, Any]] | None = None,
     reports: list[dict[str, Any]] | None = None,
+    financials: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """无 LLM（或 LLM 失败）时的确定性降级分析，输出结构完全一致。"""
     q = detail["quote"]
+    financials = financials or detail.get("financials") or {}
     ma = {m["window"]: m for m in detail.get("ma", [])}
     ma_sum = detail.get("ma_summary", {})
     flow = detail.get("fund_flow", {}).get("summary", {})
@@ -616,6 +714,7 @@ def rule_based(
     news_pts = max(-12, min(12, bull_n * 4 - bear_n * 4))      # 每条 +4 / -4 封顶 ±12
     bull_r, bear_r, _ = _reports_score(reports)
     report_pts = max(-15, min(15, bull_r * 5 - bear_r * 5))    # 每条 +5 / -5 封顶 ±15
+    fundamental_pts, fundamental_notes, fundamental_text = _fundamental_score(financials)
     news_score = news_pts + report_pts
 
     # 三维权重（环境变量 / 设置页可配，默认 1.0）
@@ -623,7 +722,7 @@ def rule_based(
     w_tech = round(tech_score * w["tech"], 1)
     w_capital = round(capital_score * w["capital"], 1)
     w_news = round(news_score * w["news"], 1)
-    score = round(w_tech + w_capital + w_news, 1)
+    score = round(w_tech + w_capital + w_news + fundamental_pts, 1)
 
     # ==================== 信号一致性 ====================
     # 三面方向一致 -> 提高置信度；方向冲突 -> 降置信度并把激进操作降一档
@@ -695,6 +794,8 @@ def rule_based(
         opportunities.append(f"券商研报面偏暖：{bull_r} 条买入/增持评级（含 {bear_r} 条谨慎），机构认可度较高")
     elif bull_r == 1 and bear_r == 0:
         opportunities.append("券商研报面有 1 条买入/增持评级信号，机构关注度提升")
+    if fundamental_pts > 0:
+        opportunities.extend(fundamental_notes)
     if volume_pts > 0 and volume_note:
         opportunities.append(volume_note)
     elif volume_pts < 0 and volume_note:
@@ -729,6 +830,8 @@ def rule_based(
         risks.append(f"券商研报面偏冷：{bear_r} 条减持/谨慎评级，机构分歧加大，留意预期下修")
     elif bear_r == 1 and bull_r == 0:
         risks.append("券商研报面有 1 条减持/谨慎评级，需关注机构预期变化")
+    if fundamental_pts < 0:
+        risks.extend(fundamental_notes)
 
     if not opportunities:
         opportunities.append(f"当前价 {price:.2f} 距 20 日低点 {sr.get('low_20')} 有安全边际，超跌反弹可期")
@@ -815,6 +918,7 @@ def rule_based(
                 if margin.get("available") else "该股无两融标的数据，杠杆资金维度不参与本次判定。"
             ),
         },
+        "fundamental": fundamental_text,
         "risk": {"opportunities": opportunities[:4], "risks": risks[:4]},
         "advice": {
             "action": action,
@@ -824,6 +928,7 @@ def rule_based(
                 + (f"，盘口 {intraday_pts:+d} 分" if intraday_pts else "")
                 + (f"，资讯面 {bull_n} 利好/{bear_n} 利空（计 {news_pts:+d} 分）" if (news or []) else "")
                 + (f"，研报面 {bull_r} 利好/{bear_r} 利空（计 {report_pts:+d} 分）" if (reports or []) else "")
+                + (f"，财报面 {fundamental_text['period']} {fundamental_pts:+d} 分" if (financials or {}).get("rows") else "")
                 + (f"，{signal_note}" if signal_note else "")
                 + "。"
             ),
@@ -844,6 +949,7 @@ def rule_based(
                 "tech": w_tech,
                 "capital": w_capital,
                 "news": w_news,
+                "fundamental": fundamental_pts,
                 "intraday": intraday_pts,  # 当日盘口分项（已计入技术面）
                 "total": score,
             },
@@ -859,7 +965,7 @@ def rule_based(
 def _sanitize(result: dict[str, Any], fallback: dict[str, Any], price: float | None) -> dict[str, Any]:
     """确保 LLM 输出满足需求 6.3 的硬约束，缺失项用规则引擎结果补齐。"""
     out: dict[str, Any] = {}
-    for section in ("trend", "capital", "risk", "advice"):
+    for section in ("trend", "capital", "fundamental", "risk", "advice"):
         base = dict(fallback.get(section) or {})
         got = result.get(section)
         if isinstance(got, dict):
@@ -914,11 +1020,12 @@ async def analyze(
     news: list[dict[str, Any]] | None = None,
     reports: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """news/reports 为近一个月资讯与券商研报（含逐条情绪解读）。
+    """news/reports 为资讯与券商研报，财报从 detail.financials 读取并一并投喂。
 
-    LLM 路径投喂全文，规则引擎分别按资讯/研报情绪加权。
+    LLM 路径投喂全文，规则引擎按财报同比与质量指标做保守基本面评分。
     """
-    fallback = rule_based(detail, news, reports)
+    financials = detail.get("financials") or {}
+    fallback = rule_based(detail, news, reports, financials)
     price = detail["quote"].get("price")
     meta: dict[str, Any] = {
         "engine": "rule",
@@ -927,6 +1034,7 @@ async def analyze(
         "degraded_reason": "",
         "news_count": len(news or []),
         "reports_count": len(reports or []),
+        "financials_count": len(financials.get("rows") or []),
     }
 
     if not llm.available():

@@ -104,7 +104,10 @@
       };
       bar.appendChild(done);
     } else {
-      bar.appendChild(U.el('span', 'wl-count', '自选股 ' + state.items.length + ' 只'));
+      const heading = U.el('div', 'wl-heading');
+      heading.appendChild(U.el('div', 'wl-heading-title', '我的自选'));
+      heading.appendChild(U.el('div', 'wl-heading-sub', state.items.length + ' 只股票 · 关键监测一览'));
+      bar.appendChild(heading);
     }
 
     const sorters = U.el('div', 'sorters');
@@ -146,6 +149,7 @@
     row.appendChild(withAlign(U.el('div', 'vr-cell', '量比')));
     row.appendChild(withAlign(U.el('div', 'turnover-cell', '换手')));
     row.appendChild(withAlign(U.el('div', '', '涨跌幅')));
+    row.appendChild(U.el('div', 'monitor-cell', '关键监测'));
     row.appendChild(withAlign(U.el('div', '', '操作')));
     return row;
   }
@@ -153,6 +157,15 @@
   function withAlign(node) {
     node.style.textAlign = 'right';
     return node;
+  }
+
+  function renderMonitorCell(item) {
+    const monitor = item.monitor || {};
+    const cell = U.el('div', 'monitor-cell');
+    const tag = U.el('span', 'monitor-tag ' + (monitor.tone || 'flat'), monitor.action || '继续观察');
+    tag.title = monitor.reason || '暂无监测说明';
+    cell.appendChild(tag);
+    return cell;
   }
 
   function renderRow(item) {
@@ -222,6 +235,9 @@
 
     // 涨跌幅
     row.appendChild(U.el('div', 'pct-cell ' + U.tone(item.change_pct), U.pct(item.change_pct)));
+
+    // 关键监测
+    row.appendChild(renderMonitorCell(item));
 
     // 操作
     const actions = U.el('div', 'row-actions');
@@ -339,11 +355,22 @@
 
   /** 静默刷新：只更新价格，不重建 DOM，避免打断拖拽和滚动 */
   async function tick() {
-    if (state.manage || !state.items.length) return;
+    if (state.manage) return;
     try {
       const data = await API.watchlist(false);
+      const items = data.items || [];
       const map = {};
-      (data.items || []).forEach(function (i) { map[i.code] = i; });
+      items.forEach(function (i) { map[i.code] = i; });
+      // 自选列表可能在别处变化（如快讯弹窗/查询页加入、多标签页同时打开）：
+      // 新增/删除会改变列表结构，静默补价补不了新行，直接整表重载自动同步
+      const known = new Set(state.items.map(function (i) { return i.code; }));
+      if (items.length !== state.items.length || items.some(function (i) { return !known.has(i.code); })) {
+        state.items = items;
+        render();
+        App.setSession(data.session);
+        return;
+      }
+      if (!state.items.length) return;
       state.items = state.items.map(function (old) {
         return map[old.code] || old;
       });
@@ -361,6 +388,7 @@
       const prevCell = row.querySelector('.prev-cell');
       const vrCell = row.querySelector('.vr-cell');
       const turnoverCell = row.querySelector('.turnover-cell');
+      const monitorCell = row.querySelector('.monitor-cell');
       if (!priceCell) return;
 
       const prev = state.lastPrices[item.code];
@@ -381,6 +409,10 @@
       if (prevCell) prevCell.textContent = U.price(item.prev_close);
       if (vrCell) vrCell.textContent = U.ratio(item.volume_ratio);
       if (turnoverCell) turnoverCell.textContent = U.turnover(item.turnover);
+      if (monitorCell) {
+        const next = renderMonitorCell(item);
+        monitorCell.replaceWith(next);
+      }
     });
   }
 

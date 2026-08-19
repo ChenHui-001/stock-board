@@ -77,6 +77,24 @@
     hot: function (limit) {
       return request('/api/hot?limit=' + (limit || 8));
     },
+    hotspot: function (minutes, refresh) {
+      var q = [];
+      if (minutes != null) q.push('minutes=' + minutes);
+      if (refresh) q.push('refresh=1');
+      return request('/api/hotspot' + (q.length ? '?' + q.join('&') : ''));
+    },
+    hotspotAnalyze: function (item, refresh) {
+      // 单条快讯 AI 分析：利好/利空行业 + 关联度最高股票。
+      // 标题/摘要截断到后端字段上限内，避免超长快讯摘要触发 422
+      return request('/api/hotspot/analyze' + (refresh ? '?refresh=1' : ''), {
+        method: 'POST',
+        body: {
+          title: String((item && item.title) || '').slice(0, 500),
+          summary: String((item && item.summary) || '').slice(0, 2000),
+          source: String((item && (item.source || item.origin)) || '').slice(0, 100)
+        }
+      });
+    },
     detail: function (code, refresh) {
       return request('/api/stock/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''));
     },

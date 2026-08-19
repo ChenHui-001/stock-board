@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
+from . import analysis, hotspot as hotspot_mod, hotspot_ai, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import is_trading_now, normalize_code, resolve_market
@@ -36,6 +36,12 @@ class LLMConfigBody(BaseModel):
     api_key: str = ""
     json_mode: bool = True
     clear_key: bool = False
+
+
+class HotspotAnalyzeBody(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500, description="快讯标题")
+    summary: str = Field("", max_length=2000, description="快讯摘要")
+    source: str = Field("", max_length=100, description="来源媒体")
 
 
 def _fail(exc: Exception, hint: str) -> HTTPException:
@@ -88,7 +94,7 @@ _REQUIRED_REPORT_FIELDS = ("report_sentiment", "rating_dist", "reports_preview")
 # AI 报告结构版本：机会/风险条目升级为 {text,strength,hit,confidence} 后引入。
 # 带版本号的缓存直接命中，不带的一律作废重建——比逐条结构检查更可靠
 # （某些股票机会/风险恰好无盘口信号、全是字符串条目，也会被旧检查误判）。
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 
 
 def _cache_fresh(cached_at: str) -> bool:
@@ -343,7 +349,32 @@ async def hot(limit: int = Query(8, ge=1, le=20)) -> dict[str, Any]:
     return await service.hot(limit)
 
 
-# ------------------------------------------------------------------ 详情
+# ------------------------------------------------------------------ 市场热点追踪
+
+@router.get("/hotspot")
+async def hotspot(
+    minutes: int = Query(30, ge=5, le=120, description="时间窗（分钟）：默认 30"),
+    refresh: bool = Query(False),
+) -> dict[str, Any]:
+    """近 N 分钟市场热点（多源 7x24 快讯聚合：同花顺/东方财富/新浪财经）。
+
+    保留原始媒体署名（彭博社/财联社/财新/澎湃等），命中重点媒体名单的条目
+    带 media_badge 标记；结果整体缓存 HOTSPOT_TTL 秒避免反复打外部快讯接口。
+    """
+    return await hotspot_mod.get_hotspot(minutes=minutes, force=refresh)
+
+
+@router.post("/hotspot/analyze")
+async def hotspot_analyze(
+    body: HotspotAnalyzeBody, refresh: bool = Query(False)
+) -> dict[str, Any]:
+    """单条快讯 AI 分析：利好/利空哪些行业 + 关联度最高的三只股票。
+
+    LLM 可用时由大模型判断行业影响与检索关键词，否则回退内置行业词典；
+    关联股票一律通过真实搜索接口解析（代码/名称保证真实），按命中关键词数排序。
+    结果按标题+摘要指纹缓存 10 分钟，并发点击同一快讯只执行一次分析。
+    """
+    return await hotspot_ai.analyze_news(body.title, body.summary, body.source, force=refresh)
 
 @router.get("/stock/{code}")
 async def stock_detail(code: str, refresh: bool = Query(False)) -> dict[str, Any]:

@@ -34,6 +34,7 @@ def history_ttl() -> float:
 # 上一次成功的数据保留 24 小时。数据源被频控/宕机时，宁可展示带「延迟」标记的
 # 旧数据，也不要给用户一片空白（K线、资金、两融都是日频数据，隔夜可用）。
 STALE_TTL = 86400.0
+FINANCIAL_TTL = 21600.0  # 定期报告发布频率低，网页数据 6 小时内可复用
 
 
 async def cached_pack(
@@ -98,6 +99,47 @@ async def get_quote(code: str, market: str | None = None, force: bool = False) -
 
 # ------------------------------------------------------------------ 自选股看板
 
+def watch_monitor(data: dict[str, Any]) -> dict[str, str]:
+    """根据实时行情生成首页关键监测提示。
+
+    只在信号足够明确时给出加减仓提示，其余情况保持观察，避免用单一涨跌幅
+    把普通波动误报成操作信号。
+    """
+    status = data.get("status") or "unknown"
+    if status != "normal":
+        return {
+            "action": "继续观察",
+            "tone": "warn",
+            "reason": data.get("status_text") or "行情状态异常，暂不判断",
+        }
+
+    change = data.get("change_pct")
+    volume_ratio = data.get("volume_ratio")
+    if not isinstance(change, (int, float)):
+        return {"action": "继续观察", "tone": "flat", "reason": "涨跌幅暂无数据"}
+
+    if change <= -3:
+        return {
+            "action": "应减仓",
+            "tone": "down",
+            "reason": f"跌幅 {change:+.2f}%，短线风险升高",
+        }
+    if change >= 3 and isinstance(volume_ratio, (int, float)) and volume_ratio >= 1.5:
+        return {
+            "action": "可加仓",
+            "tone": "up",
+            "reason": f"涨幅 {change:+.2f}% 且量比 {volume_ratio:.2f}，动能较强",
+        }
+    volume_text = (
+        f"，量比 {volume_ratio:.2f}" if isinstance(volume_ratio, (int, float)) else ""
+    )
+    return {
+        "action": "继续观察",
+        "tone": "flat",
+        "reason": f"涨跌幅 {change:+.2f}%{volume_text}，未形成明确信号",
+    }
+
+
 async def watchlist_board(force: bool = False) -> dict[str, Any]:
     rows = storage.list_watchlist()
     if not rows:
@@ -146,6 +188,7 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
         if board and board != row.get("board"):
             storage.update_meta(row["code"], None, board)
         data["board"] = board
+        data["monitor"] = watch_monitor(data)
         data["sort_no"] = row["sort_no"]
         items.append(data)
 
@@ -205,7 +248,7 @@ def session_info() -> dict[str, Any]:
         "state": state,
         "trading": trading,
         "auto_refresh": trading,
-        "interval_ms": 3000 if trading else 0,
+        "interval_ms": 5000 if trading else 0,
         "label": {
             "open": "盘中交易",
             "lunch_break": "午间休市",
@@ -248,6 +291,17 @@ async def _margin(code: str, market: str, force: bool) -> dict[str, Any]:
     )
 
 
+async def _financials(code: str, market: str, force: bool) -> dict[str, Any]:
+    async def loader() -> Any:
+        rows, src = await registry().financials(code, market, 12)
+        return {"rows": rows, "source": src}
+
+    return await cached_pack(
+        f"financials:{code}.{market}", FINANCIAL_TTL, loader, force,
+        empty={"rows": [], "source": ""},
+    )
+
+
 async def _boards(code: str, market: str, force: bool) -> list[str]:
     async def loader() -> Any:
         return {"names": await registry().boards(code, market)}
@@ -276,6 +330,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
         "kline": asyncio.create_task(_kline(code, market, force)),
         "flow": asyncio.create_task(_flow(code, market, force)),
         "margin": asyncio.create_task(_margin(code, market, force)),
+        "financials": asyncio.create_task(_financials(code, market, force)),
         "boards": asyncio.create_task(_boards(code, market, force)),
     }
     done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_EXCEPTION)
@@ -292,6 +347,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     kline_pack = tasks["kline"].result()
     flow_pack = tasks["flow"].result()
     margin_pack = tasks["margin"].result()
+    financial_pack = tasks["financials"].result()
     boards = tasks["boards"].result()
 
     bars = kline_pack["bars"]
@@ -350,15 +406,22 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
             "stale": margin_pack.get("stale", False),
             "error": margin_pack.get("error", ""),
         },
+        "financials": {
+            "rows": [asdict(r) for r in financial_pack["rows"]],
+            "source": financial_pack.get("source", ""),
+            "stale": financial_pack.get("stale", False),
+            "error": financial_pack.get("error", ""),
+        },
         "status": status,
         "sources": {
             "quote": quote.source,
             "kline": kline_pack.get("source", ""),
             "fund_flow": flow_pack.get("source", ""),
             "margin": margin_pack.get("source", ""),
+            "financials": financial_pack.get("source", ""),
             "stale": [
                 name for name, pack in
-                (("K线", kline_pack), ("资金流向", flow_pack), ("两融", margin_pack))
+                (("K线", kline_pack), ("资金流向", flow_pack), ("两融", margin_pack), ("财报", financial_pack))
                 if pack.get("stale")
             ],
         },

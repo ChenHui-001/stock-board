@@ -9,20 +9,26 @@ from typing import Any
 from ..utils import TZ, normalize_code, resolve_market, secid, to_float
 from .base import (
     Bar,
+    FinancialPeriod,
     FlowDay,
     MarginDay,
     NewsItem,
     Provider,
     ProviderError,
     Quote,
+    ReportItem,
     SearchItem,
     fetch,
 )
+from .webparse import parse_report_html
 
 PUSH = "https://push2.eastmoney.com/api/qt"
 PUSH_HIS = "https://push2his.eastmoney.com/api/qt"
 SEARCH = "https://searchapi.eastmoney.com/api/suggest/get"
 DC = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+REPORT_PAGE = "https://data.eastmoney.com/report/{code}.html"
+FINANCE_PAGE = "https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/Index?type=web&code={code}"
+FINANCE_AJAX = "https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/ZYZBAjaxNew"
 REFERER = {"Referer": "https://quote.eastmoney.com/"}
 
 # ulist 字段（f10=量比，f8=换手率）
@@ -63,7 +69,7 @@ class EastmoneyProvider(Provider):
     def __init__(self) -> None:
         super().__init__(
             name="eastmoney",
-            caps={"quotes", "search", "kline", "fund_flow", "margin", "hot", "boards", "industry", "news"},
+            caps={"quotes", "search", "kline", "fund_flow", "margin", "hot", "boards", "industry", "news", "reports", "financials"},
         )
 
     # ------------------------------------------------------------ 实时行情
@@ -400,6 +406,65 @@ class EastmoneyProvider(Provider):
         if not out:
             raise ProviderError("东方财富未返回该股票的近期资讯")
         return out
+
+    # ------------------------------------------------------------ 东方财富研报（网页辅源）
+    async def reports(self, code: str, market: str, limit: int = 15) -> list[ReportItem]:
+        """东方财富 F10 研报网页，作为同花顺研报失败时的备用源。"""
+        resp = await fetch(
+            REPORT_PAGE.format(code=normalize_code(code)),
+            headers={"Referer": "https://quote.eastmoney.com/"},
+        )
+        try:
+            return parse_report_html(resp.text, "eastmoney", limit)
+        except ValueError as exc:
+            raise ProviderError("东方财富研报页面未返回可识别数据") from exc
+
+    # ------------------------------------------------------------ 东方财富财报（网页辅源）
+    async def financials(self, code: str, market: str, limit: int = 12) -> list[FinancialPeriod]:
+        """东方财富 F10 页面使用的 ZYZBAjaxNew 网页数据，作为同花顺失败时的备用源。"""
+        page_code = f"{market}{normalize_code(code)}"
+        resp = await fetch(
+            FINANCE_AJAX,
+            headers={"Referer": FINANCE_PAGE.format(code=page_code)},
+            params={"type": 0, "code": page_code},
+        )
+        try:
+            rows = resp.json().get("data") or []
+        except (TypeError, ValueError) as exc:
+            raise ProviderError("东方财富财报网页数据非 JSON") from exc
+        if not isinstance(rows, list):
+            raise ProviderError("东方财富财报网页数据格式异常")
+
+        def period_label(date: str) -> str:
+            month = int(date[5:7])
+            return {3: f"{date[:4]}Q1", 6: f"{date[:4]}H1", 9: f"{date[:4]}Q3", 12: f"{date[:4]}FY"}.get(month, date[:7])
+
+        out: list[FinancialPeriod] = []
+        for row in rows:
+            date = str(row.get("REPORT_DATE") or "")[:10]
+            try:
+                datetime.strptime(date, "%Y-%m-%d")
+            except ValueError:
+                continue
+            out.append(FinancialPeriod(
+                date=date,
+                period=period_label(date),
+                revenue=to_float(row.get("TOTALOPERATEREVE")),
+                revenue_yoy=to_float(row.get("TOTALOPERATEREVETZ")),
+                net_profit=to_float(row.get("PARENTNETPROFIT")),
+                net_profit_yoy=to_float(row.get("PARENTNETPROFITTZ")),
+                net_profit_deduct=to_float(row.get("KCFJCXSYJLR")),
+                net_profit_deduct_yoy=to_float(row.get("KCFJCXSYJLRTZ")),
+                eps=to_float(row.get("EPSJB")),
+                roe=to_float(row.get("ROEJQ")),
+                gross_margin=to_float(row.get("XSML")),
+                debt_ratio=to_float(row.get("ZCFZL")),
+                source="eastmoney",
+            ))
+        if not out:
+            raise ProviderError("东方财富财报网页未返回有效报告期")
+        out.sort(key=lambda item: item.date, reverse=True)
+        return out[:limit]
 
     # ------------------------------------------------------------ 热门榜
     async def hot(self, limit: int = 10) -> dict[str, list[Quote]]:
