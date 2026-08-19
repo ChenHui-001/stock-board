@@ -355,11 +355,22 @@
 
   /** 静默刷新：只更新价格，不重建 DOM，避免打断拖拽和滚动 */
   async function tick() {
-    if (state.manage || !state.items.length) return;
+    if (state.manage) return;
     try {
       const data = await API.watchlist(false);
+      const items = data.items || [];
       const map = {};
-      (data.items || []).forEach(function (i) { map[i.code] = i; });
+      items.forEach(function (i) { map[i.code] = i; });
+      // 自选列表可能在别处变化（如快讯弹窗/查询页加入、多标签页同时打开）：
+      // 新增/删除会改变列表结构，静默补价补不了新行，直接整表重载自动同步
+      const known = new Set(state.items.map(function (i) { return i.code; }));
+      if (items.length !== state.items.length || items.some(function (i) { return !known.has(i.code); })) {
+        state.items = items;
+        render();
+        App.setSession(data.session);
+        return;
+      }
+      if (!state.items.length) return;
       state.items = state.items.map(function (old) {
         return map[old.code] || old;
       });
