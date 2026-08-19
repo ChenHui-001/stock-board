@@ -1598,3 +1598,131 @@ a.hotspot-title:hover { color: var(--accent); }
   .hotspot-item { gap: 10px; }
   .hotspot-time { flex-basis: 40px; }
 }
+
+/* 快讯 AI 分析：条目操作区 + 弹窗内行业影响 / 关联股 */
+.hotspot-item-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+.hotspot-item-actions .btn { min-width: 76px; }
+
+.hs-industries {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.hs-industry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-1);
+  font-size: 12.5px;
+}
+.hs-industry-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.hs-industry-reason {
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+.hs-industry.bull { border-color: rgba(245, 70, 93, .35); background: rgba(245, 70, 93, .07); }
+.hs-industry.bull .hs-industry-name { color: var(--up); }
+.hs-industry.bear { border-color: rgba(23, 178, 106, .35); background: rgba(23, 178, 106, .07); }
+.hs-industry.bear .hs-industry-name { color: var(--down); }
+.hs-industry.flat { border-color: rgba(148, 163, 184, .3); background: rgba(148, 163, 184, .06); }
+.hs-industry.flat .hs-industry-name { color: var(--flat); }
+
+.hs-stocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hs-stock {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-1);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.hs-stock:hover {
+  border-color: var(--accent);
+  background: var(--bg-elev-2);
+}
+.hs-stock-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.hs-stock-rank {
+  width: 18px; height: 18px;
+  display: grid; place-items: center;
+  border-radius: 4px;
+  background: var(--bg-elev-2);
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.hs-stock-name {
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hs-stock-code {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  flex-shrink: 0;
+}
+.hs-stock-board {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+  margin-left: auto;
+}
+.hs-stock-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.hs-stock-price { font-family: var(--mono); font-size: 13px; }
+.hs-stock-chg { font-family: var(--mono); font-weight: 600; }
+.hs-stock-reason {
+  color: var(--text-faint);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+@media (max-width: 560px) {
+  .hs-stock-board { max-width: 96px; }
+  .hs-industry { flex-direction: column; gap: 2px; }
+}

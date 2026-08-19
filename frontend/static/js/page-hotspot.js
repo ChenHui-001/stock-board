@@ -153,9 +153,215 @@
       sum.title = it.summary;
       body.appendChild(sum);
     }
+
+    // 操作区：AI 分析（分析该快讯利好/利空哪些行业 + 关联度最高的股票）
+    const acts = U.el('div', 'hotspot-item-actions');
+    const aiBtn = U.el('button', 'btn btn-sm btn-primary', '🤖 AI 分析');
+    aiBtn.title = '分析该快讯对行业的影响与关联度最高的股票';
+    aiBtn.onclick = function () { openAnalysis(it); };
+    acts.appendChild(aiBtn);
+    body.appendChild(acts);
+
     row.appendChild(body);
     return row;
   }
+
+  // ---------------------------------------------------------- 快讯 AI 分析弹窗
+  // 与股票 AI 分析不同：这是「快讯 → 行业影响 + 关联股」的独立分析。
+  const HS_SENT_CLASS = { '利好': 'sent-bull', '利空': 'sent-bear', '中性': 'sent-flat' };
+  const hsState = { item: null, loading: false };
+
+  function hsModalRoot() { return document.getElementById('modal-root'); }
+  function hsModalBody() { return document.getElementById('modal-body'); }
+  function hsModalTitle() { return document.getElementById('modal-title'); }
+  function hsModalActions() { return document.getElementById('modal-actions'); }
+
+  function hsShow() {
+    hsModalRoot().hidden = false;
+    document.body.style.overflow = 'hidden';
+  }
+  function hsClose() {
+    hsModalRoot().hidden = true;
+    document.body.style.overflow = '';
+    hsState.loading = false;
+  }
+
+  async function openAnalysis(item) {
+    if (hsState.loading) return;
+    hsState.item = item;
+    hsModalTitle().textContent = '快讯 AI 分析 · 行业影响与关联股';
+    hsModalActions().innerHTML = '';
+    renderAnalysisLoading();
+    hsShow();
+    hsState.loading = true;
+    try {
+      const data = await API.hotspotAnalyze(item, false);
+      renderAnalysis(data);
+    } catch (err) {
+      renderAnalysisError(err.message);
+    } finally {
+      hsState.loading = false;
+    }
+  }
+
+  async function reanalyze() {
+    if (hsState.loading || !hsState.item) return;
+    hsState.loading = true;
+    renderAnalysisLoading();
+    hsModalActions().innerHTML = '';
+    try {
+      const data = await API.hotspotAnalyze(hsState.item, true);
+      renderAnalysis(data);
+    } catch (err) {
+      renderAnalysisError(err.message);
+    } finally {
+      hsState.loading = false;
+    }
+  }
+
+  function renderAnalysisLoading() {
+    hsModalBody().innerHTML =
+      '<div class="ai-loading">'
+      + '<div class="ai-spinner"></div>'
+      + '<div class="ai-loading-text">正在分析该快讯的行业影响…</div>'
+      + '<div class="ai-loading-sub">AI 正在判断利好/利空行业并检索关联股票，请稍候</div>'
+      + '</div>';
+  }
+
+  function renderAnalysisError(msg) {
+    hsModalBody().innerHTML =
+      '<div class="empty">'
+      + '<div class="empty-icon">⚠️</div>'
+      + '<div class="empty-title">分析失败</div>'
+      + '<div class="empty-desc">' + U.escapeHtml(msg) + '</div>'
+      + '</div>';
+    const retry = U.el('button', 'btn btn-sm btn-primary', '重试');
+    retry.onclick = reanalyze;
+    const acts = hsModalActions();
+    acts.innerHTML = '';
+    acts.appendChild(retry);
+  }
+
+  function renderAnalysis(data) {
+    // 后端失败时返回 {ok:false, error}（HTTP 200）：必须显式展示错误，
+    // 否则会被渲染成「中性 + 无关联股」的成功结果，误导用户
+    if (data && data.ok === false) {
+      renderAnalysisError((data.error || '分析失败，请重试') + '');
+      return;
+    }
+    const host = hsModalBody();
+    host.innerHTML = '';
+
+    // ---- 整体情绪结论
+    const sent = data.sentiment || '中性';
+    const verdict = U.el('div', 'ai-verdict ' + (HS_SENT_CLASS[sent] || 'sent-flat'));
+    const vhead = U.el('div', 'ai-verdict-head');
+    vhead.appendChild(U.el('div', 'ai-action', sent));
+    vhead.appendChild(U.el('span', 'ai-conf',
+      '引擎：' + (data.engine === 'llm' ? 'AI 大模型' : '内置规则引擎')));
+    if (data.model) vhead.appendChild(U.el('span', 'ai-conf', '模型：' + data.model));
+    verdict.appendChild(vhead);
+    if (data.title) verdict.appendChild(U.el('div', 'ai-reason', data.title));
+    if (data.summary) {
+      const sum = U.el('div', 'ai-position', data.summary);
+      sum.style.display = '-webkit-box';
+      sum.style.webkitLineClamp = '3';
+      sum.style.webkitBoxOrient = 'vertical';
+      sum.style.overflow = 'hidden';
+      verdict.appendChild(sum);
+    }
+    host.appendChild(verdict);
+
+    // ---- 行业影响
+    const sec = U.el('div', 'ai-section');
+    sec.appendChild(U.el('div', 'ai-section-title', '行业影响'));
+    const groups = [
+      ['利好行业', data.bullish || [], 'bull'],
+      ['利空行业', data.bearish || [], 'bear'],
+      ['关注行业', data.watch || [], 'flat']
+    ];
+    let anyIndustry = false;
+    groups.forEach(function (g) {
+      if (!g[1].length) return;
+      anyIndustry = true;
+      sec.appendChild(U.el('div', 'ai-item-label', g[0]));
+      const wrap = U.el('div', 'hs-industries');
+      g[1].forEach(function (x) {
+        const chip = U.el('div', 'hs-industry ' + g[2]);
+        chip.appendChild(U.el('span', 'hs-industry-name', x.industry || ''));
+        if (x.reason) chip.appendChild(U.el('span', 'hs-industry-reason', x.reason));
+        wrap.appendChild(chip);
+      });
+      sec.appendChild(wrap);
+    });
+    if (!anyIndustry) {
+      sec.appendChild(U.el('div', 'ai-item', '未识别到明确的行业影响（快讯或与具体行业无关）'));
+    }
+    host.appendChild(sec);
+
+    // ---- 关联度最高的股票
+    const ssec = U.el('div', 'ai-section');
+    ssec.appendChild(U.el('div', 'ai-section-title', '关联度最高的股票'));
+    const stocks = data.stocks || [];
+    if (stocks.length) {
+      const list = U.el('div', 'hs-stocks');
+      stocks.forEach(function (s, i) {
+        const card = U.el('button', 'hs-stock');
+        card.title = '查看 ' + (s.name || '') + ' 详情';
+        card.onclick = function () {
+          hsClose();
+          location.hash = '#/stock/' + s.code;
+        };
+        const head = U.el('div', 'hs-stock-head');
+        head.appendChild(U.el('span', 'hs-stock-rank', String(i + 1)));
+        head.appendChild(U.el('span', 'hs-stock-name', s.name || s.code));
+        head.appendChild(U.el('span', 'hs-stock-code', s.code));
+        if (s.board) head.appendChild(U.el('span', 'hs-stock-board', s.board));
+        card.appendChild(head);
+        const meta = U.el('div', 'hs-stock-meta');
+        if (U.isNum(s.price)) {
+          meta.appendChild(U.el('span', 'hs-stock-price', U.price(s.price)));
+        }
+        if (U.isNum(s.change_pct)) {
+          meta.appendChild(U.el('span', 'hs-stock-chg ' + U.tone(s.change_pct), U.pct(s.change_pct)));
+        }
+        if (s.reason) meta.appendChild(U.el('span', 'hs-stock-reason', '关联：' + s.reason));
+        card.appendChild(meta);
+        list.appendChild(card);
+      });
+      ssec.appendChild(list);
+    } else {
+      ssec.appendChild(U.el('div', 'ai-item', '未检索到明确的关联个股（检索源暂不可用或快讯无个股关联）'));
+    }
+    host.appendChild(ssec);
+
+    // ---- 元信息
+    const meta = U.el('div', 'ai-meta');
+    meta.appendChild(U.el('span', '',
+      '引擎：' + (data.engine === 'llm' ? 'AI 大模型' : '内置规则引擎')));
+    if (data.model) meta.appendChild(U.el('span', '', '模型：' + data.model));
+    if (data.source) meta.appendChild(U.el('span', '', '来源：' + data.source));
+    meta.appendChild(U.el('span', '', '生成时间：' + (data.fetched_at || '--')));
+    host.appendChild(meta);
+
+    host.appendChild(U.el('div', 'ai-disclaimer',
+      '本分析基于公开快讯与行情数据由程序自动生成，不构成投资建议。市场有风险，决策请自行判断。'));
+
+    // ---- 操作按钮
+    const acts = hsModalActions();
+    acts.innerHTML = '';
+    const again = U.el('button', 'btn btn-sm btn-primary', '重新分析');
+    again.onclick = reanalyze;
+    acts.appendChild(again);
+  }
+
+  // 关闭交互：与 AI/资讯弹窗共用 modal-root 与 data-close 监听
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.getAttribute && e.target.getAttribute('data-close') === '1') hsClose();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !hsModalRoot().hidden) hsClose();
+  });
 
   async function load(force) {
     if (state.loading) return;
