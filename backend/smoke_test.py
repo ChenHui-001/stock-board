@@ -20,9 +20,19 @@ os.environ["DATA_DIR"] = _tmp
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend import analysis, api, cache, llm, llmcfg, news, reports, service, storage  # noqa: E402
+from backend.config import settings  # noqa: E402
 from backend.indicators import build_ma, summarize_flow, support_resistance  # noqa: E402
 from backend.providers import registry  # noqa: E402
 from backend.providers.base import Bar  # noqa: E402
+
+# DATA_DIR 在 backend.config 导入时就解析定型：若本模块被导入前 backend.config 已加载
+# （例如在 REPL 里先 import backend.storage 再跑这里的测试），上面的 environ 设置不再生效，
+# 测试会直接写进使用者的真实库并抹掉已保存的 LLM 配置。此处硬断言，宁可不跑也不能写坏数据。
+if settings.DATA_DIR != Path(_tmp):
+    raise SystemExit(
+        f"冒烟测试隔离失效：DATA_DIR={settings.DATA_DIR}，期望临时目录 {_tmp}。\n"
+        "请以 `python backend/smoke_test.py` 独立进程运行，勿在已导入 backend 的会话中调用。"
+    )
 
 FAILED: list[str] = []
 TOTAL = 0
@@ -63,16 +73,52 @@ def test_json_repair() -> None:
         check("JSON修复: 垃圾输入应报错", True)
 
 
+# ------------------------------------------------------------------ 异常描述非空
+# httpx 超时类异常 str() 为空，历史上导致「LLM 请求失败: 」「全部数据源失败 -> sina: 」
+# 这类无信息报错。凡是把异常插值进用户可见文案的地方都必须经过 describe_exc。
+def test_describe_exc() -> None:
+    import httpx
+
+    from backend.utils import describe_exc
+
+    empty = [httpx.ReadTimeout(""), httpx.ConnectTimeout(""), httpx.PoolTimeout(""),
+             httpx.WriteTimeout(""), httpx.ReadError("")]
+    for exc in empty:
+        got = describe_exc(exc)
+        check(f"异常描述非空: {type(exc).__name__}", got == type(exc).__name__, f"got={got!r}")
+    check("异常描述: 保留原消息",
+          describe_exc(httpx.ConnectError("getaddrinfo failed")) == "getaddrinfo failed")
+
+    # LLM 路径：超时应给出可执行提示，且不得出现空的尾巴
+    msg = llm._request_error(httpx.ReadTimeout(""), "https://api.deepseek.com/v1/chat/completions")
+    check("LLM 超时提示含主机名", "api.deepseek.com" in msg, msg)
+    check("LLM 超时提示非空", len(msg.strip()) > 10, msg)
+
+
 # ------------------------------------------------------------------ LLM 配置指纹
 def test_fingerprint() -> None:
+    """指纹随配置变化。
+
+    本测试会写入 llm_config，因此必须先确认落在临时库上（见文件头的 DATA_DIR 断言），
+    并在结束时还原原值——直接 clear 会抹掉使用者保存的真实 API Key。
+    """
     storage.init_db()
-    f1 = llmcfg.fingerprint()
-    storage.set_llm_config({"enabled": True, "base_url": "https://x/v1", "model": "m1", "api_key": "k", "json_mode": True})
-    f2 = llmcfg.fingerprint()
-    storage.set_llm_config({"enabled": True, "base_url": "https://x/v1", "model": "m2", "api_key": "k", "json_mode": True})
-    f3 = llmcfg.fingerprint()
-    check("指纹随配置变化", f1 != f2 and f2 != f3)
-    storage.clear_llm_config()# ------------------------------------------------------------------ 模型列表过滤
+    saved = storage.get_kv("llm_config")
+    try:
+        f1 = llmcfg.fingerprint()
+        storage.set_llm_config({"enabled": True, "base_url": "https://x/v1", "model": "m1", "api_key": "k", "json_mode": True})
+        f2 = llmcfg.fingerprint()
+        storage.set_llm_config({"enabled": True, "base_url": "https://x/v1", "model": "m2", "api_key": "k", "json_mode": True})
+        f3 = llmcfg.fingerprint()
+        check("指纹随配置变化", f1 != f2 and f2 != f3)
+    finally:
+        if saved:
+            storage.set_kv("llm_config", saved)
+        else:
+            storage.clear_llm_config()
+
+
+# ------------------------------------------------------------------ 模型列表过滤
 # 云端 /models 里混有 embedding/图片/语音等非对话模型，应被过滤、对话模型应保留
 def test_model_filter() -> None:
     keep = ["deepseek-chat", "deepseek-reasoner", "qwen-plus", "glm-4-plus",
@@ -877,6 +923,44 @@ def test_items_fingerprint() -> None:
     check("指纹: 空列表稳定不报错", isinstance(items_fingerprint([]), str) and len(items_fingerprint([])) == 12)
 
 
+# ------------------------------------------------------------------ 前端外链协议白名单
+# 资讯/快讯的 url 来自第三方源且后端不校验协议，javascript: 地址若进入 a.href，
+# 点击标题即在本站源内执行脚本（本站源可读写自选股与 LLM 配置接口）。
+# 运行镜像不带 node，缺失时跳过而非判失败。
+def test_safe_url() -> None:
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        print("[skip] 前端 safeUrl（未安装 node）")
+        return
+
+    root = Path(__file__).resolve().parent.parent
+    util = (root / "frontend" / "static" / "js" / "util.js").as_posix()
+    script = (
+        "global.window={};global.document={};require('%s');"
+        "const U=global.window.U;"
+        "const pass=['https://a.cn/x','http://a.cn/x','//a.cn/x','/api/x'];"
+        "const block=['javascript:alert(1)','JavaScript:alert(1)','java\\tscript:alert(1)',"
+        "' javascript:alert(1)','data:text/html,<script>a</script>','vbscript:msgbox(1)'];"
+        "let bad=[];"
+        "for(const u of pass){if(U.safeUrl(u)!==u)bad.push('应放行:'+u);}"
+        "for(const u of block){if(U.safeUrl(u)!=='')bad.push('应拦截:'+u);}"
+        "console.log(bad.length?bad.join('|'):'OK');"
+    ) % util
+    try:
+        proc = subprocess.run(
+            [node, "-e", script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        check("前端 safeUrl 协议白名单", False, f"超时: {exc}")
+        return
+    out = (proc.stdout or "").strip()
+    check("前端 safeUrl 协议白名单", out == "OK", out or (proc.stderr or "")[:200])
+
+
 # ------------------------------------------------------------------ 盘口回测脚本自测（不触网，合成日线）
 def test_backtest_selftest() -> None:
     import subprocess
@@ -1043,6 +1127,7 @@ def test_check_sources_backtest_struct() -> None:
 
 def main() -> int:
     test_json_repair()
+    test_describe_exc()
     test_fingerprint()
     test_model_filter()
     test_news_interpret()
@@ -1059,6 +1144,7 @@ def main() -> int:
     test_registry()
     test_watch_monitor()
     test_items_fingerprint()
+    test_safe_url()
     test_backtest_selftest()
     test_check_sources_backtest_struct()
     print()

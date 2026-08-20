@@ -21,7 +21,7 @@ from typing import Any
 from . import llm, news, service, storage
 from .cache import cache
 from .providers import registry
-from .utils import full_code, now
+from .utils import describe_exc, full_code, now
 
 log = logging.getLogger("hotspot_ai")
 
@@ -335,5 +335,5 @@ async def analyze_news(
             s["watched"] = storage.is_watched(s["code"])
         return result
     except Exception as exc:  # noqa: BLE001
-        log.warning("热点快讯分析失败：%s", exc)
-        return {"ok": False, "error": f"分析失败：{exc}"}
+        log.warning("热点快讯分析失败：%s", describe_exc(exc))
+        return {"ok": False, "error": f"分析失败：{describe_exc(exc)}"}

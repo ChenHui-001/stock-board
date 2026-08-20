@@ -22,6 +22,18 @@ def now() -> datetime:
     return datetime.now(TZ)
 
 
+def describe_exc(exc: BaseException) -> str:
+    """异常的简短描述，保证非空。
+
+    httpx 的超时类异常（ReadTimeout / ConnectTimeout 等）由 anyio 的无参
+    TimeoutError 转换而来，str() 是空串。直接把异常插值进报错文案会得到
+    「全部数据源失败 -> eastmoney: ; sina: 」这种只剩冒号的提示，
+    排查时完全看不出是超时还是别的故障，因此空消息一律回退到异常类名。
+    """
+    detail = str(exc).strip()
+    return detail or type(exc).__name__
+
+
 def is_weekday(d: date) -> bool:
     return d.weekday() < 5
 

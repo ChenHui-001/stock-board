@@ -15,6 +15,7 @@ import httpx
 
 from . import llmcfg
 from .config import settings
+from .utils import describe_exc
 
 log = logging.getLogger("llm")
 
@@ -46,6 +47,31 @@ async def close() -> None:
 
 class LLMError(Exception):
     pass
+
+
+def _request_error(exc: httpx.HTTPError, url: str) -> str:
+    """把 httpx 的网络异常翻译成可执行提示。
+
+    httpx 的超时类异常 str() 通常为空（由 anyio 的无参 TimeoutError 转换而来），
+    直接插值会得到「LLM 请求失败: 」这种没有任何信息的报错，因此这里统一
+    补上异常类型与目标主机。
+    """
+    host = httpx.URL(url).host or url
+    timeout = settings.LLM_TIMEOUT
+    if isinstance(exc, httpx.ConnectTimeout):
+        return (
+            f"连接 {host} 超时（{timeout:.0f}s）。请检查 Base URL 是否填对、"
+            "本机能否访问该地址（代理/防火墙）"
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return (
+            f"等待 {host} 响应超时（{timeout:.0f}s）。请调大 LLM_TIMEOUT 环境变量，"
+            "或换用更快的模型"
+        )
+    detail = str(exc).strip()
+    if isinstance(exc, httpx.ConnectError):
+        return f"无法连接 {host}（{describe_exc(exc)}）。请检查 Base URL 与网络"
+    return f"{type(exc).__name__}{'：' + detail if detail else ''}（目标 {host}）"
 
 
 # 空 content / JSON 解析失败时的总尝试次数
@@ -185,7 +211,7 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
         try:
             return await _client_of().post(url, json=payload, headers=headers)
         except httpx.HTTPError as exc:
-            raise LLMError(f"LLM 请求失败: {exc}") from exc
+            raise LLMError(f"LLM 请求失败: {_request_error(exc, url)}") from exc
 
     async def post_with_400_repair() -> httpx.Response:
         """发请求；遇 400 按报错内容逐项自愈。
@@ -332,7 +358,7 @@ async def test_connection(cfg: dict[str, Any] | None = None) -> tuple[bool, str]
     try:
         resp = await _client_of().post(url, json=payload, headers=headers)
     except httpx.HTTPError as exc:
-        return False, f"连接失败：{exc}"
+        return False, f"连接失败：{_request_error(exc, url)}"
     cost_ms = (time.monotonic() - start) * 1000
     if resp.status_code >= 400:
         return False, f"HTTP {resp.status_code}：{resp.text[:200]}"
@@ -359,7 +385,7 @@ async def list_models(cfg: dict[str, Any] | None = None) -> tuple[bool, list[str
     try:
         resp = await _client_of().get(url, headers=headers)
     except httpx.HTTPError as exc:
-        return False, [], f"获取失败：{exc}"
+        return False, [], f"获取失败：{_request_error(exc, url)}"
     if resp.status_code in (401, 403):
         return False, [], f"API Key 无效（HTTP {resp.status_code}）"
     if resp.status_code >= 400:

@@ -11,7 +11,7 @@ import time
 from typing import Any, Callable, Coroutine
 
 from ..config import settings
-from ..utils import chunked, data_is_stale, full_code, normalize_code, resolve_market, session_state
+from ..utils import chunked, data_is_stale, describe_exc, full_code, normalize_code, resolve_market, session_state
 from .base import (
     Bar,
     FinancialPeriod,
@@ -152,12 +152,12 @@ class Registry:
                 continue
             except Throttled as exc:
                 # 主机级频控已由 limiter 快速失败，不计入数据源健康度
-                errors.append(f"{provider.name}: {exc}")
+                errors.append(f"{provider.name}: {describe_exc(exc)}")
                 continue
             except Exception as exc:  # noqa: BLE001
                 self._mark_fail(provider.name)
-                errors.append(f"{provider.name}: {exc}")
-                log.info("数据源 %s 的 %s 失败：%s", provider.name, cap, exc)
+                errors.append(f"{provider.name}: {describe_exc(exc)}")
+                log.info("数据源 %s 的 %s 失败：%s", provider.name, cap, describe_exc(exc))
                 continue
             if not result and not empty_ok:
                 # 空结果是「这个源没有这条数据」，不是故障，不计入健康度

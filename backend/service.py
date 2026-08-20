@@ -12,6 +12,7 @@ from .config import settings
 from .providers import ProviderError, Quote, registry
 from .utils import (
     data_is_stale,
+    describe_exc,
     full_code,
     is_trading_now,
     kline_is_stale,
@@ -53,12 +54,12 @@ async def cached_pack(
     except Exception as exc:  # noqa: BLE001
         stale = cache.peek(f"stale:{key}")
         if stale is not None:
-            log.info("%s 取数失败，回退上一次成功数据：%s", key, exc)
-            return {**stale, "stale": True, "error": str(exc)}
-        log.info("%s 取数失败且无历史数据：%s", key, exc)
+            log.info("%s 取数失败，回退上一次成功数据：%s", key, describe_exc(exc))
+            return {**stale, "stale": True, "error": describe_exc(exc)}
+        log.info("%s 取数失败且无历史数据：%s", key, describe_exc(exc))
         if empty is None:
             raise
-        return {**empty, "stale": False, "error": str(exc)}
+        return {**empty, "stale": False, "error": describe_exc(exc)}
 
 
 # ------------------------------------------------------------------ 行情
