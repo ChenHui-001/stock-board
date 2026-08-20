@@ -72,6 +72,26 @@
     });
   }
 
+  /**
+   * 外链地址白名单：只放行 http/https，其余一律返回 ''。
+   *
+   * 资讯/快讯的 url 来自第三方源（东财、新浪、同花顺 7x24 等），后端只做 strip
+   * 不校验协议。若某条 feed 携带 javascript: 或 data: 地址，直接赋给 a.href 会在
+   * 用户点击标题时于本站源内执行脚本——而本站源可读写自选股与 LLM 配置接口。
+   * 调用方拿到 '' 时应退化为纯文本，不要渲染成死链。
+   */
+  function safeUrl(u) {
+    const s = String(u == null ? '' : u).trim();
+    if (!s) return '';
+    // 协议前允许出现控制字符/空白的绕过写法（如 "java\tscript:"），先剔除再判定
+    const probe = s.replace(/[\u0000-\u0020]/g, '').toLowerCase();
+    if (probe.indexOf('http://') === 0 || probe.indexOf('https://') === 0) return s;
+    // 协议相对（//host/path）按 https 处理；站内相对路径同样放行
+    if (probe.indexOf('//') === 0) return s;
+    if (probe.charAt(0) === '/' || probe.charAt(0) === '?' || probe.charAt(0) === '#') return s;
+    return '';
+  }
+
   function debounce(fn, wait) {
     let timer = null;
     return function () {
@@ -128,6 +148,7 @@
     tone: tone,
     el: el,
     escapeHtml: escapeHtml,
+    safeUrl: safeUrl,
     debounce: debounce,
     toast: toast,
     copyText: copyText

@@ -198,12 +198,15 @@
       card.appendChild(head);
 
       // 标题（外链）
+      // 外链地址过白名单：第三方源可能给出 javascript:/data: 地址，
+      // 非 http(s) 一律退化为不可点的纯文本标题
+      const href = U.safeUrl(item.url);
       const title = U.el('a', 'news-title');
       title.textContent = item.title || '（无标题）';
-      title.href = item.url || '#';
+      title.href = href || '#';
       title.target = '_blank';
       title.rel = 'noopener noreferrer';
-      if (!item.url) title.style.pointerEvents = 'none';
+      if (!href) title.style.pointerEvents = 'none';
       card.appendChild(title);
 
       // 摘要
@@ -313,12 +316,15 @@
       head.appendChild(U.el('span', 'news-index', String(idx + 1).padStart(2, '0')));
       card.appendChild(head);
 
+      // 外链地址过白名单：第三方源可能给出 javascript:/data: 地址，
+      // 非 http(s) 一律退化为不可点的纯文本标题
+      const href = U.safeUrl(item.url);
       const title = U.el('a', 'news-title');
       title.textContent = item.title || '（无标题）';
-      title.href = item.url || '#';
+      title.href = href || '#';
       title.target = '_blank';
       title.rel = 'noopener noreferrer';
-      if (!item.url) title.style.pointerEvents = 'none';
+      if (!href) title.style.pointerEvents = 'none';
       card.appendChild(title);
 
       const box = U.el('div', 'news-interp');

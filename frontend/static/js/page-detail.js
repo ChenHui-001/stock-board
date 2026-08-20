@@ -2,7 +2,11 @@
 (function (global) {
   'use strict';
 
-  const state = { code: null, data: null };
+  // seq：请求代号。每次 mount 自增，异步响应回来时若代号已变，说明用户已切到
+  // 别的股票，这份响应必须丢弃——数据源被频控时详情要几秒才回，快速切换 A→B
+  // 会让 A 的慢响应后到并覆盖 B，出现"路由是 B、数据是 A"的错位。
+  // ticking：轮询在途标记，防止 5s 心跳快于响应时堆叠并发请求。
+  const state = { code: null, data: null, seq: 0, ticking: false };
 
   const MA_DESC = {
     5: '短期趋势线',
@@ -16,17 +20,22 @@
   async function mount(code) {
     state.code = code;
     state.data = null;
+    state.seq += 1;
     Charts.disposeAll();
     view().innerHTML = '<div class="card"><div class="loading-block">加载 ' + U.escapeHtml(code) + ' 详情数据…</div></div>';
     await load(false);
   }
 
   async function load(force) {
+    const seq = state.seq;
     try {
-      state.data = await API.detail(state.code, force);
+      const data = await API.detail(state.code, force);
+      if (seq !== state.seq) return;      // 已切到别的股票，丢弃这份过期响应
+      state.data = data;
       render();
       App.setSession(state.data.session);
     } catch (err) {
+      if (seq !== state.seq) return;      // 过期请求的失败不应覆盖当前页面
       view().innerHTML = '<div class="card"><div class="empty">'
         + '<div class="empty-icon">⚠️</div>'
         + '<div class="empty-title">详情加载失败</div>'
@@ -561,13 +570,19 @@
   // 只拉轻量行情（单只报价），避免每 3 秒整包重传 K线/资金/两融历史数据
   async function tick() {
     if (!state.data) return;
+    if (state.ticking) return;            // 上一轮未回，跳过本轮，避免请求堆叠
+    state.ticking = true;
+    const seq = state.seq;
     try {
       const data = await API.quote(state.code, false);
+      if (seq !== state.seq) return;      // 已切股票，丢弃
       if (!data || !data.quote) return;
       state.data.quote = data.quote;
       patchHead(data);
       App.setSession(data.session);
-    } catch (err) { /* 静默 */ }
+    } catch (err) { /* 静默 */ } finally {
+      state.ticking = false;
+    }
   }
 
   function patchHead(d) {

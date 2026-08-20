@@ -138,9 +138,11 @@
     metaLine.appendChild(origin);
     body.appendChild(metaLine);
 
-    if (it.url) {
+    // 外链地址过白名单：7x24 快讯源较杂，非 http(s) 地址退化为纯文本标题
+    const href = U.safeUrl(it.url);
+    if (href) {
       const a = U.el('a', 'hotspot-title', it.title);
-      a.href = it.url;
+      a.href = href;
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
       body.appendChild(a);

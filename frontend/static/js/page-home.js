@@ -9,7 +9,10 @@
     manage: false,
     selected: new Set(),
     lastPrices: {},
-    dragCode: null
+    dragCode: null,
+    // 轮询在途标记：盘中 5s 心跳可能快于响应（数据源被频控时尤甚），
+    // 无保护会堆叠并发请求，且先发后到的旧响应会把新价格覆盖回去
+    ticking: false
   };
 
   function view() {
@@ -356,6 +359,8 @@
   /** 静默刷新：只更新价格，不重建 DOM，避免打断拖拽和滚动 */
   async function tick() {
     if (state.manage) return;
+    if (state.ticking) return;            // 上一轮未回，跳过本轮
+    state.ticking = true;
     try {
       const data = await API.watchlist(false);
       const items = data.items || [];
@@ -376,7 +381,9 @@
       });
       patchPrices();
       App.setSession(data.session);
-    } catch (err) { /* 静默失败，下一轮再试 */ }
+    } catch (err) { /* 静默失败，下一轮再试 */ } finally {
+      state.ticking = false;
+    }
   }
 
   function patchPrices() {

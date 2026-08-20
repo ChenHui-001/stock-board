@@ -64,8 +64,11 @@
   function note() { return document.getElementById('cfg-note'); }
   function testResult() { return document.getElementById('cfg-test-result'); }
 
-  function setNote(html, kind) {
-    note().innerHTML = html;
+  // 全部调用方传的都是纯文本，其中 /api/llm/models 的失败消息会带上目标端点的
+  // 原始响应体（llm.py 里的 resp.text[:150]）。用 textContent 而非 innerHTML，
+  // 避免用户把 Base URL 指向恶意端点时，响应体里的标签在设置页内被解析执行。
+  function setNote(text, kind) {
+    note().textContent = text;
     note().className = 'cfg-note' + (kind ? ' ' + kind : '');
   }
 

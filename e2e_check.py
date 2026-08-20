@@ -7,6 +7,13 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
+# Windows 控制台默认 GBK，页面里的盲文旋转符（⠿）等字符会让 print 抛
+# UnicodeEncodeError，脚本在跑到一半时崩溃、后面的检查全部跳过。
+# 强制 UTF-8 输出，避免"检查没跑完却看起来像跑完了"。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 BASE = "http://127.0.0.1:8899"
 SHOTS = Path(__file__).resolve().parent / "shots"
 SHOTS.mkdir(exist_ok=True)
@@ -60,8 +67,16 @@ async def main() -> int:
         print(f"[查询] 搜索 pfyh 结果 = {results}")
         if results:
             print("[查询] 首条 =", (await page.locator(".result-row").first.inner_text()).replace("\n", " | "))
+        # 热门榜是独立的异步请求（约 1.5s），固定等待会在计数时拿到 0 条并
+        # 静默通过——显式等首行出现，拿不到才是真的坏了
+        try:
+            await page.locator(".hot-row").first.wait_for(timeout=8000)
+        except Exception:
+            errors.append("查询页热门榜 8s 内未渲染出任何条目")
         hot_rows = await page.locator(".hot-row").count()
         print(f"[查询] 热门榜条目 = {hot_rows}")
+        if not hot_rows:
+            errors.append("查询页热门榜为空")
         await page.screenshot(path=str(SHOTS / "3-search.png"), full_page=True)
 
         # 中文搜索
