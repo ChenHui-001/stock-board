@@ -208,12 +208,24 @@ def save_config(cfg: dict[str, Any]) -> dict[str, Any]:
 def merge_pending(cfg: dict[str, Any]) -> dict[str, Any]:
     """把界面表单（尚未保存）的字段合并到当前配置，用于「测试连接」。
 
-    cfg 可携带 id：与已存档案 id 匹配时，留空的 api_key 用已存密钥。
+    cfg 携带 id 且匹配已存档案时以该档案为基底（否则用主模型档案）；
+    界面不回显密钥，api_key 留空时保留基底档案已存密钥（与 save_profiles 同规则），
+    避免测试已保存的备选档案时把密钥覆盖成空导致「请先填写 Base URL、模型与 API Key」。
     """
-    merged = dict(get_config())
+    profiles = get_profiles()
+    nid = str(cfg.get("id") or "").strip()
+    base: dict[str, Any] = get_config()
+    if nid:
+        for p in profiles:
+            if str(p.get("id") or "") == nid:
+                base = p
+                break
+    merged = dict(base)
     for key in _FIELDS:
         if key in cfg and cfg[key] is not None:
             merged[key] = cfg[key]
+    if not str(merged.get("api_key") or "").strip() and base.get("api_key"):
+        merged["api_key"] = base["api_key"]
     if cfg.get("clear_key"):
         merged["api_key"] = ""
     return merged

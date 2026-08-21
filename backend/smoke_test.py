@@ -203,6 +203,24 @@ def test_llm_profiles() -> None:
         order = llm.ordered_profiles()
         check("多档案: 调用顺序主模型优先", [p["id"] for p in order] == ["b", "a"],
               str([p["id"] for p in order]))
+
+        # 6) merge_pending（测试连接）：按 id 匹配档案为基底，api_key 留空保留已存密钥
+        #    主模型是 b，测试备选 a 时不能拿 b 的字段、也不能把 a 的密钥覆盖成空
+        merged = llmcfg.merge_pending({"id": "a", "name": "A", "enabled": True,
+                                       "primary": False, "vendor": "custom",
+                                       "base_url": "https://a/v1", "model": "m-a",
+                                       "api_key": "", "json_mode": True})
+        check("多档案: merge_pending 按 id 取档案", merged["base_url"] == "https://a/v1"
+              and merged["model"] == "m-a", str(merged))
+        check("多档案: merge_pending 留空保留密钥", merged["api_key"] == "ka", str(merged))
+        merged2 = llmcfg.merge_pending({"id": "a", "vendor": "custom",
+                                        "base_url": "https://a/v1", "model": "m-a",
+                                        "api_key": "new-key", "json_mode": True})
+        check("多档案: merge_pending 显式填密钥覆盖", merged2["api_key"] == "new-key", str(merged2))
+        merged3 = llmcfg.merge_pending({"id": "no-such", "vendor": "custom",
+                                        "base_url": "https://x/v1", "model": "m-x",
+                                        "api_key": "", "json_mode": True})
+        check("多档案: merge_pending 未知 id 回退主档案", merged3["id"] == "b", str(merged3))
     finally:
         if saved_profiles is not None:
             storage.set_kv("llm_profiles", saved_profiles)
