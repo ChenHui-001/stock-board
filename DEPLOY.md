@@ -98,7 +98,7 @@ HOST_PORT=8898 LLM_API_KEY=sk-xxx docker compose up -d --build
 | `LLM_MODEL` | `deepseek-chat` | 模型名 |
 | `LLM_API_KEY` | 空 | 不填则 AI 分析自动降级为内置规则引擎 |
 | `LLM_JSON_MODE` | `true` | 不兼容 `response_format` 的端点设 `false` |
-| `LLM_TIMEOUT` / `LLM_MAX_TOKENS` / `LLM_TEMPERATURE` | `45` / `4000` / `0.25` | 请求超时/最大 token/温度 |
+| `LLM_TIMEOUT` / `LLM_MAX_TOKENS` / `LLM_TEMPERATURE` | `90` / `4000` / `0.25` | 请求超时（秒）/ 最大 token/温度。主分析生成最多 4000 token 的 JSON，DeepSeek 盘中高峰常需 60s 以上，45s 会掐断正常生成 |
 | `LLM_THINKING_MAX_TOKENS` | `8192` | 思考类模型（deepseek-reasoner 等）输出配额；思考过程占用配额导致正文为空时自动放大到此值重试 |
 | `PROVIDER_ORDER` | `eastmoney,ths,tencent,sina,akshare` | 行情数据源故障转移顺序（同花顺 K 线为网页数据文件，东财不可用时优先回退） |
 | `ENABLE_AKSHARE` | `true` | 启用 AkShare 兜底（需镜像以 `WITH_AKSHARE=true` 构建） |
