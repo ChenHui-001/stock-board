@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
@@ -91,6 +92,10 @@ async def _with_ai_lock(code: str, work: Callable[[], Awaitable[Any]]) -> Any:
 
 # AI 报告必含字段：升级后旧格式缓存缺新字段时自动作废（重新生成）
 _REQUIRED_REPORT_FIELDS = ("report_sentiment", "rating_dist", "reports_preview")
+# 历史缺陷缓存作废：旧版本在 LLM 超时类异常 str() 为空时，把「LLM 请求失败: 」
+# 这种空白尾巴写进 degraded_reason 并入库。升级后这些缓存仍能通过下方各项校验
+# 继续命中，用户会一直看到空白报错；检测到即作废重建（重新分析拿到新提示）。
+_BLANK_LLM_REASON_RE = re.compile(r"LLM 请求失败:\s*[）)]")
 # AI 报告结构版本：机会/风险条目升级为 {text,strength,hit,confidence} 后引入。
 # 带版本号的缓存直接命中，不带的一律作废重建——比逐条结构检查更可靠
 # （某些股票机会/风险恰好无盘口信号、全是字符串条目，也会被旧检查误判）。
@@ -135,6 +140,10 @@ def _cached_report(code: str) -> dict[str, Any] | None:
         return None
     # 结构版本校验：旧格式缓存（无版本号或版本过旧）自动作废重建
     if (meta.get("schema_version") or 0) < REPORT_SCHEMA_VERSION:
+        return None
+    # 空白降级原因作废：历史缺陷缓存（见 _BLANK_LLM_REASON_RE）命中即重建，
+    # 避免升级后用户仍看到「AI 服务调用失败（LLM 请求失败: ）」的无信息报错
+    if _BLANK_LLM_REASON_RE.search(meta.get("degraded_reason") or ""):
         return None
     return cached
 
