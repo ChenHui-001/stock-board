@@ -1548,6 +1548,25 @@ main {
   background: var(--accent-soft);
   font-weight: 500;
 }
+.hotspot-search {
+  margin-left: auto;
+  min-width: 140px;
+  max-width: 260px;
+  flex: 1 1 180px;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  outline: none;
+  transition: border-color .15s;
+}
+.hotspot-search:focus { border-color: var(--accent); }
+.hotspot-search::placeholder { color: var(--text-faint); }
+@media (max-width: 560px) {
+  .hotspot-search { margin-left: 0; max-width: none; }
+}
 
 .hotspot-list { padding: 4px 16px; }
 .hotspot-item {

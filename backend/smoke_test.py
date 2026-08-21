@@ -227,21 +227,41 @@ def test_hotspot() -> None:
           str(sina_rows[0]))
     check("热点解析: 新浪无括号兜底", sina_rows[1]["title"] == "无括号纯文本内容", str(sina_rows[1]))
 
+    # 华尔街见闻：display_time 为 unix 秒，content_text 无【】包裹，首句拆标题
+    wscn_payload = _json.dumps({"code": 20000, "message": "OK", "data": {"items": [
+        {"id": 3152710, "title": "", "content_text": "浙江：7月份，规模以上工业增加值同比增长7.4%。",
+         "display_time": now_ts, "uri": "https://wallstreetcn.com/livenews/3152710"},
+        {"id": 3152711, "title": "", "content_text": "沪深两市成交额突破万亿。A股放量上行，北向资金净流入。",
+         "display_time": now_ts - 10, "uri": ""},
+        {"id": 3152712, "title": "", "content_text": "无时间条目", "display_time": None, "uri": ""},
+    ]}})
+    wscn_rows = hotspot._parse_wscn(wscn_payload)
+    check("热点解析: 华尔街见闻条数", len(wscn_rows) == 2, str(wscn_rows))
+    check("热点解析: 华尔街见闻首句为标题",
+          wscn_rows[0]["title"] == "浙江：7月份，规模以上工业增加值同比增长7.4%。"
+          and wscn_rows[0]["summary"] == "", str(wscn_rows[0]))
+    check("热点解析: 华尔街见闻多句拆摘要",
+          wscn_rows[1]["title"] == "沪深两市成交额突破万亿。"
+          and wscn_rows[1]["summary"] == "A股放量上行，北向资金净流入。", str(wscn_rows[1]))
+    check("热点解析: 华尔街见闻媒体署名",
+          wscn_rows[0]["source"] == "华尔街见闻" and wscn_rows[0]["origin"] == "华尔街见闻", str(wscn_rows[0]))
+
     # 窗口过滤：旧条目剔除
     in_rows = [r for r in ths_rows if hotspot._in_window(r["ts"], 30)]
     check("热点窗口: 30分钟内保留", len(in_rows) == 1 and in_rows[0]["id"] == "1", str(in_rows))
     check("热点窗口: 坏时间剔除", hotspot._in_window(None, 30) is False)
 
-    # 跨源去重：同一标题只留一条（取最新时间），其余保留
+    # 跨源去重：同一标题只留一条（取最新时间），其余保留；华尔街见闻也参与
     dup = [
         {"id": "t1", "title": "央行开展逆回购操作", "ts": now_ts - 100, "origin": "同花顺", "source": "同花顺"},
         {"id": "e1", "title": "央行开展逆回购操作！", "ts": now_ts - 50, "origin": "东方财富", "source": "财联社"},
+        {"id": "w1", "title": "央行开展逆回购操作，", "ts": now_ts - 20, "origin": "华尔街见闻", "source": "华尔街见闻"},
         {"id": "s1", "title": "富时中国A50指数期货跌2%", "ts": now_ts - 10, "origin": "新浪财经", "source": "新浪财经"},
     ]
     merged = hotspot._merge(dup)
-    check("热点去重: 同标题合并留最新", len(merged) == 2 and any(m["id"] == "e1" for m in merged)
-          and not any(m["id"] == "t1" for m in merged), str(merged))
-    check("热点去重: 按时间倒序", merged[0]["id"] == "s1" and merged[1]["id"] == "e1", str(merged))
+    check("热点去重: 同标题合并留最新", len(merged) == 2 and any(m["id"] == "w1" for m in merged)
+          and not any(m["id"] in ("t1", "e1") for m in merged), str(merged))
+    check("热点去重: 按时间倒序", merged[0]["id"] == "s1" and merged[1]["id"] == "w1", str(merged))
     check("热点标题指纹: 标点归一", hotspot._title_fp("央行开展逆回购操作！") == hotspot._title_fp("央行开展逆回购操作"),
           hotspot._title_fp("央行开展逆回购操作！"))
     check("热点标题指纹: 【】包裹归一", hotspot._title_fp("【央行开展逆回购操作】") == hotspot._title_fp("央行开展逆回购操作"),

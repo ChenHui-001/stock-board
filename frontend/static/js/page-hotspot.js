@@ -6,6 +6,7 @@
     items: [],
     meta: null,
     filter: 'all',
+    q: '',
     loading: false,
     error: null,
     lastAuto: 0
@@ -28,8 +29,15 @@
   }
 
   function filteredItems() {
-    if (state.filter === 'all') return state.items;
-    return state.items.filter(function (it) { return it.origin === state.filter; });
+    const q = (state.q || '').toLowerCase();
+    return state.items.filter(function (it) {
+      if (state.filter !== 'all' && it.origin !== state.filter) return false;
+      if (!q) return true;
+      return (it.title || '').toLowerCase().indexOf(q) >= 0
+        || (it.summary || '').toLowerCase().indexOf(q) >= 0
+        || (it.source || '').toLowerCase().indexOf(q) >= 0
+        || (it.origin || '').toLowerCase().indexOf(q) >= 0;
+    });
   }
 
   function render() {
@@ -88,6 +96,18 @@
       };
       bar.appendChild(chip);
     });
+    // 关键词搜索：只重建列表，不打断页面滚动
+    const search = U.el('input', 'hotspot-search');
+    search.type = 'text';
+    search.placeholder = '搜索快讯…';
+    search.value = state.q;
+    search.setAttribute('aria-label', '搜索快讯');
+    search.oninput = function () {
+      state.q = search.value;
+      const host = document.getElementById('hotspot-list');
+      if (host) renderListInto(host);
+    };
+    bar.appendChild(search);
     return bar;
   }
 
@@ -110,9 +130,14 @@
     const items = filteredItems();
     if (!items.length) {
       const empty = U.el('div', 'empty');
-      empty.appendChild(U.el('div', 'empty-icon', '🕐'));
-      empty.appendChild(U.el('div', 'empty-title', '近 ' + (state.meta ? state.meta.window_minutes : 30) + ' 分钟暂无热点'));
-      empty.appendChild(U.el('div', 'empty-desc', '当前来源暂无新快讯，稍后会自动刷新。'));
+      empty.appendChild(U.el('div', 'empty-icon', state.q ? '🔍' : '🕐'));
+      if (state.q) {
+        empty.appendChild(U.el('div', 'empty-title', '未找到相关快讯'));
+        empty.appendChild(U.el('div', 'empty-desc', '没有标题/摘要/来源包含「' + state.q + '」的条目，换个关键词试试。'));
+      } else {
+        empty.appendChild(U.el('div', 'empty-title', '近 ' + (state.meta ? state.meta.window_minutes : 30) + ' 分钟暂无热点'));
+        empty.appendChild(U.el('div', 'empty-desc', '当前来源暂无新快讯，稍后会自动刷新。'));
+      }
       host.appendChild(empty);
       return;
     }
@@ -419,6 +444,7 @@
   global.PageHotspot = {
     mount: function () {
       state.filter = 'all';
+      state.q = '';
       state.error = null;
       render();
       return load(false);

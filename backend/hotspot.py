@@ -4,6 +4,7 @@
 - 同花顺 7x24 快讯  news.10jqka.com.cn/tapp/news/push/stock/
 - 东方财富 快讯    np-listapi.eastmoney.com/comm/web/getNewsByColumns
 - 新浪财经 7x24    zhibo.sina.com.cn/api/zhibo/feed
+- 华尔街见闻 7x24  api-one.wallstcn.com/apiv1/content/lives
 
 各源并行抓取 → 统一成条目 → 按时间窗过滤 → 按标题指纹去重 → 按时间倒序。
 媒体署名（彭博社/财联社/财新/澎湃等）保留在 source 字段，命中《重点媒体》
@@ -36,7 +37,7 @@ TTL = settings.HOTSPOT_TTL  # 聚合结果缓存（秒，环境变量可配）
 _HOT_MEDIA = (
     "彭博", "财联社", "财新", "澎湃", "同花顺", "东方财富",
     "券商中国", "央视", "新华社", "证券时报", "上海证券报", "中国证券报",
-    "第一财经", "界面", "每日经济新闻", "21世纪经济报道",
+    "第一财经", "界面", "每日经济新闻", "21世纪经济报道", "华尔街见闻",
 )
 
 _FETCH_TIMEOUT = 15.0  # 单源抓取超时（秒）
@@ -146,6 +147,48 @@ def _split_rich(rich: str) -> tuple[str, str]:
     return rich[:60], rich
 
 
+def _split_wscn(text: str) -> tuple[str, str]:
+    """华尔街见闻正文：内容通常无【】包裹，取首句（≤60 字）为标题，其余为摘要。"""
+    text = (text or "").strip()
+    if not text:
+        return "", ""
+    for sep in ("。", "！", "？", "；", "\n"):
+        idx = text.find(sep)
+        if 0 < idx <= 60:
+            return text[: idx + 1], text[idx + 1 :].strip()
+    return text[:42], text
+
+
+def _parse_wscn(text: str) -> list[dict[str, Any]]:
+    """华尔街见闻 7x24：{code,data:{items:[{id,title(常空),content_text,display_time(秒),uri}]}}"""
+    try:
+        payload = json.loads(text)
+        items = (payload.get("data") or {}).get("items") or []
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        content = str(row.get("content_text") or "").strip()
+        ts = _to_ts(row.get("display_time"))
+        if not content or ts is None:
+            continue
+        title, summary = _split_wscn(content)
+        if not title:
+            continue
+        out.append({
+            "id": str(row.get("id") or ""),
+            "title": title,
+            "summary": summary,
+            "ts": ts,
+            "source": "华尔街见闻",
+            "origin": "华尔街见闻",
+            "url": str(row.get("uri") or "").strip(),
+        })
+    return out
+
+
 def _parse_sina(text: str) -> list[dict[str, Any]]:
     """新浪财经 7x24：{result:{data:{feed:{list:[{id,create_time,rich_text,docurl}]}}}}"""
     try:
@@ -188,6 +231,8 @@ _FEEDS: list[tuple[str, str, dict[str, str], Any]] = [
      {"Referer": "https://finance.eastmoney.com/"}, _parse_em),
     ("新浪财经", "https://zhibo.sina.com.cn/api/zhibo/feed?page=1&page_size=50&zhibo_id=152&tag_id=0&dire=f&dpc=1",
      {"Referer": "https://finance.sina.com.cn/"}, _parse_sina),
+    ("华尔街见闻", "https://api-one.wallstcn.com/apiv1/content/lives?channel=global-channel&limit=50",
+     {"Referer": "https://wallstreetcn.com/"}, _parse_wscn),
 ]
 
 
