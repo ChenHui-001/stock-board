@@ -334,6 +334,43 @@ def test_value_screener() -> None:
     check("价值选股: 风险高信号 AVOID", vs._signal({"change_pct": 1, "volume_ratio": 1, "lianban": 0}, 80, 80, 70) == "AVOID")
     check("价值选股: 突破买入信号", vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1}, 80, 75, 10) == "BREAKOUT_BUY")
 
+    # 综合评分：维度权重放大该维度贡献
+    def _sc(v): return {"score": v, "detail": ""}
+    sc = {"finance": _sc(30), "board": _sc(5), "flow": _sc(6),
+          "volume": _sc(4), "emotion": _sc(6), "risk": _sc(10)}
+    w1 = {k: 1.0 for k in ("finance", "board", "flow", "volume", "emotion")}
+    t1 = vs._composite_score(sc, w1)
+    w2 = dict(w1); w2["finance"] = 2.0
+    t2 = vs._composite_score(sc, w2)
+    check("价值选股: 权重放大基本面", abs(t2 - t1 - 30) < 0.01, f"t1={t1} t2={t2}")
+    sc_risk = dict(sc); sc_risk["risk"] = _sc(80)
+    check("价值选股: 高风险扣分", vs._composite_score(sc_risk, w1) < vs._composite_score(sc, w1))
+
+
+def test_value_weights() -> None:
+    """价值选股权重：默认 1.0 / 保存 clamp / 恢复默认 / 指纹联动（临时库，结束还原）。"""
+    storage.init_db()
+    saved = storage.get_kv("value_weights")
+    try:
+        from backend import valuecfg as vc
+        w0 = vc.get_weights()
+        check("价值权重: 默认全 1.0", all(abs(v - 1.0) < 1e-9 for v in w0.values()), str(w0))
+        w = vc.save_weights({"finance": 2.0, "board": 0.5, "emotion": 9.9, "bad": 3})
+        check("价值权重: 保存并 clamp", w["finance"] == 2.0 and w["board"] == 0.5
+              and w["emotion"] == vc._MAX, str(w))
+        check("价值权重: 未知维度忽略", "bad" not in w)
+        check("价值权重: 重读一致", vc.get_weights()["finance"] == 2.0)
+        fp1 = vc.fingerprint()
+        vc.save_weights({"finance": 1.0})
+        check("价值权重: 权重变化指纹变", fp1 != vc.fingerprint())
+        vc.reset_weights()
+        check("价值权重: 恢复默认", all(abs(v - 1.0) < 1e-9 for v in vc.get_weights().values()))
+    finally:
+        if saved is not None:
+            storage.set_kv("value_weights", saved)
+        else:
+            storage.delete_kv("value_weights")
+
     # 选股结果补自选状态：pools 与 stocks 中每只股票都应被标记 watched
     from backend import storage as _storage
     from backend import api as _api
@@ -1436,6 +1473,7 @@ def main() -> int:
     test_llm_failover()
     test_model_filter()
     test_value_screener()
+    test_value_weights()
     test_news_interpret()
     test_hotspot()
     test_hotspot_ai()

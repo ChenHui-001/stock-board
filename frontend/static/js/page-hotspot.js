@@ -13,7 +13,9 @@
     view: 'feed',       // feed=快讯列表 / value=价值投资选股
     value: null,        // 价值选股结果
     valueLoading: false,
-    valueError: null
+    valueError: null,
+    weights: null,      // 价值选股各维度权重
+    weightsOpen: false  // 权重配置表单是否展开
   };
 
   function view() { return document.getElementById('view'); }
@@ -72,7 +74,6 @@
       const btn = U.el('button', 'tab' + (state.view === t.key ? ' active' : ''), t.label);
       btn.onclick = function () {
         state.view = t.key;
-        if (t.key === 'value' && !state.value && !state.valueLoading) loadValue(false);
         render();
       };
       tabs.appendChild(btn);
@@ -87,6 +88,7 @@
     if (isCurrent()) render();
     try {
       state.value = await API.valueScreen(force);
+      if (state.value && state.value.weights) state.weights = state.value.weights;
     } catch (err) {
       state.valueError = err.message || String(err);
       U.toast('价值选股失败：' + state.valueError, 'err');
@@ -122,8 +124,85 @@
     return td;
   }
 
+  // 权重配置：未加载过时取一次（轻量 GET，不触发选股）
+  function ensureValueWeights() {
+    if (state.weights) return;
+    API.valueWeights().then(function (res) {
+      state.weights = res;
+      if (isCurrent() && state.view === 'value') render();
+    }).catch(function () { /* 权重读取失败不阻塞面板 */ });
+  }
+
+  // 各维度权重表单（结果面板与空态共用）
+  function renderValueWeightsForm() {
+    const w = state.weights || {};
+    const sec = U.el('div', 'value-weights' + (state.weightsOpen ? '' : ' hidden'));
+    sec.appendChild(U.el('div', 'value-sec-title', '⚖ 评分权重配置'));
+    sec.appendChild(U.el('div', 'value-weights-sub',
+      '各维度评分的乘数（0.2~3.0，默认 1.0）。调大某维度让该维度信号更强；保存后自动重新选股（缓存作废）。'));
+    const grid = U.el('div', 'value-weights-grid');
+    [
+      ['finance', '基本面（默认满分 50）'],
+      ['board', '板块（10）'],
+      ['flow', '资金（12）'],
+      ['volume', '量价筹码（8）'],
+      ['emotion', '情绪妖股（12）']
+    ].forEach(function (r) {
+      const row = U.el('label', 'value-weights-row');
+      row.appendChild(U.el('span', 'value-weights-label', r[1]));
+      const inp = U.el('input', 'value-weights-input');
+      inp.type = 'number';
+      inp.min = 0.2;
+      inp.max = 3.0;
+      inp.step = 0.1;
+      inp.value = w[r[0]] != null ? w[r[0]] : 1.0;
+      inp.dataset.k = r[0];
+      row.appendChild(inp);
+      grid.appendChild(row);
+    });
+    sec.appendChild(grid);
+    const btns = U.el('div', 'value-weights-actions');
+    const saveBtn = U.el('button', 'btn btn-sm btn-primary', '保存权重');
+    saveBtn.onclick = function () { saveValueWeights(); };
+    btns.appendChild(saveBtn);
+    const resetBtn = U.el('button', 'btn btn-sm', '恢复默认');
+    resetBtn.onclick = function () { resetValueWeights(); };
+    btns.appendChild(resetBtn);
+    btns.appendChild(U.el('span', 'value-weights-note', '保存后自动重新选股'));
+    sec.appendChild(btns);
+    return sec;
+  }
+
+  async function saveValueWeights() {
+    const body = {};
+    document.querySelectorAll('.value-weights-input').forEach(function (inp) {
+      body[inp.dataset.k] = parseFloat(inp.value);
+    });
+    try {
+      const res = await API.valueWeightsSave(body);
+      state.weights = res;
+      U.toast('权重已保存，正在重新选股…', 'ok');
+      loadValue(true);
+    } catch (err) {
+      U.toast('保存权重失败：' + err.message, 'err');
+    }
+  }
+
+  async function resetValueWeights() {
+    if (!confirm('恢复价值选股权重为默认（全 1.0）？')) return;
+    try {
+      const res = await API.valueWeightsReset();
+      state.weights = res;
+      U.toast('权重已恢复默认，正在重新选股…', 'ok');
+      loadValue(true);
+    } catch (err) {
+      U.toast('恢复权重失败：' + err.message, 'err');
+    }
+  }
+
   function renderValuePanel() {
     const wrap = U.el('div', 'value-panel');
+    ensureValueWeights();
     if (state.valueLoading && !state.value) {
       wrap.appendChild(U.el('div', 'loading-block', '正在运行价值选股（市场环境 → 板块 → 候选 → 多维评分）…'));
       return wrap;
@@ -136,7 +215,27 @@
       wrap.appendChild(empty);
       return wrap;
     }
-    if (!state.value) return wrap;
+    if (!state.value) {
+      // 手动执行：切页不自动选股，由用户点「开始选股」触发
+      const empty = U.el('div', 'empty value-empty');
+      empty.appendChild(U.el('div', 'empty-icon', '💎'));
+      empty.appendChild(U.el('div', 'empty-title', '尚未运行选股'));
+      empty.appendChild(U.el('div', 'empty-desc', '点击「开始选股」手动运行：市场环境 → 板块 → 候选 → 多维评分 → 分级池（约 10~20 秒）。可先展开「⚖ 权重配置」调整各维度权重。'));
+      const btn = U.el('button', 'btn btn-primary', '▶ 开始选股');
+      btn.disabled = state.valueLoading;
+      btn.onclick = function () { loadValue(true); };
+      empty.appendChild(btn);
+      const wtBtn = U.el('button', 'btn btn-sm' + (state.weightsOpen ? ' active' : ''), '⚖ 权重配置');
+      wtBtn.onclick = function () {
+        state.weightsOpen = !state.weightsOpen;
+        const form = wrap.querySelector('.value-weights');
+        if (form) form.classList.toggle('hidden', !state.weightsOpen);
+      };
+      empty.appendChild(wtBtn);
+      wrap.appendChild(empty);
+      wrap.appendChild(renderValueWeightsForm());
+      return wrap;
+    }
     const d = state.value;
 
     // ---- 市场状态
@@ -271,8 +370,16 @@
       wrap.appendChild(sec);
     }
 
-    // ---- 刷新 + 元信息
+    // ---- 权重配置 + 刷新 + 元信息
+    wrap.appendChild(renderValueWeightsForm());
     const foot = U.el('div', 'value-foot');
+    const wtBtn = U.el('button', 'btn btn-sm' + (state.weightsOpen ? ' active' : ''), '⚖ 权重配置');
+    wtBtn.onclick = function () {
+      state.weightsOpen = !state.weightsOpen;
+      const form = wrap.querySelector('.value-weights');
+      if (form) form.classList.toggle('hidden', !state.weightsOpen);
+    };
+    foot.appendChild(wtBtn);
     const refresh = U.el('button', 'btn btn-sm', '⟳ 重新选股');
     refresh.disabled = state.valueLoading;
     refresh.onclick = function () { loadValue(true); };

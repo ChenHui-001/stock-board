@@ -16,7 +16,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from . import cache as cache_mod
+from . import cache as cache_mod, valuecfg
 from .config import settings
 
 _cache = cache_mod.cache
@@ -506,6 +506,21 @@ def _buy_score(profile: dict[str, Any], scores: dict[str, Any]) -> dict[str, Any
     return {"score": pts, "detail": f"量价+资金+板块+情绪综合"}
 
 
+def _composite_score(scores: dict[str, Any], weights: dict[str, float]) -> float:
+    """综合评分：各维度加权求和（默认权重 1.0 即原始分）减去风险扣分，截断到 0-100。"""
+    total = (
+        scores["finance"]["score"] * weights["finance"]
+        + scores["board"]["score"] * weights["board"]
+        + scores["flow"]["score"] * weights["flow"]
+        + scores["volume"]["score"] * weights["volume"]
+        + scores["emotion"]["score"] * weights["emotion"]
+    )
+    risk = scores["risk"]["score"]
+    if risk > 20:
+        total -= risk / 10
+    return max(0.0, min(100.0, round(total, 1)))
+
+
 def _signal(profile: dict[str, Any], total: float, buy: int, risk: int) -> str:
     """买卖信号：BREAKOUT_BUY / PULLBACK_BUY / BUY / WATCH / REDUCE / AVOID。"""
     chg = profile.get("change_pct") or 0
@@ -545,7 +560,8 @@ def _completeness(profile: dict[str, Any]) -> int:
 
 
 async def _analyze_one(
-    cand: dict[str, Any], board_strength: dict[str, float]
+    cand: dict[str, Any], board_strength: dict[str, float],
+    weights: dict[str, float] | None = None,
 ) -> dict[str, Any] | None:
     profile = await _stock_profile(cand)
     if profile.get("price") is None and not profile.get("financials"):
@@ -558,13 +574,9 @@ async def _analyze_one(
     risk = _risk_score(profile, fin_score)
     scores = {"finance": fin_score, "board": board, "flow": flow,
               "volume": volume, "emotion": emotion, "risk": risk}
-    # 综合评分：基本面 + 板块 + 资金 + 量价 + 情绪 - 风险扣分
-    total = (
-        fin_score["score"] + board["score"] + flow["score"]
-        + volume["score"] + emotion["score"]
-        - (risk["score"] / 10 if risk["score"] > 20 else 0)
-    )
-    total = max(0.0, min(100.0, round(total, 1)))
+    # 综合评分：各维度加权（默认权重 1.0 即原始分）- 风险扣分
+    w = weights or valuecfg.get_weights()
+    total = _composite_score(scores, w)
     buy = _buy_score(profile, scores)
     trade = round(total * 0.7 + buy["score"] * 0.3, 1)
     grade, grade_name = _grade(total)
@@ -614,12 +626,14 @@ async def _fetch_board_strength(zt_rows: list[dict[str, Any]]) -> dict[str, floa
 # ------------------------------------------------------------------ 对外入口
 
 async def run_screen(force: bool = False) -> dict[str, Any]:
-    """完整选股流程（聚合缓存 15 分钟）。"""
-    key = "value:screen"
+    """完整选股流程（聚合缓存 15 分钟，权重变化自动作废缓存）。"""
+    key = f"value:screen:{valuecfg.fingerprint()}"
     if not force:
         cached = _cache.peek(key)
         if cached:
             return cached
+
+    weights = valuecfg.get_weights()
 
     # 第一层：市场环境
     indices = await _fetch_index_quotes()
@@ -643,7 +657,7 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     sem = asyncio.Semaphore(8)
     async def _limited(c: dict[str, Any]):
         async with sem:
-            return await _analyze_one(c, board_strength)
+            return await _analyze_one(c, board_strength, weights)
     results = await asyncio.gather(*[_limited(c) for c in candidates])
     stocks = [r for r in results if r is not None]
     stocks.sort(key=lambda s: s["trade_score"], reverse=True)
@@ -681,6 +695,7 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
             "emotion": pool_emotion,
         },
         "stocks": stocks,
+        "weights": weights,
         "session": __import__("backend.service", fromlist=["session_info"]).session_info(),
     }
     _cache.put(key, result, _CACHE_TTL)

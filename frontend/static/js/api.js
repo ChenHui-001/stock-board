@@ -133,6 +133,15 @@
     valueScreen: function (refresh) {
       return request('/api/value/screen' + (refresh ? '?refresh=1' : ''), { timeout: 240000 });
     },
+    valueWeights: function () {
+      return request('/api/value/weights');
+    },
+    valueWeightsSave: function (w) {
+      return request('/api/value/weights', { method: 'POST', body: w });
+    },
+    valueWeightsReset: function () {
+      return request('/api/value/weights/reset', { method: 'POST' });
+    },
     scoreWeightsSave: function (w) {
       return request('/api/score/weights', { method: 'POST', body: w });
     },

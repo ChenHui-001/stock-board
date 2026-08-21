@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, hotspot as hotspot_mod, hotspot_ai, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage, value_screener
+from . import analysis, hotspot as hotspot_mod, hotspot_ai, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage, value_screener, valuecfg
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import describe_exc, is_trading_now, normalize_code, resolve_market
@@ -437,6 +437,28 @@ def _mark_value_watched(result: dict[str, Any]) -> None:
             code = s.get("code")
             if code:
                 s["watched"] = storage.is_watched(code)
+
+
+@router.get("/value/weights")
+async def value_weights_get() -> dict[str, Any]:
+    """当前生效的价值选股各维度权重（DB 覆盖优先，默认 1.0）。"""
+    w = valuecfg.get_weights()
+    return {**w, "range": [valuecfg._MIN, valuecfg._MAX],
+            "source": "db" if storage.get_kv("value_weights") else "default"}
+
+
+@router.post("/value/weights")
+async def value_weights_save(body: dict[str, Any]) -> dict[str, Any]:
+    """保存权重（自动 clamp 到合法范围），权重变化后选股缓存作废。"""
+    w = valuecfg.save_weights(body)
+    return {"ok": True, **w}
+
+
+@router.post("/value/weights/reset")
+async def value_weights_reset() -> dict[str, Any]:
+    """清除界面权重配置，回退默认 1.0。"""
+    w = valuecfg.reset_weights()
+    return {"ok": True, **w}
 
 
 @router.get("/stock/{code}")
