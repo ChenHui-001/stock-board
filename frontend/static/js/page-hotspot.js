@@ -9,7 +9,11 @@
     q: '',
     loading: false,
     error: null,
-    lastAuto: 0
+    lastAuto: 0,
+    view: 'feed',       // feed=快讯列表 / value=价值投资选股
+    value: null,        // 价值选股结果
+    valueLoading: false,
+    valueError: null
   };
 
   function view() { return document.getElementById('view'); }
@@ -45,12 +49,223 @@
     root.innerHTML = '';
     const card = U.el('div', 'card');
     card.appendChild(renderHead());
-    card.appendChild(renderFilters());
-    const listHost = U.el('div', 'hotspot-list');
-    listHost.id = 'hotspot-list';
-    card.appendChild(listHost);
-    renderListInto(listHost);
+    if (state.view === 'value') {
+      card.appendChild(renderValuePanel());
+    } else {
+      card.appendChild(renderFilters());
+      const listHost = U.el('div', 'hotspot-list');
+      listHost.id = 'hotspot-list';
+      card.appendChild(listHost);
+      renderListInto(listHost);
+    }
     root.appendChild(card);
+  }
+
+  // ---------------------------------------------------------- 价值投资选股
+  // 右侧「价值投资」菜单：A股快速轮动量化选股（市场环境 + 板块强度 + 多维评分 + 分级池）
+  function renderHeadTabs() {
+    const tabs = U.el('div', 'hotspot-tabs');
+    [
+      { key: 'feed', label: '快讯' },
+      { key: 'value', label: '💎 价值投资' }
+    ].forEach(function (t) {
+      const btn = U.el('button', 'tab' + (state.view === t.key ? ' active' : ''), t.label);
+      btn.onclick = function () {
+        state.view = t.key;
+        if (t.key === 'value' && !state.value && !state.valueLoading) loadValue(false);
+        render();
+      };
+      tabs.appendChild(btn);
+    });
+    return tabs;
+  }
+
+  async function loadValue(force) {
+    if (state.valueLoading) return;
+    state.valueLoading = true;
+    state.valueError = null;
+    if (isCurrent()) render();
+    try {
+      state.value = await API.valueScreen(force);
+    } catch (err) {
+      state.valueError = err.message || String(err);
+      U.toast('价值选股失败：' + state.valueError, 'err');
+    } finally {
+      state.valueLoading = false;
+      if (isCurrent()) render();
+    }
+  }
+
+  function valueGradeClass(g) {
+    return { S: 'vg-s', A: 'vg-a', B: 'vg-b', C: 'vg-c', D: 'vg-d' }[g] || 'vg-d';
+  }
+
+  function valueSignalClass(sig) {
+    if (sig === 'BUY' || sig === 'BREAKOUT_BUY' || sig === 'PULLBACK_BUY') return 'vs-buy';
+    if (sig === 'WATCH') return 'vs-watch';
+    if (sig === 'REDUCE') return 'vs-reduce';
+    return 'vs-avoid';
+  }
+
+  function renderValuePanel() {
+    const wrap = U.el('div', 'value-panel');
+    if (state.valueLoading && !state.value) {
+      wrap.appendChild(U.el('div', 'loading-block', '正在运行价值选股（市场环境 → 板块 → 候选 → 多维评分）…'));
+      return wrap;
+    }
+    if (state.valueError && !state.value) {
+      const empty = U.el('div', 'empty');
+      empty.appendChild(U.el('div', 'empty-icon', '⚠️'));
+      empty.appendChild(U.el('div', 'empty-title', '价值选股暂不可用'));
+      empty.appendChild(U.el('div', 'empty-desc', state.valueError));
+      wrap.appendChild(empty);
+      return wrap;
+    }
+    if (!state.value) return wrap;
+    const d = state.value;
+
+    // ---- 市场状态
+    const m = d.market || {};
+    const mk = U.el('div', 'value-market');
+    mk.appendChild(U.el('div', 'value-mk-title',
+      '市场状态：' + (m.name || '--') + '（' + (m.state || '--') + '）'));
+    const mkMeta = U.el('div', 'value-mk-meta');
+    mkMeta.appendChild(U.el('span', 'value-mk-item', '进攻等级 ' + (m.attack ?? '--') + '/100'));
+    mkMeta.appendChild(U.el('span', 'value-mk-item', '情绪 ' + (m.emotion || '--')));
+    mkMeta.appendChild(U.el('span', 'value-mk-item', '涨停 ' + (m.zt_count ?? '--') + ' 只'));
+    mkMeta.appendChild(U.el('span', 'value-mk-item', '候选 ' + (m.candidate_count ?? '--') + ' 只'));
+    (m.indices || []).slice(0, 5).forEach(function (ix) {
+      const cls = U.tone(ix.change_pct);
+      mkMeta.appendChild(U.el('span', 'value-mk-item ' + cls,
+        ix.name + ' ' + (U.isNum(ix.change_pct) ? U.pct(ix.change_pct) : '--')));
+    });
+    mk.appendChild(mkMeta);
+    wrap.appendChild(mk);
+
+    // ---- 最强板块
+    const boards = d.board_top || [];
+    if (boards.length) {
+      const bsec = U.el('div', 'value-section');
+      bsec.appendChild(U.el('div', 'value-sec-title', '🔥 最强板块 TOP' + boards.length));
+      const bwrap = U.el('div', 'value-boards');
+      boards.forEach(function (b, i) {
+        const chip = U.el('div', 'value-board');
+        chip.appendChild(U.el('span', 'value-board-rank', String(i + 1)));
+        chip.appendChild(U.el('span', 'value-board-name', b.name));
+        chip.appendChild(U.el('span', 'value-board-str', '强度 ' + (b.strength ?? '--')));
+        bwrap.appendChild(chip);
+      });
+      bsec.appendChild(bwrap);
+      wrap.appendChild(bsec);
+    }
+
+    // ---- 三个分级池
+    const pools = d.pools || {};
+    const poolDefs = [
+      { key: 'core', title: '核心价值成长池', sub: '基本面+板块+资金综合最优（适合 1~12 个月）' },
+      { key: 'trend', title: '趋势波段池', sub: '板块+资金+量价+情绪（适合 5~30 个交易日）' },
+      { key: 'emotion', title: '情绪妖股池', sub: '连板高度+换手+情绪（适合 1~10 个交易日，高风险）' }
+    ];
+    poolDefs.forEach(function (pd) {
+      const list = pools[pd.key] || [];
+      if (!list.length) return;
+      const sec = U.el('div', 'value-section');
+      const head = U.el('div', 'value-sec-head');
+      head.appendChild(U.el('div', 'value-sec-title', pd.title));
+      head.appendChild(U.el('span', 'value-sec-sub', pd.sub));
+      sec.appendChild(head);
+      const table = U.el('table', 'value-table');
+      const thead = U.el('thead');
+      const tr = U.el('tr');
+      ['#', '股票', '板块', '总分', '基本面', '资金', '买点', '信号', '操作'].forEach(function (h) {
+        tr.appendChild(U.el('th', '', h));
+      });
+      thead.appendChild(tr);
+      table.appendChild(thead);
+      const tbody = U.el('tbody');
+      list.forEach(function (s, i) {
+        const row = U.el('tr', 'value-row');
+        row.title = s.name + ' ' + s.code + ' · 板块 ' + (s.board || '--');
+        row.onclick = function () { location.hash = '#/stock/' + s.code; };
+        row.appendChild(U.el('td', 'value-td-rank', String(i + 1)));
+        const tdName = U.el('td', 'value-td-name');
+        tdName.appendChild(U.el('span', '', s.name || s.code));
+        tdName.appendChild(U.el('span', 'value-td-code', s.code));
+        row.appendChild(tdName);
+        row.appendChild(U.el('td', 'value-td-board', s.board || '--'));
+        row.appendChild(U.el('td', 'value-td-score', String(s.total_score ?? '--')));
+        row.appendChild(U.el('td', 'value-td-sub', String((s.scores && s.scores.finance) ?? '--')));
+        row.appendChild(U.el('td', 'value-td-sub', String((s.scores && s.scores.flow) ?? '--')));
+        row.appendChild(U.el('td', 'value-td-sub', String(s.buy_score ?? '--')));
+        row.appendChild(U.el('td', 'value-td-signal ' + valueSignalClass(s.signal), s.signal || '--'));
+        const gradeTd = U.el('td', 'value-td-grade');
+        gradeTd.appendChild(U.el('span', 'value-grade ' + valueGradeClass(s.grade), s.grade || '--'));
+        row.appendChild(gradeTd);
+        tbody.appendChild(row);
+      });
+      table.appendChild(tbody);
+      sec.appendChild(table);
+      wrap.appendChild(sec);
+    });
+
+    // ---- 完整结果（含风险/完整度/评分明细）
+    const all = d.stocks || [];
+    if (all.length) {
+      const sec = U.el('div', 'value-section');
+      sec.appendChild(U.el('div', 'value-sec-title', '📋 全部候选明细（' + all.length + ' 只）'));
+      const table = U.el('table', 'value-table value-table-wide');
+      const thead = U.el('thead');
+      const tr = U.el('tr');
+      ['排名', '股票', '板块', '总分', '基', '板', '资', '量价', '情绪', '风险', '买点', '交易', '完整度', '等级', '信号', '风险提示'].forEach(function (h) {
+        tr.appendChild(U.el('th', '', h));
+      });
+      thead.appendChild(tr);
+      table.appendChild(thead);
+      const tbody = U.el('tbody');
+      all.forEach(function (s, i) {
+        const row = U.el('tr', 'value-row');
+        row.onclick = function () { location.hash = '#/stock/' + s.code; };
+        row.appendChild(U.el('td', '', String(i + 1)));
+        const tdName = U.el('td', 'value-td-name');
+        tdName.appendChild(U.el('span', '', s.name || s.code));
+        tdName.appendChild(U.el('span', 'value-td-code', s.code));
+        row.appendChild(tdName);
+        row.appendChild(U.el('td', '', s.board || '--'));
+        row.appendChild(U.el('td', 'value-td-score', String(s.total_score ?? '--')));
+        const sc = s.scores || {};
+        row.appendChild(U.el('td', '', String(sc.finance ?? '--')));
+        row.appendChild(U.el('td', '', String(sc.board ?? '--')));
+        row.appendChild(U.el('td', '', String(sc.flow ?? '--')));
+        row.appendChild(U.el('td', '', String(sc.volume ?? '--')));
+        row.appendChild(U.el('td', '', String(sc.emotion ?? '--')));
+        row.appendChild(U.el('td', 'value-td-risk' + ((s.risk_notes && s.risk_notes.length) ? ' has' : ''),
+          String(sc.risk ?? '--')));
+        row.appendChild(U.el('td', '', String(s.buy_score ?? '--')));
+        row.appendChild(U.el('td', '', String(s.trade_score ?? '--')));
+        row.appendChild(U.el('td', '', (s.completeness ?? '--') + '%'));
+        row.appendChild(U.el('td', 'value-td-grade',
+          s.grade + ' · ' + (s.grade_name || '')));
+        row.appendChild(U.el('td', 'value-td-signal ' + valueSignalClass(s.signal), s.signal || '--'));
+        row.appendChild(U.el('td', 'value-td-notes', (s.risk_notes || []).join('、') || '--'));
+        tbody.appendChild(row);
+      });
+      table.appendChild(tbody);
+      sec.appendChild(table);
+      wrap.appendChild(sec);
+    }
+
+    // ---- 刷新 + 元信息
+    const foot = U.el('div', 'value-foot');
+    const refresh = U.el('button', 'btn btn-sm', '⟳ 重新选股');
+    refresh.disabled = state.valueLoading;
+    refresh.onclick = function () { loadValue(true); };
+    foot.appendChild(refresh);
+    foot.appendChild(U.el('span', 'value-foot-meta',
+      '生成时间：' + (d.generated_at || '--') + ' · 数据来自腾讯/东财/同花顺公开接口'));
+    foot.appendChild(U.el('div', 'value-disclaimer',
+      '以上由程序按量化规则自动生成，不构成投资建议。市场有风险，决策请自行判断。'));
+    wrap.appendChild(foot);
+    return wrap;
   }
 
   function renderHead() {
@@ -58,7 +273,11 @@
     const left = U.el('div');
     left.appendChild(U.el('div', 'card-title', '🔥 热点追踪'));
     const sub = U.el('div', 'card-sub');
-    if (state.error) {
+    if (state.view === 'value') {
+      sub.textContent = state.value
+        ? 'A股快速轮动量化选股 · 市场环境 → 板块 → 多维评分 → 分级池'
+        : (state.valueLoading ? '正在运行量化选股引擎…' : '量化选股面板');
+    } else if (state.error) {
       sub.textContent = state.error;
     } else if (state.meta) {
       sub.textContent = '近 ' + state.meta.window_minutes + ' 分钟 · ' + state.meta.total + ' 条'
@@ -69,8 +288,12 @@
     left.appendChild(sub);
     head.appendChild(left);
 
+    head.appendChild(renderHeadTabs());
+
     const refresh = U.el('button', 'btn btn-sm', '⟳ 刷新');
-    refresh.onclick = function () { load(true); };
+    refresh.onclick = function () {
+      if (state.view === 'value') loadValue(true); else load(true);
+    };
     head.appendChild(refresh);
     return head;
   }

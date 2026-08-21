@@ -130,6 +130,9 @@
     scoreWeights: function () {
       return request('/api/score/weights');
     },
+    valueScreen: function (refresh) {
+      return request('/api/value/screen' + (refresh ? '?refresh=1' : ''), { timeout: 240000 });
+    },
     scoreWeightsSave: function (w) {
       return request('/api/score/weights', { method: 'POST', body: w });
     },

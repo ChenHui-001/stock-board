@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, hotspot as hotspot_mod, hotspot_ai, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
+from . import analysis, hotspot as hotspot_mod, hotspot_ai, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage, value_screener
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import describe_exc, is_trading_now, normalize_code, resolve_market
@@ -408,6 +408,20 @@ async def hotspot_analyze(
     结果按标题+摘要指纹缓存 10 分钟，并发点击同一快讯只执行一次分析。
     """
     return await hotspot_ai.analyze_news(body.title, body.summary, body.source, force=refresh)
+
+
+# ------------------------------------------------------------------ 价值投资选股
+
+@router.get("/value/screen")
+async def value_screen(refresh: bool = Query(False)) -> dict[str, Any]:
+    """A 股快速轮动量化选股：市场环境 + 板块强度 + 多维度评分 + 分级池。
+
+    结果聚合缓存 15 分钟；refresh=1 强制重算（逐股拉财务/资金/K线，较慢）。
+    """
+    try:
+        return await value_screener.run_screen(force=refresh)
+    except Exception as exc:  # noqa: BLE001
+        raise _fail(exc, "价值选股运行失败") from exc
 
 @router.get("/stock/{code}")
 async def stock_detail(code: str, refresh: bool = Query(False)) -> dict[str, Any]:

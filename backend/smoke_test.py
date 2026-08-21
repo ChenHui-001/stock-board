@@ -264,6 +264,59 @@ def test_llm_failover() -> None:
             storage.clear_llm_config()
 
 
+# ------------------------------------------------------------------ 价值选股评分引擎
+# 纯函数评分：市场状态分类 / 财务评分 / 资金拐点 / 风险 / 信号 / 分级
+def test_value_screener() -> None:
+    from backend import value_screener as vs
+
+    # 市场状态分类
+    mk = vs._market_state(
+        [{"code": "000001", "change_pct": 1.8}, {"code": "399006", "change_pct": 2.1}],
+        zt_count=60, avg_chg=2.0)
+    check("价值选股: 强趋势市场识别", mk["state"] == "A" and mk["attack"] >= 80, str(mk))
+    mk2 = vs._market_state([{"code": "000001", "change_pct": -2.0}], zt_count=10, avg_chg=-1.0)
+    check("价值选股: 退潮市场识别", mk2["state"] in ("E", "F") and mk2["attack"] <= 30, str(mk2))
+
+    # 候选过滤：剔除 ETF / 北交所 / 非 A 股代码
+    check("价值选股: 保留沪主板/创业板", vs._is_stock_code("601012", "SH")
+          and vs._is_stock_code("300750", "SZ"))
+    check("价值选股: 剔除 ETF/LOF", not vs._is_stock_code("515070", "SH")
+          and not vs._is_stock_code("159819", "SZ"))
+    check("价值选股: 剔除北交所", not vs._is_stock_code("920002", "BJ"))
+
+    # 财务评分：高质量高成长 > 亏损低质
+    good_fin = [
+        {"revenue_yoy": 25.0, "net_profit_yoy": 40.0, "roe": 18.0, "gross_margin": 45.0, "debt_ratio": 30.0},
+        {"revenue_yoy": 15.0, "net_profit_yoy": 20.0, "roe": 15.0, "gross_margin": 40.0, "debt_ratio": 35.0},
+    ]
+    bad_fin = [
+        {"revenue_yoy": -20.0, "net_profit_yoy": -50.0, "roe": -5.0, "gross_margin": 5.0, "debt_ratio": 90.0},
+    ]
+    g = vs._financial_score(good_fin)
+    b = vs._financial_score(bad_fin)
+    check("价值选股: 优质公司财务分高", g["score"] > b["score"] + 10, f"good={g['score']} bad={b['score']}")
+    check("价值选股: 财务缺失记 0 分", vs._financial_score([])["score"] == 0)
+
+    # 资金拐点：30 日流出但近 5 日流入应加分
+    flow_out = [{"date": f"d{i}", "main": -2e7} for i in range(25)]
+    flow_in = [{"date": f"d{i}", "main": 3e7} for i in range(5)]
+    fp = vs._flow_score({"flow": flow_out + flow_in})
+    fn = vs._flow_score({"flow": [{"date": f"d{i}", "main": -2e7} for i in range(8)]})
+    check("价值选股: 资金拐点得分更高", fp["score"] > fn["score"], f"turn={fp['score']} out={fn['score']}")
+
+    # 风险：ST/亏损/高负债/高位连板
+    risk = vs._risk_score({"name": "*ST测试", "financials": [{"net_profit_yoy": -60.0, "debt_ratio": 85.0, "net_profit": -1e8}], "pe": 200, "change_pct": 10.0, "lianban": 6}, {})
+    check("价值选股: 暴雷组合风险高", risk["score"] > 60 and "ST" in " ".join(risk["notes"]), str(risk))
+    safe = vs._risk_score({"name": "正常股", "financials": [{"net_profit_yoy": 20.0, "debt_ratio": 30.0, "net_profit": 1e8}], "pe": 20, "change_pct": 1.0, "lianban": 0}, {})
+    check("价值选股: 正常股风险低", safe["score"] <= 20, str(safe))
+
+    # 分级与信号
+    check("价值选股: S 级判定", vs._grade(88)[0] == "S")
+    check("价值选股: D 级淘汰", vs._grade(55)[0] == "D")
+    check("价值选股: 风险高信号 AVOID", vs._signal({"change_pct": 1, "volume_ratio": 1, "lianban": 0}, 80, 80, 70) == "AVOID")
+    check("价值选股: 突破买入信号", vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1}, 80, 75, 10) == "BREAKOUT_BUY")
+
+
 # ------------------------------------------------------------------ 模型列表过滤
 # 云端 /models 里混有 embedding/图片/语音等非对话模型，应被过滤、对话模型应保留
 def test_model_filter() -> None:
@@ -1354,6 +1407,7 @@ def main() -> int:
     test_llm_profiles()
     test_llm_failover()
     test_model_filter()
+    test_value_screener()
     test_news_interpret()
     test_hotspot()
     test_hotspot_ai()
