@@ -1746,6 +1746,20 @@ a.hotspot-title:hover { color: var(--accent); }
   white-space: nowrap;
   max-width: 100%;
 }
+.hs-stock-kws {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.hs-stock-kw {
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 
 @media (max-width: 560px) {
   .hs-stock-board { max-width: 72px; }

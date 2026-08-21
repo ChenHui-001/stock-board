@@ -204,6 +204,12 @@ async def _llm_analyze(
 # ------------------------------------------------------------------ 关联股票解析
 # 关键点：股票代码/名称一律来自真实搜索接口，绝不采用模型生成的代码，杜绝编造。
 
+# 检索引擎名 → 展示名（标注每只关联股由哪个数据源检索命中）
+_SRC_LABELS = {
+    "eastmoney": "东方财富", "ths": "同花顺", "tencent": "腾讯",
+    "sina": "新浪财经", "akshare": "AkShare",
+}
+
 
 def _is_stock_code(code: str, market: str) -> bool:
     """筛掉搜索接口混入的 ETF/LOF/基金等非普通 A 股。
@@ -218,13 +224,15 @@ def _is_stock_code(code: str, market: str) -> bool:
     return code.startswith(("00", "30"))
 
 
-async def _search_one(kw: str) -> list[Any]:
+async def _search_one(kw: str) -> tuple[list[Any], str]:
+    """按关键词检索真实 A 股，返回 (个股列表, 检索来源展示名)。"""
     try:
-        items = await registry().search(kw, 6)
+        items, src = await registry().search_with_source(kw, 6)
     except Exception as exc:  # noqa: BLE001 - 单个关键词失败不影响其余
         log.info("热点关联股检索 %s 失败：%s", kw, exc)
-        return []
-    return [it for it in items if _is_stock_code(it.code, it.market)]
+        return [], ""
+    filtered = [it for it in items if _is_stock_code(it.code, it.market)]
+    return filtered, _SRC_LABELS.get(src, src)
 
 
 async def _resolve_stocks(keywords: list[str], limit: int = 3) -> list[dict[str, Any]]:
@@ -237,9 +245,10 @@ async def _resolve_stocks(keywords: list[str], limit: int = 3) -> list[dict[str,
     ranked: dict[str, dict[str, Any]] = {}
     order = 0
     for kw, res in zip(keywords, results):
-        if isinstance(res, BaseException) or not res:
+        if isinstance(res, BaseException):
             continue
-        for item in res:
+        items, src = res
+        for item in items:
             key = full_code(item.code, item.market)
             entry = ranked.get(key)
             if entry is None:
@@ -248,10 +257,13 @@ async def _resolve_stocks(keywords: list[str], limit: int = 3) -> list[dict[str,
                     "market": item.market,
                     "name": item.name,
                     "keywords": [],
+                    "matches": [],
                     "first_pos": order,
                 }
                 ranked[key] = entry
             entry["keywords"].append(kw)
+            # 命中明细：哪个检索词 + 由哪个数据源检索到，供前端展示关联依据
+            entry["matches"].append({"keyword": kw, "source": src})
             order += 1
     if not ranked:
         return []

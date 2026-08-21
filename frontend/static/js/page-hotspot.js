@@ -361,7 +361,19 @@
         if (U.isNum(s.change_pct)) {
           meta.appendChild(U.el('span', 'hs-stock-chg ' + U.tone(s.change_pct), U.pct(s.change_pct)));
         }
-        if (s.reason) meta.appendChild(U.el('span', 'hs-stock-reason', '关联：' + s.reason));
+        // 关联命中明细：每个检索词一个 chip，悬停显示检索来源（旧缓存无 matches 时回退文本）
+        if (s.matches && s.matches.length) {
+          const kwWrap = U.el('div', 'hs-stock-kws');
+          s.matches.forEach(function (m) {
+            const chip = U.el('span', 'hs-stock-kw', m.keyword || '');
+            chip.title = '检索词「' + (m.keyword || '') + '」命中'
+              + (m.source ? ' · 来源 ' + m.source : '');
+            kwWrap.appendChild(chip);
+          });
+          meta.appendChild(kwWrap);
+        } else if (s.reason) {
+          meta.appendChild(U.el('span', 'hs-stock-reason', '关联：' + s.reason));
+        }
         card.appendChild(meta);
         list.appendChild(card);
       });

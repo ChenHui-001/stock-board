@@ -256,6 +256,10 @@ class Registry:
         items, _ = await self._first("search", lambda p: p.search(keyword, limit))
         return items
 
+    async def search_with_source(self, keyword: str, limit: int = 15) -> tuple[list[SearchItem], str]:
+        """检索股票并返回实际生效的数据源名（供热点关联股标注检索来源）。"""
+        return await self._first("search", lambda p: p.search(keyword, limit))
+
     async def kline(self, code: str, market: str, limit: int) -> tuple[list[Bar], str]:
         bars, src = await self._first("kline", lambda p: p.kline(code, market, limit))
         return bars, src

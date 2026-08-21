@@ -359,14 +359,14 @@ def test_hotspot_ai() -> None:
         )
         llm.available = lambda: False
         try:
-            async def fake_search(kw: str) -> list:
+            async def fake_search(kw: str) -> tuple:
                 if kw == "光伏":
-                    return [SearchItem(code="601012", market="SH", name="隆基绿能"),
-                            SearchItem(code="600438", market="SH", name="通威股份")]
+                    return ([SearchItem(code="601012", market="SH", name="隆基绿能"),
+                             SearchItem(code="600438", market="SH", name="通威股份")], "东方财富")
                 if kw == "储能":
-                    return [SearchItem(code="300274", market="SZ", name="阳光电源"),
-                            SearchItem(code="601012", market="SH", name="隆基绿能")]
-                return []
+                    return ([SearchItem(code="300274", market="SZ", name="阳光电源"),
+                             SearchItem(code="601012", market="SH", name="隆基绿能")], "同花顺")
+                return [], ""
             async def _noop(s):
                 return s
             hotspot_ai._search_one = fake_search
@@ -375,11 +375,23 @@ def test_hotspot_ai() -> None:
             stocks = await hotspot_ai._resolve_stocks(["光伏", "储能"])
             check("关联股: 去重后 3 只", len(stocks) == 3, str(stocks))
             check("关联股: 命中双关键词排前", stocks[0]["code"] == "601012", str(stocks))
+            # 命中明细：每个检索词 + 检索来源
+            top_matches = stocks[0].get("matches") or []
+            check("关联股: 命中明细含双关键词",
+                  len(top_matches) == 2
+                  and {m["keyword"] for m in top_matches} == {"光伏", "储能"},
+                  str(top_matches))
+            check("关联股: 命中明细带来源",
+                  {m["source"] for m in top_matches} == {"东方财富", "同花顺"},
+                  str(top_matches))
+            check("关联股: 单关键词命中来源正确",
+                  (stocks[1].get("matches") or [{}])[0].get("source") == "东方财富",
+                  str(stocks[1].get("matches")))
 
             calls = {"n": 0}
-            async def fake_search2(kw: str) -> list:
+            async def fake_search2(kw: str) -> tuple:
                 calls["n"] += 1
-                return [SearchItem(code="601012", market="SH", name="隆基绿能")]
+                return [SearchItem(code="601012", market="SH", name="隆基绿能")], "东方财富"
             hotspot_ai._search_one = fake_search2
             r1 = await hotspot_ai.analyze_news("光伏政策利好", "")
             r2 = await hotspot_ai.analyze_news("光伏政策利好", "")
