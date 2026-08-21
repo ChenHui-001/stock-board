@@ -316,6 +316,16 @@ def test_value_screener() -> None:
     check("价值选股: 风险高信号 AVOID", vs._signal({"change_pct": 1, "volume_ratio": 1, "lianban": 0}, 80, 80, 70) == "AVOID")
     check("价值选股: 突破买入信号", vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1}, 80, 75, 10) == "BREAKOUT_BUY")
 
+    # 选股结果补自选状态：pools 与 stocks 中每只股票都应被标记 watched
+    from backend import storage as _storage
+    from backend import api as _api
+    sample = {"pools": {"core": [{"code": "601012", "name": "隆基绿能"}]},
+              "stocks": [{"code": "601012", "name": "隆基绿能"}, {"code": "300750", "name": "宁德时代"}]}
+    _api._mark_value_watched(sample)
+    check("价值选股: pools 补自选状态", sample["pools"]["core"][0]["watched"] is False)
+    check("价值选股: stocks 补自选状态", sample["stocks"][0]["watched"] is False
+          and sample["stocks"][1]["watched"] is False)
+
 
 # ------------------------------------------------------------------ 模型列表过滤
 # 云端 /models 里混有 embedding/图片/语音等非对话模型，应被过滤、对话模型应保留

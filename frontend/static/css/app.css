@@ -853,6 +853,8 @@ main {
 .vg-c { background: transparent; color: var(--text-dim); border: 1px solid var(--line); }
 .vg-d { background: transparent; color: var(--text-faint); border: 1px dashed var(--line); }
 .value-td-signal { font-weight: 700; }
+.value-td-watch { text-align: center; white-space: nowrap; }
+.btn-xs { padding: 2px 8px; font-size: 11.5px; }
 .vs-buy { color: var(--accent); }
 .vs-watch { color: var(--text-dim); }
 .vs-reduce { color: var(--up); }

@@ -107,6 +107,21 @@
     return 'vs-avoid';
   }
 
+  // 选股结果行的「加入自选」按钮：只入库，不触发行点击跳详情
+  function valueWatchCell(s) {
+    const td = U.el('td', 'value-td-watch');
+    const btn = U.el('button', 'btn btn-xs' + (s.watched ? '' : ' btn-primary'),
+      s.watched ? '已自选' : '加入自选');
+    btn.disabled = !!s.watched;
+    btn.title = s.watched ? '' : '将 ' + (s.name || s.code) + ' 加入自选';
+    btn.onclick = function (ev) {
+      ev.stopPropagation();
+      hsAddWatch(s, btn);
+    };
+    td.appendChild(btn);
+    return td;
+  }
+
   function renderValuePanel() {
     const wrap = U.el('div', 'value-panel');
     if (state.valueLoading && !state.value) {
@@ -177,7 +192,7 @@
       const table = U.el('table', 'value-table');
       const thead = U.el('thead');
       const tr = U.el('tr');
-      ['#', '股票', '板块', '总分', '基本面', '资金', '买点', '信号', '操作'].forEach(function (h) {
+      ['#', '股票', '板块', '总分', '基本面', '资金', '买点', '信号', '等级', '操作'].forEach(function (h) {
         tr.appendChild(U.el('th', '', h));
       });
       thead.appendChild(tr);
@@ -201,6 +216,7 @@
         const gradeTd = U.el('td', 'value-td-grade');
         gradeTd.appendChild(U.el('span', 'value-grade ' + valueGradeClass(s.grade), s.grade || '--'));
         row.appendChild(gradeTd);
+        row.appendChild(valueWatchCell(s));
         tbody.appendChild(row);
       });
       table.appendChild(tbody);
@@ -216,7 +232,7 @@
       const table = U.el('table', 'value-table value-table-wide');
       const thead = U.el('thead');
       const tr = U.el('tr');
-      ['排名', '股票', '板块', '总分', '基', '板', '资', '量价', '情绪', '风险', '买点', '交易', '完整度', '等级', '信号', '风险提示'].forEach(function (h) {
+      ['排名', '股票', '板块', '总分', '基', '板', '资', '量价', '情绪', '风险', '买点', '交易', '完整度', '等级', '信号', '风险提示', '操作'].forEach(function (h) {
         tr.appendChild(U.el('th', '', h));
       });
       thead.appendChild(tr);
@@ -247,6 +263,7 @@
           s.grade + ' · ' + (s.grade_name || '')));
         row.appendChild(U.el('td', 'value-td-signal ' + valueSignalClass(s.signal), s.signal || '--'));
         row.appendChild(U.el('td', 'value-td-notes', (s.risk_notes || []).join('、') || '--'));
+        row.appendChild(valueWatchCell(s));
         tbody.appendChild(row);
       });
       table.appendChild(tbody);
