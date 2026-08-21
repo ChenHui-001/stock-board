@@ -2,8 +2,11 @@
 (function (global) {
   'use strict';
 
-  // 请求超时（毫秒）：LLM 分析最坏 3 次重试，给足余量；超时提示而非无限转圈
+  // 请求超时（毫秒）：普通取数接口用这个默认值
   const REQUEST_TIMEOUT = 90000;
+  // 含 LLM 调用的接口：后端单次 LLM 超时默认 90s，再加上取数时间，
+  // 浏览器侧必须留出余量，否则后端还在正常出结果、前端已判定超时
+  const LLM_TIMEOUT = 150000;
 
   function fetchWithTimeout(path, opts) {
     const ctrl = new AbortController();
@@ -88,6 +91,7 @@
       // 标题/摘要截断到后端字段上限内，避免超长快讯摘要触发 422
       return request('/api/hotspot/analyze' + (refresh ? '?refresh=1' : ''), {
         method: 'POST',
+        timeout: LLM_TIMEOUT,
         body: {
           title: String((item && item.title) || '').slice(0, 500),
           summary: String((item && item.summary) || '').slice(0, 2000),
@@ -102,21 +106,26 @@
       return request('/api/quote/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''));
     },
     aiAnalyze: function (code, refresh) {
+      // AI 分析是全站最慢的接口：后端串行「资讯解读 → 研报解读（这两步已并发）
+      // → 主分析」，每段各自吃满 LLM_TIMEOUT（默认 90s）。浏览器侧上限必须高于
+      // 后端最坏耗时，否则后端仍在正常工作、前端已报「请求超时」，
+      // 用户看到失败而结果其实已经算完并写进当日缓存。
       return request('/api/ai/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''), {
-        method: 'POST'
+        method: 'POST',
+        timeout: 240000
       });
     },
     news: function (code, refresh, days) {
       var q = [];
       if (refresh) q.push('refresh=1');
       if (days != null) q.push('days=' + days);
-      return request('/api/news/' + encodeURIComponent(code) + (q.length ? '?' + q.join('&') : ''));
+      return request('/api/news/' + encodeURIComponent(code) + (q.length ? '?' + q.join('&') : ''), { timeout: LLM_TIMEOUT });
     },
     reports: function (code, refresh, days) {
       var q = [];
       if (refresh) q.push('refresh=1');
       if (days != null) q.push('days=' + days);
-      return request('/api/reports/' + encodeURIComponent(code) + (q.length ? '?' + q.join('&') : ''));
+      return request('/api/reports/' + encodeURIComponent(code) + (q.length ? '?' + q.join('&') : ''), { timeout: LLM_TIMEOUT });
     },
     scoreWeights: function () {
       return request('/api/score/weights');

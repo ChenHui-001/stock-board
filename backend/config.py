@@ -74,7 +74,10 @@ class Settings:
     LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
     LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
     LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
-    LLM_TIMEOUT = _float("LLM_TIMEOUT", 45.0)
+    # 单次 LLM 调用超时。主分析要生成最多 LLM_MAX_TOKENS 个 token 的 JSON，
+    # DeepSeek 等公有云在 A 股盘中高峰生成 4000 token 常需 60s 以上，
+    # 45s 会在模型正常工作时把它掐断（表现为「等待响应超时」并降级规则引擎）。
+    LLM_TIMEOUT = _float("LLM_TIMEOUT", 90.0)
     LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 4000)
     # 思考类模型（deepseek-reasoner / *-thinking / r1 等）的思考过程也占用输出配额，
     # 配额不足时正文 content 会为空；检测到思考型模型或空正文时自动放大到此值重试。

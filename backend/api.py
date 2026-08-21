@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from . import analysis, hotspot as hotspot_mod, hotspot_ai, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage
 from .config import settings
 from .providers import ProviderError, registry
-from .utils import is_trading_now, normalize_code, resolve_market
+from .utils import describe_exc, is_trading_now, normalize_code, resolve_market
 
 log = logging.getLogger("api")
 router = APIRouter(prefix="/api")
@@ -475,22 +475,27 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
         except ProviderError as exc:
             raise _fail(exc, "AI 分析取数失败") from exc
 
-        # 近一个月资讯（缓存命中即复用，失败不阻塞分析）：供 AI 判断资讯面权重
+        # 资讯与研报各自会触发一次 LLM 解读，两者互不依赖：并发取，
+        # 把这一段的墙钟从「资讯耗时 + 研报耗时」压到 max(两者)。
+        # 任一失败都不阻塞主分析（return_exceptions 后按异常忽略）。
         news_items: list[dict[str, Any]] = []
-        try:
-            news_items = (await news_mod.get_stock_news(code, detail["quote"].get("name", "")))["items"]
-        except Exception as exc:  # noqa: BLE001
-            log.info("AI 分析取资讯失败（忽略，不影响分析）：%s", exc)
-
-        # 券商研报（缓存命中即复用，失败不阻塞分析）：供 AI 判断券商观点面权重
         report_items: list[dict[str, Any]] = []
         report_dist: dict[str, int] = {}
-        try:
-            _reports = await reports_mod.get_reports(code, detail["quote"].get("name", ""))
-            report_items = _reports["items"]
-            report_dist = _reports.get("rating_dist") or {}
-        except Exception as exc:  # noqa: BLE001
-            log.info("AI 分析取研报失败（忽略，不影响分析）：%s", exc)
+        _name = detail["quote"].get("name", "")
+        _news_res, _reports_res = await asyncio.gather(
+            news_mod.get_stock_news(code, _name),
+            reports_mod.get_reports(code, _name),
+            return_exceptions=True,
+        )
+        if isinstance(_news_res, BaseException):
+            log.info("AI 分析取资讯失败（忽略，不影响分析）：%s", describe_exc(_news_res))
+        else:
+            news_items = _news_res["items"]
+        if isinstance(_reports_res, BaseException):
+            log.info("AI 分析取研报失败（忽略，不影响分析）：%s", describe_exc(_reports_res))
+        else:
+            report_items = _reports_res["items"]
+            report_dist = _reports_res.get("rating_dist") or {}
 
         result = await analysis.analyze(detail, news_items, report_items)
         quote = detail["quote"]
