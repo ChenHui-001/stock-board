@@ -26,6 +26,16 @@ def _float(name: str, default: float) -> float:
         return default
 
 
+def _clamp_llm_timeout(v: float) -> float:
+    """LLM 单次调用超时下限：主分析要生成最多 LLM_MAX_TOKENS 个 token 的 JSON，
+
+    DeepSeek 等公有云盘中高峰常需 60s 以上。旧部署（.env / compose）里可能
+    残留 45s 等过小配置，会把正常生成掐断并降级规则引擎——低于下限的一律
+    提到下限，保证 AI 分析可用（用户仍可调大，但不能调得过小）。
+    """
+    return max(v, 90.0)
+
+
 def _list(name: str, default: list[str]) -> list[str]:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -77,7 +87,9 @@ class Settings:
     # 单次 LLM 调用超时。主分析要生成最多 LLM_MAX_TOKENS 个 token 的 JSON，
     # DeepSeek 等公有云在 A 股盘中高峰生成 4000 token 常需 60s 以上，
     # 45s 会在模型正常工作时把它掐断（表现为「等待响应超时」并降级规则引擎）。
-    LLM_TIMEOUT = _float("LLM_TIMEOUT", 90.0)
+    # 默认 120s 留足余量，且经 _clamp_llm_timeout 保底 ≥90s：旧 .env/compose
+    # 里的 45s 等过小配置无法再生效。
+    LLM_TIMEOUT = _clamp_llm_timeout(_float("LLM_TIMEOUT", 120.0))
     LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 4000)
     # 思考类模型（deepseek-reasoner / *-thinking / r1 等）的思考过程也占用输出配额，
     # 配额不足时正文 content 会为空；检测到思考型模型或空正文时自动放大到此值重试。

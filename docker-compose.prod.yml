@@ -46,8 +46,8 @@ services:
       LLM_API_KEY: "${LLM_API_KEY:-}"
       LLM_JSON_MODE: "${LLM_JSON_MODE:-true}"
       # 主分析要生成最多 4000 token 的 JSON，DeepSeek 盘中高峰常需 60s+；
-      # 45s 会掐断正常生成（表现为「响应超时」并降级规则引擎），默认拉齐代码 90s
-      LLM_TIMEOUT: "${LLM_TIMEOUT:-90}"
+      # 默认 120s 与代码一致，且代码层保底 ≥90s（旧 .env 的 45s 无效）
+      LLM_TIMEOUT: "${LLM_TIMEOUT:-120}"
       LLM_MAX_TOKENS: "${LLM_MAX_TOKENS:-4000}"
       # 思考类模型（deepseek-reasoner 等）思考过程也占输出配额，正文为空时自动放大到此值重试
       LLM_THINKING_MAX_TOKENS: "${LLM_THINKING_MAX_TOKENS:-8192}"

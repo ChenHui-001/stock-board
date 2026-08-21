@@ -95,6 +95,17 @@ def test_describe_exc() -> None:
     check("LLM 超时提示非空", len(msg.strip()) > 10, msg)
 
 
+def test_llm_timeout_floor() -> None:
+    """LLM 超时下限：旧 .env/compose 残留的 45s 等过小配置不得掐断正常生成。"""
+    from backend.config import _clamp_llm_timeout
+
+    check("LLM 超时下限: 45s 提到 90s", _clamp_llm_timeout(45.0) == 90.0)
+    check("LLM 超时下限: 0 提到 90s", _clamp_llm_timeout(0.0) == 90.0)
+    check("LLM 超时下限: 90s 保持", _clamp_llm_timeout(90.0) == 90.0)
+    check("LLM 超时下限: 120s 保持", _clamp_llm_timeout(120.0) == 120.0)
+    check("LLM 超时下限: 默认生效值≥90s", settings.LLM_TIMEOUT >= 90.0, f"got={settings.LLM_TIMEOUT}")
+
+
 # ------------------------------------------------------------------ LLM 配置指纹
 def test_fingerprint() -> None:
     """指纹随配置变化。
@@ -1191,6 +1202,7 @@ def test_check_sources_backtest_struct() -> None:
 def main() -> int:
     test_json_repair()
     test_describe_exc()
+    test_llm_timeout_floor()
     test_fingerprint()
     test_model_filter()
     test_news_interpret()

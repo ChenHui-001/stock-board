@@ -4,9 +4,9 @@
 
   // 请求超时（毫秒）：普通取数接口用这个默认值
   const REQUEST_TIMEOUT = 90000;
-  // 含 LLM 调用的接口：后端单次 LLM 超时默认 90s，再加上取数时间，
-  // 浏览器侧必须留出余量，否则后端还在正常出结果、前端已判定超时
-  const LLM_TIMEOUT = 150000;
+  // 含 LLM 调用的接口：后端单次 LLM 超时默认 120s（代码层保底 ≥90s），
+  // 再加上取数时间，浏览器侧必须留出余量，否则后端还在正常出结果、前端已判定超时
+  const LLM_TIMEOUT = 180000;
 
   function fetchWithTimeout(path, opts) {
     const ctrl = new AbortController();
@@ -107,12 +107,12 @@
     },
     aiAnalyze: function (code, refresh) {
       // AI 分析是全站最慢的接口：后端串行「资讯解读 → 研报解读（这两步已并发）
-      // → 主分析」，每段各自吃满 LLM_TIMEOUT（默认 90s）。浏览器侧上限必须高于
-      // 后端最坏耗时，否则后端仍在正常工作、前端已报「请求超时」，
-      // 用户看到失败而结果其实已经算完并写进当日缓存。
+      // → 主分析」，每段各自吃满 LLM_TIMEOUT（默认 120s，代码层保底 ≥90s）。
+      // 浏览器侧上限必须高于后端最坏耗时（2×120s=240s），否则后端仍在正常
+      // 工作、前端已报「请求超时」，用户看到失败而结果其实已经算完并写进当日缓存。
       return request('/api/ai/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''), {
         method: 'POST',
-        timeout: 240000
+        timeout: 300000
       });
     },
     news: function (code, refresh, days) {
