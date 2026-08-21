@@ -26,9 +26,20 @@ def _cfg() -> dict[str, Any]:
     return llmcfg.get_config()
 
 
+def _usable(c: dict[str, Any]) -> bool:
+    return bool(c.get("enabled") and c.get("api_key") and c.get("base_url") and c.get("model"))
+
+
 def available() -> bool:
-    c = _cfg()
-    return bool(c["enabled"] and c["api_key"] and c["base_url"] and c["model"])
+    """任一启用且配置完整的模型档案可用即视为可用。"""
+    return any(_usable(p) for p in llmcfg.get_profiles())
+
+
+def ordered_profiles() -> list[dict[str, Any]]:
+    """按调用顺序返回可用档案：主模型优先，其余按保存顺序。"""
+    profiles = [p for p in llmcfg.get_profiles() if _usable(p)]
+    profiles.sort(key=lambda p: (0 if p.get("primary") else 1, 0))
+    return profiles
 
 
 def _client_of() -> httpx.AsyncClient:
@@ -175,11 +186,28 @@ def _repair_truncated(s: str) -> dict[str, Any] | None:
 
 
 async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """调用 chat/completions 并解析出 JSON。返回 (数据, 元信息)。"""
-    if not available():
+    """调用 chat/completions 并解析出 JSON。返回 (数据, 元信息)。
+
+    多档案故障转移：主模型优先，调用失败（超时/报错/JSON 解析失败等）
+    自动切换下一个可用档案；全部失败才抛错，错误信息汇总各档案原因。
+    """
+    profiles = ordered_profiles()
+    if not profiles:
         raise LLMError("未配置 LLM_API_KEY")
 
-    c = _cfg()
+    errors: list[str] = []
+    for c in profiles:
+        label = c.get("name") or c.get("model") or ""
+        try:
+            return await _chat_one(c, system, user)
+        except LLMError as exc:
+            errors.append(f"{label}：{exc}")
+            log.warning("LLM 档案 %s 失败，尝试下一个：%s", label, exc)
+    raise LLMError("；".join(errors))
+
+
+async def _chat_one(c: dict[str, Any], system: str, user: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """用单份档案配置调用 chat/completions 并解析 JSON。返回 (数据, 元信息)。"""
     payload: dict[str, Any] = {
         "model": c["model"],
         "messages": [

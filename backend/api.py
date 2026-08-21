@@ -29,14 +29,22 @@ class CodesBody(BaseModel):
     codes: list[str] = Field(default_factory=list)
 
 
-class LLMConfigBody(BaseModel):
+class LLMProfileBody(BaseModel):
+    """单份模型档案（多模型配置中的一份）。"""
+    id: str = ""
+    name: str = ""
     enabled: bool = True
+    primary: bool = False
     vendor: str = "custom"
     base_url: str = ""
     model: str = ""
     api_key: str = ""
     json_mode: bool = True
     clear_key: bool = False
+
+
+class LLMConfigBody(BaseModel):
+    profiles: list[LLMProfileBody] = Field(default_factory=list)
 
 
 class HotspotAnalyzeBody(BaseModel):
@@ -209,14 +217,22 @@ async def meta() -> dict[str, Any]:
 
 @router.get("/llm/config")
 async def llm_config_get() -> dict[str, Any]:
-    cfg = llmcfg.get_config()
+    profiles = llmcfg.get_profiles()
     return {
-        "enabled": cfg["enabled"],
-        "vendor": cfg["vendor"],
-        "base_url": cfg["base_url"],
-        "model": cfg["model"],
-        "api_key_set": bool(cfg.get("api_key")),
-        "json_mode": cfg["json_mode"],
+        "profiles": [
+            {
+                "id": p.get("id", ""),
+                "name": p.get("name", ""),
+                "enabled": p["enabled"],
+                "primary": p["primary"],
+                "vendor": p["vendor"],
+                "base_url": p["base_url"],
+                "model": p["model"],
+                "api_key_set": bool(p.get("api_key")),
+                "json_mode": p["json_mode"],
+            }
+            for p in profiles
+        ],
         "engine": "llm" if llm.available() else "rule",
         "vendors": [
             {"id": key, "label": value["name"], **{
@@ -229,23 +245,31 @@ async def llm_config_get() -> dict[str, Any]:
 
 @router.post("/llm/config")
 async def llm_config_save(body: LLMConfigBody) -> dict[str, Any]:
-    llmcfg.save_config(body.model_dump(exclude_unset=True))
-    cfg = llmcfg.get_config()
+    profiles = [p.model_dump() for p in body.profiles]
+    clean = llmcfg.save_profiles(profiles)
     return {
         "ok": True,
-        "enabled": cfg["enabled"],
-        "vendor": cfg["vendor"],
-        "base_url": cfg["base_url"],
-        "model": cfg["model"],
-        "api_key_set": bool(cfg.get("api_key")),
-        "json_mode": cfg["json_mode"],
+        "profiles": [
+            {
+                "id": p.get("id", ""),
+                "name": p.get("name", ""),
+                "enabled": p["enabled"],
+                "primary": p["primary"],
+                "vendor": p["vendor"],
+                "base_url": p["base_url"],
+                "model": p["model"],
+                "api_key_set": bool(p.get("api_key")),
+                "json_mode": p["json_mode"],
+            }
+            for p in clean
+        ],
         "engine": "llm" if llm.available() else "rule",
     }
 
 
 @router.post("/llm/test")
-async def llm_config_test(body: LLMConfigBody) -> dict[str, Any]:
-    """用界面表单（未保存）的配置做一次最小调用。"""
+async def llm_config_test(body: LLMProfileBody) -> dict[str, Any]:
+    """用某份档案（界面未保存的表单）做一次最小调用。"""
     cfg = llmcfg.merge_pending(body.model_dump(exclude_unset=True))
     ok, message = await llm.test_connection(cfg)
     return {"ok": ok, "message": message}
@@ -279,8 +303,8 @@ async def score_weights_reset() -> dict[str, Any]:
 
 
 @router.post("/llm/models")
-async def llm_config_models(body: LLMConfigBody) -> dict[str, Any]:
-    """从云端拉取模型列表（OpenAI 兼容 GET /models）。"""
+async def llm_config_models(body: LLMProfileBody) -> dict[str, Any]:
+    """用某份档案从云端拉取模型列表（OpenAI 兼容 GET /models）。"""
     cfg = llmcfg.merge_pending(body.model_dump(exclude_unset=True))
     ok, models, message = await llm.list_models(cfg)
     return {"ok": ok, "models": models, "message": message}

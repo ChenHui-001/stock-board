@@ -761,6 +761,53 @@ main {
 .modal-sm { width: min(560px, 100%); }
 
 /* ------------------------------------------------------------ AI 配置 */
+.cfg-profiles { display: flex; flex-direction: column; gap: 12px; }
+.cfg-profile {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-1);
+  padding: 10px 12px 4px;
+}
+.cfg-p-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.cfg-p-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+.cfg-p-name {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.cfg-p-name:focus { outline: none; border-color: var(--accent); }
+.cfg-p-primary-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cfg-p-primary-label input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .cfg-row {
   display: grid;
   grid-template-columns: 150px 1fr;

@@ -129,6 +129,141 @@ def test_fingerprint() -> None:
             storage.clear_llm_config()
 
 
+# ------------------------------------------------------------------ LLM 多档案
+# 多模型支持：多份档案存取、主模型唯一、密钥保留、旧单配置迁移、指纹联动、故障转移
+def test_llm_profiles() -> None:
+    """多档案：保存/主模型唯一/密钥保留/迁移/指纹（落在临时库上，结束还原）。"""
+    storage.init_db()
+    saved_profiles = storage.get_kv("llm_profiles")
+    saved_legacy = storage.get_kv("llm_config")
+    try:
+        # 1) 保存两份档案，未标记主模型时第一个启用的自动设为主
+        clean = llmcfg.save_profiles([
+            {"id": "a", "name": "A", "enabled": True, "vendor": "custom",
+             "base_url": "https://a/v1", "model": "m-a", "api_key": "ka", "json_mode": True},
+            {"id": "b", "name": "B", "enabled": True, "vendor": "custom",
+             "base_url": "https://b/v1", "model": "m-b", "api_key": "kb", "json_mode": False},
+        ])
+        check("多档案: 保存两份", len(clean) == 2, str(clean))
+        check("多档案: 未标记时首启自动为主", clean[0]["primary"] is True and clean[1]["primary"] is False,
+              str([(p["name"], p["primary"]) for p in clean]))
+        check("多档案: 主模型优先", llmcfg.get_config()["id"] == "a")
+        check("多档案: 可用性", llm.available() is True)
+
+        # 2) 主模型唯一：再存时显式标记 b 为主，a 取消
+        clean = llmcfg.save_profiles([
+            {"id": "a", "name": "A", "enabled": True, "primary": False, "vendor": "custom",
+             "base_url": "https://a/v1", "model": "m-a", "api_key": "", "json_mode": True},
+            {"id": "b", "name": "B", "enabled": True, "primary": True, "vendor": "custom",
+             "base_url": "https://b/v1", "model": "m-b", "api_key": "", "json_mode": False},
+        ])
+        check("多档案: 主模型切换", clean[1]["primary"] is True and clean[0]["primary"] is False,
+              str([(p["name"], p["primary"]) for p in clean]))
+        # api_key 传空且档案已存在 → 保留原密钥
+        check("多档案: 留空保留密钥", clean[0]["api_key"] == "ka" and clean[1]["api_key"] == "kb",
+              str([p["api_key"] for p in clean]))
+        # clear_key=True 清空
+        clean = llmcfg.save_profiles([
+            {"id": "a", "name": "A", "enabled": True, "primary": True, "vendor": "custom",
+             "base_url": "https://a/v1", "model": "m-a", "api_key": "x", "clear_key": True,
+             "json_mode": True},
+        ])
+        check("多档案: clear_key 清空密钥", clean[0]["api_key"] == "", str(clean))
+
+        # 3) 旧单配置迁移：清空多档案，写旧 llm_config，get_profiles 应得到一份主档案
+        storage.delete_kv("llm_profiles")
+        storage.set_llm_config({"enabled": True, "base_url": "https://old/v1", "model": "m-old",
+                                "api_key": "k-old", "json_mode": True})
+        migrated = llmcfg.get_profiles()
+        check("多档案: 旧单配置迁移为主档案",
+              len(migrated) == 1 and migrated[0]["primary"] is True
+              and migrated[0]["base_url"] == "https://old/v1" and migrated[0]["model"] == "m-old",
+              str(migrated))
+
+        # 4) 指纹联动：多档案任一变化指纹即变
+        llmcfg.save_profiles([
+            {"id": "a", "name": "A", "enabled": True, "primary": True, "vendor": "custom",
+             "base_url": "https://a/v1", "model": "m-a", "api_key": "ka", "json_mode": True},
+        ])
+        fp1 = llmcfg.fingerprint()
+        llmcfg.save_profiles([
+            {"id": "a", "name": "A", "enabled": True, "primary": True, "vendor": "custom",
+             "base_url": "https://a/v1", "model": "m-a2", "api_key": "ka", "json_mode": True},
+        ])
+        fp2 = llmcfg.fingerprint()
+        check("多档案: 模型变化指纹变", fp1 != fp2, f"{fp1} vs {fp2}")
+
+        # 5) 故障转移顺序：主模型在前
+        llmcfg.save_profiles([
+            {"id": "b", "name": "B", "enabled": True, "primary": True, "vendor": "custom",
+             "base_url": "https://b/v1", "model": "m-b", "api_key": "kb", "json_mode": True},
+            {"id": "a", "name": "A", "enabled": True, "primary": False, "vendor": "custom",
+             "base_url": "https://a/v1", "model": "m-a", "api_key": "ka", "json_mode": True},
+        ])
+        order = llm.ordered_profiles()
+        check("多档案: 调用顺序主模型优先", [p["id"] for p in order] == ["b", "a"],
+              str([p["id"] for p in order]))
+    finally:
+        if saved_profiles is not None:
+            storage.set_kv("llm_profiles", saved_profiles)
+        else:
+            storage.delete_kv("llm_profiles")
+        if saved_legacy is not None:
+            storage.set_kv("llm_config", saved_legacy)
+        else:
+            storage.clear_llm_config()
+
+
+def test_llm_failover() -> None:
+    """chat_json 故障转移：主模型失败自动切换下一个，全部失败汇总原因。"""
+    storage.init_db()
+    saved_profiles = storage.get_kv("llm_profiles")
+    saved_legacy = storage.get_kv("llm_config")
+    orig_chat_one = llm._chat_one
+    try:
+        llmcfg.save_profiles([
+            {"id": "bad", "name": "坏模型", "enabled": True, "primary": True, "vendor": "custom",
+             "base_url": "https://bad/v1", "model": "m-bad", "api_key": "kb", "json_mode": True},
+            {"id": "good", "name": "好模型", "enabled": True, "primary": False, "vendor": "custom",
+             "base_url": "https://good/v1", "model": "m-good", "api_key": "kg", "json_mode": True},
+        ])
+        calls: list[str] = []
+
+        async def fake_chat_one(cfg, system, user):
+            calls.append(cfg["id"])
+            if cfg["id"] == "bad":
+                raise llm.LLMError("超时")
+            return {"ok": 1}, {"model": cfg["model"]}
+
+        llm._chat_one = fake_chat_one
+        data, meta = asyncio.run(llm.chat_json("s", "u"))
+        check("故障转移: 主模型失败切备选", calls == ["bad", "good"] and data == {"ok": 1},
+              f"calls={calls}")
+        check("故障转移: 返回实际模型", meta.get("model") == "m-good", str(meta))
+
+        # 全部失败 → 汇总各档案原因
+        async def fake_all_fail(cfg, system, user):
+            raise llm.LLMError("挂了")
+
+        llm._chat_one = fake_all_fail
+        try:
+            asyncio.run(llm.chat_json("s", "u"))
+            check("故障转移: 全败应抛错", False, "未抛错")
+        except llm.LLMError as exc:
+            msg = str(exc)
+            check("故障转移: 全败汇总原因", "坏模型" in msg and "好模型" in msg, msg)
+    finally:
+        llm._chat_one = orig_chat_one
+        if saved_profiles is not None:
+            storage.set_kv("llm_profiles", saved_profiles)
+        else:
+            storage.delete_kv("llm_profiles")
+        if saved_legacy is not None:
+            storage.set_kv("llm_config", saved_legacy)
+        else:
+            storage.clear_llm_config()
+
+
 # ------------------------------------------------------------------ 模型列表过滤
 # 云端 /models 里混有 embedding/图片/语音等非对话模型，应被过滤、对话模型应保留
 def test_model_filter() -> None:
@@ -1216,6 +1351,8 @@ def main() -> int:
     test_describe_exc()
     test_llm_timeout_floor()
     test_fingerprint()
+    test_llm_profiles()
+    test_llm_failover()
     test_model_filter()
     test_news_interpret()
     test_hotspot()
