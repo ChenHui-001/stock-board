@@ -1,11 +1,14 @@
-"""运行时价值选股权重：数据库覆盖 + 环境变量兜底，支持界面调整各评分维度权重。
+"""运行时价值选股权重：数据库覆盖 + 默认兜底，支持界面调整各评分维度权重。
 
-优先级：界面保存的配置（kv 表 value_weights） > 环境变量（VALUE_WEIGHT_*）。
-权重是各维度评分的乘数（默认 1.0，范围 0.2~3.0）：调大某维度让该维度信号更强。
+优先级：界面保存的配置（kv 表 value_weights） > 默认 1.0。
+权重表达「相对看重程度」（相对权重，范围 0.2~3.0，默认 1.0）：
+综合评分 = BASE_TOTAL × Σ(维度分×权重) / Σ(维度满分×权重)。
+默认全 1.0 时即原始分之和（与原行为一致）；调大某维度权重，总分向该
+维度强度（分/满分）靠拢——该维度强的股票总分上升、弱的下降，只改变
+相对排序而非单方向加分。总分恒在 0~BASE_TOTAL，不因权重放大截断失真。
 
-维度与策略权重对应（默认全 1.0 即当前行为）：
-finance=基本面（默认满分 50）、board=板块（10）、flow=资金（12）、
-volume=量价筹码（8）、emotion=情绪妖股（12）。
+维度满分（策略口径）：finance=基本面 50、board=板块 10、flow=资金 12、
+volume=量价筹码 8、emotion=情绪妖股 12，BASE_TOTAL=92。
 """
 from __future__ import annotations
 
@@ -15,6 +18,10 @@ from typing import Any
 from . import storage
 
 FIELDS = ("finance", "board", "flow", "volume", "emotion")
+# 各维度满分（评分引擎口径，用于归一化权重与前端展示）
+DIM_MAXES: dict[str, float] = {"finance": 50.0, "board": 10.0, "flow": 12.0,
+                               "volume": 8.0, "emotion": 12.0}
+BASE_TOTAL = round(sum(DIM_MAXES.values()), 1)  # 92.0
 # 权重合法范围：过低会抹掉该维度信号，过高会盖过其他维度
 _MIN, _MAX = 0.2, 3.0
 _KEY = "value_weights"

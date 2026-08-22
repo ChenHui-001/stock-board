@@ -857,6 +857,7 @@ main {
 .btn-xs { padding: 2px 8px; font-size: 11.5px; }
 .value-empty { padding: 28px 12px; text-align: center; }
 .value-empty .btn { margin: 10px 6px 0; }
+.hidden { display: none !important; }
 .value-weights { margin: 10px 0 4px; padding: 10px 14px; border: 1px dashed var(--border); border-radius: 8px; background: var(--bg-elev-1); }
 .value-weights-sub { color: var(--text-dim); font-size: 12px; margin: 4px 0 10px; }
 .value-weights-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 16px; }

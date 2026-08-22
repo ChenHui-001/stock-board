@@ -507,18 +507,21 @@ def _buy_score(profile: dict[str, Any], scores: dict[str, Any]) -> dict[str, Any
 
 
 def _composite_score(scores: dict[str, Any], weights: dict[str, float]) -> float:
-    """综合评分：各维度加权求和（默认权重 1.0 即原始分）减去风险扣分，截断到 0-100。"""
-    total = (
-        scores["finance"]["score"] * weights["finance"]
-        + scores["board"]["score"] * weights["board"]
-        + scores["flow"]["score"] * weights["flow"]
-        + scores["volume"]["score"] * weights["volume"]
-        + scores["emotion"]["score"] * weights["emotion"]
-    )
+    """综合评分：各维度按相对权重做归一化加权平均，再减风险扣分。
+
+    总分 = BASE_TOTAL × Σ(维度分×权重) / Σ(维度满分×权重)。
+    权重表达「相对看重程度」：默认全 1.0 时即原始分之和（行为不变）；
+    调大某维度，该维度强的股票总分上升、弱的下降。任意维度权重翻倍的
+    相对影响相同（不再受各维度满分差异影响），总分恒在 0~BASE_TOTAL 之间。
+    """
+    m = valuecfg.DIM_MAXES
+    num = sum(scores[k]["score"] * weights.get(k, 1.0) for k in m)
+    den = sum(m[k] * weights.get(k, 1.0) for k in m)
+    total = valuecfg.BASE_TOTAL * num / den if den > 0 else 0.0
     risk = scores["risk"]["score"]
     if risk > 20:
         total -= risk / 10
-    return max(0.0, min(100.0, round(total, 1)))
+    return max(0.0, min(float(valuecfg.BASE_TOTAL), round(total, 1)))
 
 
 def _signal(profile: dict[str, Any], total: float, buy: int, risk: int) -> str:

@@ -139,17 +139,25 @@
     const sec = U.el('div', 'value-weights' + (state.weightsOpen ? '' : ' hidden'));
     sec.appendChild(U.el('div', 'value-sec-title', '⚖ 评分权重配置'));
     sec.appendChild(U.el('div', 'value-weights-sub',
-      '各维度评分的乘数（0.2~3.0，默认 1.0）。调大某维度让该维度信号更强；保存后自动重新选股（缓存作废）。'));
+      '相对权重（0.2~3.0，默认 1.0）：调大某维度，该维度强的股票总分上升、弱的下降（总分口径恒 0~92）；'
+      + '保存后自动重新选股（缓存作废）。'));
     const grid = U.el('div', 'value-weights-grid');
+    const mx = (state.weights && state.weights.maxes) || {};
+    const base = (state.weights && state.weights.base_total) || 92;
+    function share(k) {
+      const m = mx[k];
+      if (!m) return '';
+      return '（满分 ' + m + ' · 默认占 ' + Math.round(m / base * 100) + '%）';
+    }
     [
-      ['finance', '基本面（默认满分 50）'],
-      ['board', '板块（10）'],
-      ['flow', '资金（12）'],
-      ['volume', '量价筹码（8）'],
-      ['emotion', '情绪妖股（12）']
+      ['finance', '基本面'],
+      ['board', '板块'],
+      ['flow', '资金'],
+      ['volume', '量价筹码'],
+      ['emotion', '情绪妖股']
     ].forEach(function (r) {
       const row = U.el('label', 'value-weights-row');
-      row.appendChild(U.el('span', 'value-weights-label', r[1]));
+      row.appendChild(U.el('span', 'value-weights-label', r[1] + share(r[0])));
       const inp = U.el('input', 'value-weights-input');
       inp.type = 'number';
       inp.min = 0.2;

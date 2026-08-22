@@ -444,6 +444,7 @@ async def value_weights_get() -> dict[str, Any]:
     """当前生效的价值选股各维度权重（DB 覆盖优先，默认 1.0）。"""
     w = valuecfg.get_weights()
     return {**w, "range": [valuecfg._MIN, valuecfg._MAX],
+            "maxes": valuecfg.DIM_MAXES, "base_total": valuecfg.BASE_TOTAL,
             "source": "db" if storage.get_kv("value_weights") else "default"}
 
 

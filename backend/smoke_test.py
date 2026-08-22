@@ -334,15 +334,36 @@ def test_value_screener() -> None:
     check("价值选股: 风险高信号 AVOID", vs._signal({"change_pct": 1, "volume_ratio": 1, "lianban": 0}, 80, 80, 70) == "AVOID")
     check("价值选股: 突破买入信号", vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1}, 80, 75, 10) == "BREAKOUT_BUY")
 
-    # 综合评分：维度权重放大该维度贡献
+    # 综合评分：归一化相对权重（默认全 1.0 = 原始分之和，总分恒在 0~92）
     def _sc(v): return {"score": v, "detail": ""}
     sc = {"finance": _sc(30), "board": _sc(5), "flow": _sc(6),
           "volume": _sc(4), "emotion": _sc(6), "risk": _sc(10)}
     w1 = {k: 1.0 for k in ("finance", "board", "flow", "volume", "emotion")}
     t1 = vs._composite_score(sc, w1)
-    w2 = dict(w1); w2["finance"] = 2.0
-    t2 = vs._composite_score(sc, w2)
-    check("价值选股: 权重放大基本面", abs(t2 - t1 - 30) < 0.01, f"t1={t1} t2={t2}")
+    check("价值选股: 默认权重=原始分之和", abs(t1 - 51) < 0.01, f"t1={t1}")
+    # 权重是相对看重：基本面强的股票调大 finance 权重总分上升，弱的下降（只改排序不单方向加分）
+    strong = {"finance": _sc(45), "board": _sc(1), "flow": _sc(1),
+              "volume": _sc(1), "emotion": _sc(1), "risk": _sc(10)}
+    weak = {"finance": _sc(5), "board": _sc(9), "flow": _sc(11),
+            "volume": _sc(7), "emotion": _sc(11), "risk": _sc(10)}
+    w_fin2 = dict(w1); w_fin2["finance"] = 2.0
+    up = vs._composite_score(strong, w_fin2) - vs._composite_score(strong, w1)
+    down = vs._composite_score(weak, w_fin2) - vs._composite_score(weak, w1)
+    check("价值选股: 权重放大强维度、压低弱维度", up > 0 and down < 0,
+          f"up={up:.1f} down={down:.1f}")
+    # 全部维度同强度（50%）时权重不影响总分（只改变相对排序）
+    neutral = {k: _sc(v / 2) for k, v in vs.valuecfg.DIM_MAXES.items()}
+    neutral["risk"] = _sc(10)
+    t_neutral = vs._composite_score(neutral, w1)
+    t_neutral2 = vs._composite_score(neutral, w_fin2)
+    check("价值选股: 同质股票权重不影响总分", abs(t_neutral - 46) < 0.01 and abs(t_neutral2 - 46) < 0.01,
+          f"t={t_neutral} t2={t_neutral2}")
+    # 总分恒在 0~92（不再因权重放大顶到 100 截断失真）
+    maxed = {k: _sc(v) for k, v in vs.valuecfg.DIM_MAXES.items()}
+    maxed["risk"] = _sc(10)
+    for w_ in (w1, w_fin2, {"finance": 3.0, "board": 0.2, "flow": 3.0, "volume": 0.2, "emotion": 3.0}):
+        t = vs._composite_score(maxed, w_)
+        check("价值选股: 总分在 0~92", 0 <= t <= 92, f"t={t}")
     sc_risk = dict(sc); sc_risk["risk"] = _sc(80)
     check("价值选股: 高风险扣分", vs._composite_score(sc_risk, w1) < vs._composite_score(sc, w1))
 
