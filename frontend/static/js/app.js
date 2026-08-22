@@ -50,6 +50,11 @@
       await PageHome.mount();
     }
     restartTimer();
+    // 页面切换淡入（内容渲染完成后重触发动画）
+    const view = document.getElementById('view');
+    view.classList.remove('page-enter');
+    void view.offsetWidth;
+    view.classList.add('page-enter');
   }
 
   function setSession(session) {

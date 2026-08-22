@@ -1508,6 +1508,44 @@ body {
     var(--bg);
 }
 
+/* 页面级滚动条：与表格/弹窗内部一致的细滚动条，深色主题下更协调 */
+html { scrollbar-width: thin; scrollbar-color: #364154 transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #364154;
+  border-radius: 8px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: #46536b; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* 键盘导航焦点可见（鼠标点击不出现轮廓） */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 页面切换淡入 */
+@keyframes viewIn { from { opacity: 0; transform: translateY(5px); } }
+#view.page-enter { animation: viewIn .18s ease-out; }
+
+/* 全局页脚 */
+.app-footer {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 8px 20px 26px;
+  text-align: center;
+}
+.footer-line {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  line-height: 1.8;
+}
+.footer-line:first-child::before {
+  content: "📈 ";
+  opacity: .7;
+}
+
+
+
 .topbar {
   box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
 }
@@ -1931,4 +1969,21 @@ a.hotspot-title:hover { color: var(--accent); }
   .hs-stock-board { max-width: 72px; }
   .hs-stock-watch { min-width: 56px; padding: 2px 7px; font-size: 11px; }
   .hs-industry { flex-direction: column; gap: 2px; }
+}
+
+/* ------------------------------------------------------------ 顶栏中等宽度（放在文件末尾保证层叠顺序） */
+@media (max-width: 1080px) {
+  .session { display: none; }  /* 时段信息在副栏仍有展示 */
+}
+@media (max-width: 900px) {
+  .topbar-inner { gap: 12px; }
+  .nav-item { padding: 6px 9px; }
+  .ds-badge #ds-label { display: none; }  /* 角标只留状态圆点，提前到 900px */
+  .topbar-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }  /* 副栏单行省略，避免换行撑高 sticky 顶栏 */
+}
+@media (max-width: 700px) {
+  .nav { gap: 2px; }
+  .nav-item { padding: 6px 8px; font-size: 13.5px; }
+  .btn { padding: 6px 9px; }
+  .brand { gap: 7px; }
 }
