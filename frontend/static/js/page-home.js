@@ -259,9 +259,16 @@
       e.stopPropagation();
       News.open(item.code, item.name, newsBtn);
     };
+    const delBtn = U.el('button', 'btn btn-sm btn-danger', '删除');
+    delBtn.title = '从自选股中删除';
+    delBtn.onclick = function (e) {
+      e.stopPropagation();
+      removeOne(item, delBtn);
+    };
     actions.appendChild(detailBtn);
     actions.appendChild(aiBtn);
     actions.appendChild(newsBtn);
+    actions.appendChild(delBtn);
     row.appendChild(actions);
 
     // 价格变动闪烁
@@ -317,7 +324,24 @@
     });
   }
 
-  // ---------------------------------------------------------- 批量删除
+  // ---------------------------------------------------------- 删除
+  /** 单只删除：轮询 tick 会整表重载，请求在途期间先禁用按钮避免重复提交 */
+  async function removeOne(item, btn) {
+    if (btn.disabled) return;
+    const label = (item.name || '') + '（' + item.code + '）';
+    if (!confirm('确定从自选股中删除 ' + label + '？')) return;
+    btn.disabled = true;
+    try {
+      await API.removeWatch([item.code]);
+      state.selected.delete(item.code);
+      U.toast('已删除 ' + label, 'ok');
+      await load(true);
+    } catch (err) {
+      btn.disabled = false;
+      U.toast('删除失败：' + err.message, 'err');
+    }
+  }
+
   async function batchDelete() {
     const codes = Array.from(state.selected);
     if (!codes.length) return;
