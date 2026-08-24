@@ -1451,6 +1451,52 @@ main {
 .toast.ok { border-color: rgba(23, 178, 106, .5); color: #86efac; }
 @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } }
 
+/* ------------------------------------------------------------ 就地确认气泡
+   替代原生 confirm（浏览器画在窗口顶部正中，离触发按钮太远）。
+   JS 用 fixed + getBoundingClientRect 定位，这里只管长相。
+   z-index 150：压住弹窗(100)和模型下拉(130)，让位给 toast(200)。 */
+.confirm-pop {
+  position: fixed;
+  z-index: 150;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 16px));
+  padding: 12px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .55);
+  animation: modalIn .13s ease-out;
+}
+.confirm-msg {
+  font-size: 13px;
+  line-height: 1.55;
+  margin-bottom: 11px;
+}
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+/* 旋转 45° 的小方块拼出箭头：只留朝外的两条边，压住气泡自身的描边 */
+.confirm-arrow {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  transform: translateX(-50%) rotate(45deg);
+}
+.confirm-pop:not(.below) .confirm-arrow {
+  bottom: -5px;
+  border-top: none;
+  border-left: none;
+}
+.confirm-pop.below .confirm-arrow {
+  top: -5px;
+  border-bottom: none;
+  border-right: none;
+}
+
 /* ------------------------------------------------------------ 窄屏 */
 @media (max-width: 900px) {
   .detail-price { font-size: 28px; }

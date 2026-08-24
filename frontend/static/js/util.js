@@ -113,6 +113,110 @@
     }, 2600);
   }
 
+  let openConfirm = null;   // 同一时刻只留一个确认气泡
+  let confirmSeq = 0;
+
+  /**
+   * 就地确认气泡：贴在触发按钮旁边，用来替代 window.confirm。
+   *
+   * 原生 confirm 由浏览器画在窗口顶部正中，跟用户刚点的那个按钮离得很远——
+   * 删自选股第 8 行时，视线要从表格底部跳到屏幕顶再跳回来，还容易看不清删的是哪只。
+   * 这里把确认框锚到按钮上方（放不下就翻到下方），左右夹在视口内，箭头指向按钮中心。
+   *
+   * 用法与 confirm 一致，只是要 await：
+   *   if (!await U.confirmAt(btn, '从自选股中删除 XX？', { okText: '删除' })) return;
+   *
+   * @param {Element} anchor  定位锚点，通常就是被点击的按钮
+   * @param {string}  message 提示文案
+   * @param {{okText?:string, cancelText?:string, danger?:boolean}} [opts]
+   * @returns {Promise<boolean>} 确定 true / 取消·Esc·点外部·锚点消失 false
+   */
+  function confirmAt(anchor, message, opts) {
+    const o = opts || {};
+    if (openConfirm) openConfirm.close(false);
+
+    return new Promise(function (resolve) {
+      const pop = el('div', 'confirm-pop');
+      pop.setAttribute('role', 'alertdialog');
+      const msg = el('div', 'confirm-msg', message);
+      msg.id = 'confirm-msg-' + (++confirmSeq);
+      pop.setAttribute('aria-describedby', msg.id);
+      pop.appendChild(msg);
+
+      const row = el('div', 'confirm-actions');
+      const cancel = el('button', 'btn btn-sm', o.cancelText || '取消');
+      const ok = el('button', 'btn btn-sm ' + (o.danger === false ? 'btn-primary' : 'btn-danger'),
+        o.okText || '确定');
+      row.appendChild(cancel);
+      row.appendChild(ok);
+      pop.appendChild(row);
+
+      const arrow = el('div', 'confirm-arrow');
+      pop.appendChild(arrow);
+      document.body.appendChild(pop);
+
+      const prevFocus = document.activeElement;
+      let done = false;
+
+      function place() {
+        // 轮询整表重载会把锚点按钮换掉：此时残留的气泡已经没有归属，直接当取消
+        if (!anchor.isConnected) return close(false);
+        const r = anchor.getBoundingClientRect();
+        const pw = pop.offsetWidth, ph = pop.offsetHeight;
+        const gap = 9, edge = 8;
+        let top = r.top - ph - gap;
+        const below = top < edge;
+        if (below) top = r.bottom + gap;
+        // 操作列整体右对齐，气泡也右对齐按钮，再夹回视口内
+        const left = Math.max(edge, Math.min(r.right - pw, window.innerWidth - pw - edge));
+        pop.style.top = Math.round(top) + 'px';
+        pop.style.left = Math.round(left) + 'px';
+        pop.classList.toggle('below', below);
+        // 箭头指向按钮中心，但不越过气泡圆角
+        arrow.style.left = Math.round(
+          Math.min(Math.max(r.left + r.width / 2 - left, 15), Math.max(pw - 15, 15))) + 'px';
+      }
+
+      function close(result) {
+        if (done) return;
+        done = true;
+        openConfirm = null;
+        document.removeEventListener('keydown', onKey, true);
+        document.removeEventListener('mousedown', onOutside, true);
+        window.removeEventListener('resize', place);
+        window.removeEventListener('scroll', place, true);
+        pop.remove();
+        if (prevFocus && prevFocus.isConnected) {
+          try { prevFocus.focus(); } catch (e) { /* 元素可能已不可聚焦 */ }
+        }
+        resolve(result);
+      }
+
+      function onKey(e) {
+        if (e.key !== 'Escape') return;
+        e.stopPropagation();   // 别让 Esc 顺带关掉底下的弹窗
+        close(false);
+      }
+      function onOutside(e) {
+        if (!pop.contains(e.target)) close(false);
+      }
+
+      cancel.onclick = function () { close(false); };
+      ok.onclick = function () { close(true); };
+
+      place();
+      // 捕获阶段：点外部要先于行/表格自己的 click 处理器生效；
+      // 用 mousedown 而不是 click，免得把「打开气泡的这一次点击」的 click 也算成外部点击
+      document.addEventListener('keydown', onKey, true);
+      document.addEventListener('mousedown', onOutside, true);
+      window.addEventListener('resize', place);
+      window.addEventListener('scroll', place, true);   // 表格内部横向滚动也要跟着挪
+      ok.focus();
+
+      openConfirm = { close: close };
+    });
+  }
+
   async function copyText(text) {
     try {
       if (navigator.clipboard && window.isSecureContext) {
@@ -151,6 +255,7 @@
     safeUrl: safeUrl,
     debounce: debounce,
     toast: toast,
+    confirmAt: confirmAt,
     copyText: copyText
   };
 })(window);

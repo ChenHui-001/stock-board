@@ -96,7 +96,7 @@
 
       const del = U.el('button', 'btn btn-sm btn-danger', '批量删除');
       del.disabled = state.selected.size === 0;
-      del.onclick = batchDelete;
+      del.onclick = function () { batchDelete(del); };
       bar.appendChild(del);
 
       const done = U.el('button', 'btn btn-sm', '完成');
@@ -329,7 +329,7 @@
   async function removeOne(item, btn) {
     if (btn.disabled) return;
     const label = (item.name || '') + '（' + item.code + '）';
-    if (!confirm('确定从自选股中删除 ' + label + '？')) return;
+    if (!await U.confirmAt(btn, '从自选股中删除 ' + label + '？', { okText: '删除' })) return;
     btn.disabled = true;
     try {
       await API.removeWatch([item.code]);
@@ -342,10 +342,11 @@
     }
   }
 
-  async function batchDelete() {
+  async function batchDelete(btn) {
     const codes = Array.from(state.selected);
     if (!codes.length) return;
-    if (!confirm('确定从自选股中删除这 ' + codes.length + ' 只股票？')) return;
+    if (!await U.confirmAt(btn, '从自选股中删除选中的 ' + codes.length + ' 只股票？',
+      { okText: '删除' })) return;
     try {
       await API.removeWatch(codes);
       state.selected = new Set();
