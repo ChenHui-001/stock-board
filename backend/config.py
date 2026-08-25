@@ -78,6 +78,31 @@ class Settings:
     # 市场热点追踪：时间窗（分钟）与聚合结果缓存（秒）
     HOTSPOT_MINUTES = _int("HOTSPOT_MINUTES", 30)
     HOTSPOT_TTL = _float("HOTSPOT_TTL", 90.0)
+    # 多源并行抓取的总预算（秒）：超预算的慢源直接丢弃并在 meta.sources 标 timeout，
+    # 不拖住整个响应。源数量增加后这是响应时间的硬上限。
+    # 默认 8s：实测 6 源全部正常 < 0.5s；保留 8s 余量应对 1-2 源同时慢响应。
+    HOTSPOT_BUDGET = _float("HOTSPOT_BUDGET", 8.0)
+    # 各源差异化超时（秒）。按实测稳定性分级：
+    #   - 4s: 长期稳定的快源（同花顺/华尔街见闻/新浪）；
+    #   - 6s: 标准源（东财/财联社），偶发 5xx 抖动；
+    #   - 10s: 慢源（金十数据），首次访问常有 1-3s 冷启动。
+    # 总和超过 HOTSPOT_BUDGET 时由并行 gather 兜底截断。
+    HOTSPOT_TIMEOUT_FAST = _float("HOTSPOT_TIMEOUT_FAST", 4.0)
+    HOTSPOT_TIMEOUT_NORMAL = _float("HOTSPOT_TIMEOUT_NORMAL", 6.0)
+    HOTSPOT_TIMEOUT_SLOW = _float("HOTSPOT_TIMEOUT_SLOW", 10.0)
+    # 单源熔断：连续失败 N 次后熔断冷却 C 秒，期间不再打该源；
+    # 冷却到期后下次调用作为半开放尝试，成功则恢复，失败重新打熔断。
+    HOTSPOT_CIRCUIT_OPEN_AT = _int("HOTSPOT_CIRCUIT_OPEN_AT", 3)
+    HOTSPOT_CIRCUIT_COOLDOWN = _float("HOTSPOT_CIRCUIT_COOLDOWN", 120.0)
+    # 榜单快照（涨停池/涨幅榜/龙虎榜/异动/人气榜）缓存：盘中变化快，60s
+    HOTSPOT_BOARD_TTL = _float("HOTSPOT_BOARD_TTL", 60.0)
+    # 热点搜索结果缓存（秒）：同一关键词短时间内重复搜索不重打上游
+    HOTSPOT_SEARCH_TTL = _float("HOTSPOT_SEARCH_TTL", 300.0)
+
+    # ---------- 全网搜索（可选，未配置时热点搜索走站内全文检索）----------
+    # 配了 key 才启用全网轨；provider 支持 serper / tavily（都是一次 JSON POST）。
+    SEARCH_API_KEY = os.getenv("SEARCH_API_KEY", "").strip()
+    SEARCH_API_PROVIDER = os.getenv("SEARCH_API_PROVIDER", "serper").strip().lower()
 
     # ---------- LLM（OpenAI 兼容协议）----------
     LLM_ENABLED = _bool("LLM_ENABLED", True)

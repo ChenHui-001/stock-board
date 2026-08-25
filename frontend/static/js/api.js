@@ -86,6 +86,14 @@
       if (refresh) q.push('refresh=1');
       return request('/api/hotspot' + (q.length ? '?' + q.join('&') : ''));
     },
+    hotspotSearch: function (keyword, days, limit) {
+      // 热点关键词检索：真正打服务端（东财全文检索 / 全网搜索），
+      // 不是过滤当前已加载的快讯流。关键词限 32 字符与后端约束一致。
+      var q = ['q=' + encodeURIComponent(String(keyword || '').slice(0, 32))];
+      if (days != null) q.push('days=' + days);
+      if (limit != null) q.push('limit=' + limit);
+      return request('/api/hotspot/search?' + q.join('&'));
+    },
     hotspotAnalyze: function (item, refresh) {
       // 单条快讯 AI 分析：利好/利空行业 + 关联度最高股票。
       // 标题/摘要截断到后端字段上限内，避免超长快讯摘要触发 422

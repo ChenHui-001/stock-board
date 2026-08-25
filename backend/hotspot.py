@@ -21,6 +21,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlencode
 
 from .cache import cache
 from .config import settings
@@ -40,10 +41,65 @@ _HOT_MEDIA = (
     "第一财经", "界面", "每日经济新闻", "21世纪经济报道", "华尔街见闻",
 )
 
-_FETCH_TIMEOUT = 15.0  # 单源抓取超时（秒）
+# 单源抓取超时（秒）：差异化分级，避免慢源拖累快源 / 总响应。
+_TIMEOUT_BY_TIER = {
+    "fast": settings.HOTSPOT_TIMEOUT_FAST,
+    "normal": settings.HOTSPOT_TIMEOUT_NORMAL,
+    "slow": settings.HOTSPOT_TIMEOUT_SLOW,
+}
 
 
-def _is_hot_media(source: str) -> bool:
+class SourceStat:
+    """单源健康统计：连续失败次数 + 最近失败时间。
+
+    - 连续失败 ≥ CIRCUIT_OPEN_AT：自动熔断，后续调用直接短路返回失败，不再打上游；
+    - 熔断后静默 CIRCUIT_COOLDOWN 秒，期间所有调用继续短路；
+    - 冷却到期后下一次调用重新尝试，恢复成功则重置计数。
+    """
+
+    def __init__(self, name: str, *, open_at: int, cooldown: float) -> None:
+        self.name = name
+        self.open_at = open_at
+        self.cooldown = cooldown
+        self._consecutive_failures = 0
+        self._circuit_opened_at: float | None = None
+
+    def record_success(self) -> None:
+        """成功后清零计数 + 关闭熔断。"""
+        self._consecutive_failures = 0
+        self._circuit_opened_at = None
+
+    def record_failure(self) -> None:
+        """失败累加；达到阈值时打熔断并打点。"""
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self.open_at and self._circuit_opened_at is None:
+            import time as _time
+            self._circuit_opened_at = _time.monotonic()
+            log.warning("热点源 %s 连续失败 %d 次，触发熔断冷却 %.0fs",
+                        self.name, self._consecutive_failures, self.cooldown)
+
+    def is_open(self) -> bool:
+        """是否处于熔断冷却中。冷却到期自动恢复（半开放）。"""
+        if self._circuit_opened_at is None:
+            return False
+        import time as _time
+        if _time.monotonic() - self._circuit_opened_at >= self.cooldown:
+            # 冷却到期：放开一次尝试，成功则 record_success 自动清零；失败重新打熔断
+            self._circuit_opened_at = None
+            self._consecutive_failures = 0
+            return False
+        return True
+
+    @property
+    def consecutive_failures(self) -> int:
+        return self._consecutive_failures
+
+
+# 模块级单源统计实例（进程内，不需要持久化）：避免重启前一直打故障源
+_SOURCE_STATS: dict[str, SourceStat] = {}
+
+
+def is_hot_media(source: str) -> bool:
     """媒体署名是否命中重点媒体名单（彭博/财联社/财新/澎湃/同花顺/东方财富…）。"""
     return any(k in (source or "") for k in _HOT_MEDIA)
 
@@ -222,49 +278,225 @@ def _parse_sina(text: str) -> list[dict[str, Any]]:
     return out
 
 
+# ------------------------------------------------------------------ 财联社电报（需签名）
+
+_CLS_ROLL_PARAMS = {"app": "CailianpressWeb", "os": "web", "sv": "7.7.5", "rn": "50", "last_time": ""}
+_CLS_LEAD_RE = re.compile(r"^财联社\d+月\d+日电[，,：:]?\s*")
+
+
+def _cls_sign(params: dict[str, str]) -> str:
+    """财联社公开电报接口签名：sha1(排序后 query) 的十六进制再 md5。"""
+    q = urlencode(sorted(params.items()))
+    return hashlib.md5(hashlib.sha1(q.encode()).hexdigest().encode()).hexdigest()
+
+
+def _cls_url() -> str:
+    """财联社电报列表完整 URL（含 sign）。参数固定，签名可预计算。"""
+    sign = _cls_sign(_CLS_ROLL_PARAMS)
+    return f"https://www.cls.cn/v1/roll/get_roll_list?{urlencode({**_CLS_ROLL_PARAMS, 'sign': sign})}"
+
+
+def _split_cls_content(content: str) -> tuple[str, str]:
+    """财联社电报正文：去掉「财联社X月X日电，」电头后取首句为标题。"""
+    body = _CLS_LEAD_RE.sub("", content or "").strip()
+    return _split_wscn(body)
+
+
+def _parse_cls(text: str) -> list[dict[str, Any]]:
+    """财联社电报：{errno, data:{roll_data:[{id,content,ctime(秒),brief,shareurl}]}}"""
+    try:
+        payload = json.loads(text)
+        rows = (payload.get("data") or {}).get("roll_data") or []
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        content = str(row.get("content") or row.get("brief") or "").strip()
+        ts = _to_ts(row.get("ctime"))
+        if not content or ts is None:
+            continue
+        title, summary = _split_cls_content(content)
+        if not title:
+            continue
+        out.append({
+            "id": str(row.get("id") or ""),
+            "title": title,
+            "summary": summary,
+            "ts": ts,
+            "source": "财联社",
+            "origin": "财联社",
+            "url": str(row.get("shareurl") or "").strip(),
+        })
+    return out
+
+
+# ------------------------------------------------------------------ 金十数据快讯
+
+_JIN10_LEAD_RE = re.compile(r"^金十数据\d+月\d+日[讯，,：:]?\s*")
+
+
+def _split_jin10_content(content: str) -> tuple[str, str]:
+    """金十快讯正文：优先拆【标题】摘要并去掉电头；无【】时取首句为标题。"""
+    m = _RICH_RE.match(content or "")
+    if m:
+        return m.group(1).strip(), _JIN10_LEAD_RE.sub("", m.group(2)).strip()
+    return _split_wscn(content)
+
+
+def _parse_jin10(text: str) -> list[dict[str, Any]]:
+    """金十数据快讯：{status, data:[{id,data:{content},time('YYYY-MM-DD HH:MM:SS')}]}"""
+    try:
+        payload = json.loads(text)
+        rows = payload.get("data") or []
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        content = str((row.get("data") or {}).get("content") or "").strip()
+        ts = _parse_dt(str(row.get("time") or ""))
+        if not content or ts is None:
+            continue
+        title, summary = _split_jin10_content(content)
+        if not title:
+            continue
+        out.append({
+            "id": str(row.get("id") or ""),
+            "title": title,
+            "summary": summary,
+            "ts": int(ts.timestamp()),
+            "source": "金十数据",
+            "origin": "金十数据",
+            "url": "",
+        })
+    return out
+
+
 # ------------------------------------------------------------------ 抓取与合并
 
-_FEEDS: list[tuple[str, str, dict[str, str], Any]] = [
+# 每条：name, url, headers, parse, tier。tier 决定单源超时（fast/normal/slow）。
+# 同花顺/新浪/华尔街见闻：长期稳定 4s；东财/财联社：偶发 5xx 给 6s；
+# 金十数据：首次冷启动偶发 3s，给 10s 容错。
+_FEEDS: list[tuple[str, str, dict[str, str], Any, str]] = [
     ("同花顺", "https://news.10jqka.com.cn/tapp/news/push/stock/?page=1&tag=&track=website&pagesize=50",
-     {"Referer": "https://news.10jqka.com.cn/"}, _parse_ths),
+     {"Referer": "https://news.10jqka.com.cn/"}, _parse_ths, "fast"),
     ("东方财富", "https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news_col&column=345&order=1&needInteractData=0&page_index=1&page_size=50&req_trace=hotspot",
-     {"Referer": "https://finance.eastmoney.com/"}, _parse_em),
+     {"Referer": "https://finance.eastmoney.com/"}, _parse_em, "normal"),
     ("新浪财经", "https://zhibo.sina.com.cn/api/zhibo/feed?page=1&page_size=50&zhibo_id=152&tag_id=0&dire=f&dpc=1",
-     {"Referer": "https://finance.sina.com.cn/"}, _parse_sina),
+     {"Referer": "https://finance.sina.com.cn/"}, _parse_sina, "fast"),
     ("华尔街见闻", "https://api-one.wallstcn.com/apiv1/content/lives?channel=global-channel&limit=50",
-     {"Referer": "https://wallstreetcn.com/"}, _parse_wscn),
+     {"Referer": "https://wallstreetcn.com/"}, _parse_wscn, "fast"),
+    ("财联社", _cls_url(), {"Referer": "https://www.cls.cn/telegraph"}, _parse_cls, "normal"),
+    ("金十数据", "https://flash-api.jin10.com/get_flash_list?channel=-8200&vip=1",
+     {"Referer": "https://www.jin10.com/", "x-app-id": "bVBF4FyRTn5NJF5n", "x-version": "1.0.0"}, _parse_jin10, "slow"),
 ]
 
 
 async def _fetch_one(
-    name: str, url: str, headers: dict[str, str], parse: Any, minutes: int
+    name: str, url: str, headers: dict[str, str], parse: Any, minutes: int,
+    timeout: float, retry_backoffs: tuple[float, ...] = (1.0, 2.0),
+    source_stats: dict[str, "SourceStat"] | None = None,
 ) -> tuple[list[dict[str, Any]], bool, str]:
     """抓取并解析单个源，只保留时间窗内的条目。失败返回 ([]，False, 原因)。
 
-    东财等源偶发 5xx/567 反爬瞬时错误，重试一次（间隔 1.5s）再放弃，
-    避免一次抖动就把该源判死整个缓存窗口。
+    东财等源偶发 5xx/567 反爬瞬时错误，按 `retry_backoffs` 序列做指数 backoff 重试，
+    默认首次失败等 1s、第二次失败等 2s，避免一次抖动就把该源判死整个缓存窗口，
+    同时防止双源同时抖动时一起重试挤占整体预算。
     """
     last: Exception | None = None
-    for attempt in range(2):
+    attempts = len(retry_backoffs) + 1
+    for attempt in range(attempts):
         try:
-            resp = await asyncio.wait_for(fetch(url, headers=headers), timeout=_FETCH_TIMEOUT)
+            resp = await asyncio.wait_for(fetch(url, headers=headers), timeout=timeout)
             rows = parse(resp.text)
+            if source_stats is not None and name in source_stats:
+                source_stats[name].record_success()
             return [r for r in rows if _in_window(r["ts"], minutes)], True, ""
         except Exception as exc:  # noqa: BLE001 - 单源失败不影响其他源
             last = exc
-            if attempt == 0:
-                await asyncio.sleep(1.5)  # 瞬时 5xx/反爬抖动间隔后重试一次
+            if attempt < attempts - 1:
+                await asyncio.sleep(retry_backoffs[attempt])  # 指数 backoff：1s → 2s
+    if source_stats is not None and name in source_stats:
+        source_stats[name].record_failure()
     log.info("热点源 %s 抓取失败：%s", name, last)
     return [], False, f"{type(last).__name__}: {last}"
 
 
 async def _fetch_all(minutes: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    results = await asyncio.gather(
-        *[_fetch_one(name, url, headers, parse, minutes) for name, url, headers, parse in _FEEDS]
-    )
+    # 用 asyncio.wait_for 包裹 gather 实现整体预算：超过 HOTSPOT_BUDGET 秒的慢源
+    # 会被取消，避免一个挂掉的源把整个响应拖到源超时之和（4+6+4+4+6+10=34s）。
+    budget = settings.HOTSPOT_BUDGET
+    # 确保每个源都有一个 SourceStat 实例（按需懒创建，配置来自 settings）
+    stats: dict[str, SourceStat] = {}
+    for name, *_ in _FEEDS:
+        if name not in _SOURCE_STATS:
+            _SOURCE_STATS[name] = SourceStat(
+                name,
+                open_at=settings.HOTSPOT_CIRCUIT_OPEN_AT,
+                cooldown=settings.HOTSPOT_CIRCUIT_COOLDOWN,
+            )
+        stats[name] = _SOURCE_STATS[name]
+
+    # 熔断中的源直接短路返回，不打上游、也不占预算
+    short_circuit: list[tuple[str, bool, str]] = []  # (name, ok, error)
+    to_fetch: list[tuple[Any, ...]] = []
+    for feed in _FEEDS:
+        name = feed[0]
+        if stats[name].is_open():
+            short_circuit.append((name, False, "circuit_open"))
+        else:
+            to_fetch.append(feed)
+
+    tasks = [
+        asyncio.create_task(_fetch_one(
+            name, url, headers, parse, minutes,
+            timeout=_TIMEOUT_BY_TIER.get(tier, _TIMEOUT_BY_TIER["normal"]),
+            retry_backoffs=(1.0, 2.0),
+            source_stats=stats,
+        ))
+        for name, url, headers, parse, tier in to_fetch
+    ]
+    fetched_results: list[tuple[list[dict[str, Any]], bool, str]] = []
+    if tasks:
+        try:
+            fetched_results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=False), timeout=budget,
+            )
+        except asyncio.TimeoutError:
+            # 预算超时：取消所有未完成的协程，记录哪些源未返回
+            pending = [t for t in tasks if not t.done()]
+            for t in pending:
+                t.cancel()
+            # 已完成的取结果，未完成的记 timeout；超时也算一次失败，触发熔断计数
+            for feed, t in zip(to_fetch, tasks):
+                name = feed[0]
+                if t.done() and not t.cancelled() and t.exception() is None:
+                    fetched_results.append(t.result())
+                else:
+                    fetched_results.append(([], False, "timeout"))
+                    stats[name].record_failure()
+            log.warning("热点聚合超出预算 %.1fs，%d 个源被截断", budget, len(pending))
+
+    # 把熔断短路结果与抓取结果按 _FEEDS 顺序拼回去，保证 sources 列表对齐
+    fetched_iter = iter(fetched_results)
+    results: list[tuple[list[dict[str, Any]], bool, str]] = []
+    for feed in _FEEDS:
+        name = feed[0]
+        if stats[name].is_open():
+            results.append(([], False, "circuit_open"))
+        else:
+            try:
+                results.append(next(fetched_iter))
+            except StopIteration:
+                results.append(([], False, "unknown"))
+    # 把先记录的 short_circuit 也并入（理论上 is_open 已覆盖）
+    _ = short_circuit  # 保持语义清晰
     items: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
-    for (name, _url, _headers, _parse), (rows, ok, error) in zip(_FEEDS, results):
+    for (name, _url, _headers, _parse, _tier), (rows, ok, error) in zip(_FEEDS, results):
         sources.append({"name": name, "ok": ok, "count": len(rows), "error": error if not ok else ""})
         items.extend(rows)
     if not items and not any(s["ok"] for s in sources):
@@ -333,7 +565,7 @@ async def _load(minutes: int) -> dict[str, Any]:
     # 统一输出字段：时间字符串（前端展示 HH:MM）+ 重点媒体标记
     for it in merged:
         it["time"] = datetime.fromtimestamp(it["ts"], TZ).strftime("%Y-%m-%d %H:%M:%S")
-        it["media_badge"] = _is_hot_media(it["source"])
+        it["media_badge"] = is_hot_media(it["source"])
     return {
         "items": merged,
         "meta": {

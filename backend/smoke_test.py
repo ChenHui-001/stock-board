@@ -552,11 +552,113 @@ def test_hotspot() -> None:
     check("热点标题指纹: 【】包裹归一", hotspot._title_fp("【央行开展逆回购操作】") == hotspot._title_fp("央行开展逆回购操作"),
           hotspot._title_fp("【央行开展逆回购操作】"))
 
-    # 重点媒体标注
-    check("热点媒体: 财联社命中", hotspot._is_hot_media("财联社") is True)
-    check("热点媒体: 彭博命中", hotspot._is_hot_media("彭博社") is True)
-    check("热点媒体: 普通媒体不命中", hotspot._is_hot_media("某地方日报") is False)
-    check("热点媒体: 空来源不命中", hotspot._is_hot_media("") is False)
+    # 重点媒体标注（金十数据只是快讯数据源，不在用户点名的重点媒体白名单内，
+    # 因此不在 _HOT_MEDIA 中——这里只断言名单内媒体的命中/不命中）。
+    check("热点媒体: 财联社命中", hotspot.is_hot_media("财联社") is True)
+
+    # _FEEDS 注册项：两源已加入且解析函数正确绑定（用 id 断言避免闭包到原对象上）
+    from backend import hotspot as _hp
+    feed_names = [name for name, _u, _h, _p, _t in _hp._FEEDS]
+    feed_tiers = {name: tier for name, _u, _h, _p, tier in _hp._FEEDS}
+    feed_parsers = {name: parse for name, _u, _h, parse, _t in _hp._FEEDS}
+    check("热点_FEEDS: 6 个源", len(feed_names) == 6, str(feed_names))
+    check("热点_FEEDS: 含财联社与金十数据", "财联社" in feed_names and "金十数据" in feed_names, str(feed_names))
+    check("热点_FEEDS: 财联社解析函数绑定", feed_parsers.get("财联社") is _hp._parse_cls, str(feed_parsers))
+    check("热点_FEEDS: 金十解析函数绑定", feed_parsers.get("金十数据") is _hp._parse_jin10, str(feed_parsers))
+    # 超时分级：快源应 ≤ 4s，标准源 ≤ 6s，金十应走 slow (≥ fast)。验证差异确实存在。
+    tier_set = set(feed_tiers.values())
+    check("热点_超时: 三档分级覆盖", "fast" in tier_set and "normal" in tier_set and "slow" in tier_set,
+          str(feed_tiers))
+    check("热点_超时: 金十数据走慢源档", feed_tiers.get("金十数据") == "slow", str(feed_tiers))
+    check("热点_超时: 同花顺/新浪/华尔街见闻走快源档",
+          feed_tiers.get("同花顺") == "fast" and feed_tiers.get("新浪财经") == "fast"
+          and feed_tiers.get("华尔街见闻") == "fast", str(feed_tiers))
+    # 整体预算应小于所有源超时之和，避免一个慢源把响应拖到 34s
+    all_timeouts = sum(_hp._TIMEOUT_BY_TIER.get(t, 6.0) for t in feed_tiers.values())
+    check("热点_超时: 整体预算小于源超时之和",
+          settings.HOTSPOT_BUDGET < all_timeouts,
+          f"budget={settings.HOTSPOT_BUDGET}, sum={all_timeouts}")
+    # 整体预算收紧到 8s：实测 6 源全正常 < 0.5s，8s 已留足余量。
+    check("热点_超时: 预算已收紧到 8s", settings.HOTSPOT_BUDGET == 8.0,
+          f"budget={settings.HOTSPOT_BUDGET}")
+    # SourceStat：连续失败 → 熔断 → 冷却 → 自动恢复，半开放重试
+    from backend.hotspot import SourceStat
+    stat = SourceStat("测试源", open_at=2, cooldown=0.5)
+    check("热点_熔断: 初始未熔断", stat.is_open() is False, "")
+    stat.record_failure()
+    check("热点_熔断: 失败 1 次仍未熔断", stat.is_open() is False
+          and stat.consecutive_failures == 1, "")
+    stat.record_failure()
+    check("热点_熔断: 失败达阈值后熔断", stat.is_open() is True
+          and stat.consecutive_failures == 2, "")
+    import asyncio
+    asyncio.run(asyncio.sleep(0.6))
+    check("热点_熔断: 冷却到期自动恢复（半开放）", stat.is_open() is False, "")
+    stat.record_success()
+    check("热点_熔断: 成功后清零计数", stat.consecutive_failures == 0, "")
+    # _fetch_one 重试参数化为指数序列
+    import inspect
+    sig = inspect.signature(_hp._fetch_one)
+    retry_param = sig.parameters.get("retry_backoffs")
+    check("热点_重试: _fetch_one 接受 retry_backoffs 序列参数", retry_param is not None, "")
+    if retry_param is not None:
+        check("热点_重试: 默认 (1.0, 2.0) 指数序列",
+              retry_param.default == (1.0, 2.0), str(retry_param.default))
+    # 熔断配置项
+    check("热点_熔断: 配置项 OPEN_AT=3", settings.HOTSPOT_CIRCUIT_OPEN_AT == 3,
+          str(settings.HOTSPOT_CIRCUIT_OPEN_AT))
+    check("热点_熔断: 配置项 COOLDOWN=120s", settings.HOTSPOT_CIRCUIT_COOLDOWN == 120.0,
+          str(settings.HOTSPOT_CIRCUIT_COOLDOWN))
+
+    # 财联社签名与 URL：参数固定后签名可复现，URL 含 sign 字段
+    sign1 = _hp._cls_sign(_hp._CLS_ROLL_PARAMS)
+    sign2 = _hp._cls_sign({"os": "web", "sv": "7.7.5", "app": "CailianpressWeb", "rn": "50", "last_time": ""})
+    check("热点_财联社: 签名与顺序无关但值稳定", isinstance(sign1, str) and len(sign1) == 32 and sign1 == sign2, sign1)
+    url = _hp._cls_url()
+    check("热点_财联社: URL 含 sign 参数", "sign=" in url and "rn=50" in url, url)
+
+    # 财联社解析：含电头 → 剥除后首句作标题；纯文本 → 首句兜底；时间缺失 → 剔除
+    cls_payload = _json.dumps({"errno": 0, "data": {"roll_data": [
+        {"id": 1001, "ctime": now_ts, "content": "财联社8月24日电，央行开展逆回购操作。规模为500亿元，期限7天。",
+         "brief": "", "shareurl": "https://api3.cls.cn/share/article/1001?os=web"},
+        {"id": 1002, "ctime": now_ts - 30, "content": "光通信板块盘前普跌，Coherent跌超5%，Lumentum跌近5%。",
+         "brief": "", "shareurl": ""},
+        {"id": 1003, "ctime": None, "content": "财联社8月24日电，无效时间。", "brief": "", "shareurl": ""},
+        {"id": 1004, "ctime": now_ts - 60, "content": "", "brief": "", "shareurl": ""},
+    ]}})
+    cls_rows = _hp._parse_cls(cls_payload)
+    check("热点_财联社: 数量与电头剥离", len(cls_rows) == 2 and cls_rows[0]["title"] == "央行开展逆回购操作。"
+          and cls_rows[0]["source"] == "财联社", str(cls_rows))
+    check("热点_财联社: 纯文本首句为标题", cls_rows[1]["title"] == "光通信板块盘前普跌，Coherent跌超5%，Lumentum跌近5%。",
+          str(cls_rows[1]))
+    check("热点_财联社: 时间缺失/空内容剔除", all(r["id"] not in ("1003", "1004") for r in cls_rows), str(cls_rows))
+
+    # 财联社容错：非 JSON / data 缺失 / roll_data 非列表
+    check("热点_财联社: 非 JSON 返回空", _hp._parse_cls("") == [], "expected []")
+    check("热点_财联社: data 缺失返回空", _hp._parse_cls('{"errno":0}') == [], "expected []")
+    check("热点_财联社: roll_data 非列表返回空", _hp._parse_cls('{"data":{"roll_data":"x"}}') == [], "expected []")
+
+    # 金十解析：【标题】摘要 → 拆标题并剥电头；裸文本 → 首句兜底；time 非 datetime → 剔除
+    jin10_payload = _json.dumps({"status": 200, "message": "OK", "data": [
+        {"id": "J1", "data": {"content": "【福瑞医科：上半年净利润6394万】金十数据8月24日讯，同比增长23.12%。"}, "time": "2026-08-24 16:05:39"},
+        {"id": "J2", "data": {"content": "伦敦金属交易所（LME）铜注册仓单增加5.14万吨，为5月以来最大增幅。"}, "time": "2026-08-24 16:05:30"},
+        {"id": "J3", "data": {"content": "金十数据8月24日讯，无效时间。"}, "time": "not-a-date"},
+        {"id": "J4", "data": {"content": ""}, "time": "2026-08-24 16:05:30"},
+    ]})
+    jin10_rows = _hp._parse_jin10(jin10_payload)
+    check("热点_金十: 【】拆分+电头剥离", len(jin10_rows) == 2 and jin10_rows[0]["title"] == "福瑞医科：上半年净利润6394万"
+          and jin10_rows[0]["source"] == "金十数据", str(jin10_rows))
+    check("热点_金十: 裸文本首句为标题", jin10_rows[1]["title"] == "伦敦金属交易所（LME）铜注册仓单增加5.14万吨，为5月以来最大增幅。",
+          str(jin10_rows[1]))
+    check("热点_金十: 时间非法/空内容剔除", all(r["id"] not in ("J3", "J4") for r in jin10_rows), str(jin10_rows))
+
+    # 金十容错：顶层 data 缺失 / 非 JSON
+    check("热点_金十: data 缺失返回空", _hp._parse_jin10('{"status":200}') == [], "expected []")
+    check("热点_金十: 非 JSON 返回空", _hp._parse_jin10("oops") == [], "expected []")
+
+    check("热点媒体: 彭博命中", hotspot.is_hot_media("彭博社") is True)
+    check("热点媒体: 普通媒体不命中", hotspot.is_hot_media("某地方日报") is False)
+    check("热点媒体: 空来源不命中", hotspot.is_hot_media("") is False)
 
     # get_hotspot 兜底：全部源失败时返回结构化错误而非抛异常；
     # 且失败结果短暂缓存，故障期间反复请求不重打外部快讯接口

@@ -7,10 +7,20 @@
     meta: null,
     filter: 'all',
     q: '',
+    minutes: 30,        // 快讯时间窗（分钟），可切 15/30/60
     loading: false,
     error: null,
     lastAuto: 0,
     view: 'feed',       // feed=快讯列表 / value=价值投资选股
+    // 服务端关键词检索（真搜索，不是过滤当前页）
+    search: {
+      q: '',            // 已发起检索的关键词，用于丢弃过期响应
+      days: 7,
+      items: [],
+      meta: null,
+      loading: false,
+      error: null
+    },
     value: null,        // 价值选股结果
     valueLoading: false,
     valueError: null,
@@ -446,28 +456,175 @@
         bar.querySelectorAll('.chip').forEach(function (c) {
           c.classList.toggle('active', c === chip);
         });
-        const host = document.getElementById('hotspot-list');
-        if (host) renderListInto(host);
+        repaintList();
       };
       bar.appendChild(chip);
     });
-    // 关键词搜索：只重建列表，不打断页面滚动
+
+    // 时间窗：后端支持 5~120 分钟，改动即按新窗口重取
+    const range = U.el('div', 'hotspot-range');
+    [15, 30, 60].forEach(function (m) {
+      const b = U.el('button', 'range-btn' + (state.minutes === m ? ' active' : ''), m + ' 分钟');
+      b.title = '只看最近 ' + m + ' 分钟的快讯';
+      b.onclick = function () {
+        if (state.minutes === m) return;
+        state.minutes = m;
+        load(false);
+      };
+      range.appendChild(b);
+    });
+    bar.appendChild(range);
+
+    // 关键词检索：打服务端（不是过滤当前页），只重建列表不打断页面滚动
     const search = U.el('input', 'hotspot-search');
     search.type = 'text';
-    search.placeholder = '搜索快讯…';
+    search.maxLength = 32;
+    search.placeholder = '搜索资讯（全网检索，回车即搜）…';
     search.value = state.q;
-    search.setAttribute('aria-label', '搜索快讯');
+    search.setAttribute('aria-label', '搜索资讯');
     search.oninput = function () {
       state.q = search.value;
-      const host = document.getElementById('hotspot-list');
-      if (host) renderListInto(host);
+      repaintList();          // 先用本地命中占位，0 延迟
+      onSearchInput(search.value);
+    };
+    search.onkeydown = function (e) {
+      if (e.key === 'Enter') { state.q = search.value; doSearch(search.value); }
+      if (e.key === 'Escape' && search.value) { clearSearch(); }
     };
     bar.appendChild(search);
     return bar;
   }
 
+  function repaintList() {
+    const host = document.getElementById('hotspot-list');
+    if (host) renderListInto(host);
+  }
+
+  // ---------------------------------------------------------- 服务端关键词检索
+  // 搜索框语义：原先只对已加载的 ≤40 条快讯做子串匹配（"只能搜当前页面"），
+  // 现在防抖 280ms 后打 /api/hotspot/search，关键词直达上游检索库。
+  // 本地命中先行渲染（0 延迟），服务端结果回来后替换。
+  const onSearchInput = U.debounce(function (kw) { doSearch(kw); }, 280);
+
+  async function doSearch(keyword) {
+    const kw = (keyword || '').trim();
+    if (!kw) {
+      state.search.q = '';
+      state.search.items = [];
+      state.search.meta = null;
+      state.search.error = null;
+      state.search.loading = false;
+      repaintList();
+      return;
+    }
+    state.search.q = kw;
+    state.search.loading = true;
+    state.search.error = null;
+    repaintList();
+    try {
+      const data = await API.hotspotSearch(kw, state.search.days);
+      if ((state.q || '').trim() !== kw) return;   // 输入框已变，丢弃过期响应
+      state.search.items = data.items || [];
+      state.search.meta = data.meta || null;
+      state.search.error = (data.meta && data.meta.error) || null;
+    } catch (err) {
+      if ((state.q || '').trim() !== kw) return;
+      state.search.items = [];
+      state.search.meta = null;
+      state.search.error = err.message || String(err);
+    } finally {
+      if ((state.q || '').trim() === kw) {
+        state.search.loading = false;
+        repaintList();
+      }
+    }
+  }
+
+  function clearSearch() {
+    state.q = '';
+    state.search.q = '';
+    state.search.items = [];
+    state.search.meta = null;
+    state.search.error = null;
+    state.search.loading = false;
+    const box = document.querySelector('.hotspot-search');
+    if (box) box.value = '';
+    repaintList();
+  }
+
+  // 检索结果头：条数 + 检索来源 + 回溯天数 + 清除
+  function renderSearchHead(kw, serverReady, shownCount) {
+    const bar = U.el('div', 'hotspot-search-head');
+    const info = U.el('div', 'hotspot-search-info');
+    if (state.search.loading && !serverReady) {
+      info.appendChild(U.el('span', 'hotspot-search-count', '正在检索「' + kw + '」…'));
+      const local = filteredItems().length;
+      if (local) info.appendChild(U.el('span', 'hotspot-search-src', '先显示当前流内匹配 ' + local + ' 条'));
+    } else if (state.search.error) {
+      info.appendChild(U.el('span', 'hotspot-search-count', '检索失败'));
+      info.appendChild(U.el('span', 'hotspot-search-src', state.search.error));
+    } else {
+      info.appendChild(U.el('span', 'hotspot-search-count', '共 ' + shownCount + ' 条'));
+      const src = (state.search.meta && state.search.meta.engine_label) || '东方财富全文检索';
+      info.appendChild(U.el('span', 'hotspot-search-src', '来源 ' + src));
+      if (state.search.meta && state.search.meta.fallback_from) {
+        info.appendChild(U.el('span', 'hotspot-search-src',
+          '（全网搜索不可用，已回退站内检索）'));
+      }
+    }
+    bar.appendChild(info);
+
+    const acts = U.el('div', 'hotspot-search-acts');
+    // 回溯天数：改动即重新检索
+    [{ d: 1, t: '1 天' }, { d: 7, t: '7 天' }, { d: 30, t: '30 天' }].forEach(function (o) {
+      const b = U.el('button', 'range-btn' + (state.search.days === o.d ? ' active' : ''), o.t);
+      b.onclick = function () {
+        if (state.search.days === o.d) return;
+        state.search.days = o.d;
+        state.search.q = '';       // 强制重新检索（天数变了，缓存 key 不同）
+        doSearch(state.q);
+      };
+      acts.appendChild(b);
+    });
+    const clear = U.el('button', 'btn btn-xs', '× 清除搜索');
+    clear.title = '清除关键词，回到快讯流';
+    clear.onclick = clearSearch;
+    acts.appendChild(clear);
+    bar.appendChild(acts);
+    return bar;
+  }
+
+  function renderSearchInto(host) {
+    const kw = (state.q || '').trim();
+    const serverReady = state.search.q === kw && !state.search.loading && !state.search.error;
+    const items = serverReady ? (state.search.items || []) : filteredItems();
+    host.appendChild(renderSearchHead(kw, serverReady, items.length));
+
+    if (!items.length) {
+      const empty = U.el('div', 'empty');
+      empty.appendChild(U.el('div', 'empty-icon', state.search.loading ? '⏳' : '🔍'));
+      if (state.search.loading) {
+        empty.appendChild(U.el('div', 'empty-title', '正在检索…'));
+        empty.appendChild(U.el('div', 'empty-desc', '当前快讯流内没有匹配「' + kw + '」的条目，正在向服务端检索。'));
+      } else {
+        empty.appendChild(U.el('div', 'empty-title', '未检索到相关资讯'));
+        empty.appendChild(U.el('div', 'empty-desc',
+          '「' + kw + '」在近 ' + state.search.days + ' 天内没有结果，换个关键词或调大回溯天数试试。'));
+      }
+      host.appendChild(empty);
+      return;
+    }
+    items.forEach(function (it) { host.appendChild(renderItem(it)); });
+  }
+
   function renderListInto(host) {
     host.innerHTML = '';
+
+    // 有关键词 → 走服务端检索视图（与快讯流互斥）
+    if ((state.q || '').trim()) {
+      renderSearchInto(host);
+      return;
+    }
 
     if (state.loading && !state.items.length) {
       host.appendChild(U.el('div', 'loading-block', '正在抓取热点快讯…'));
@@ -485,14 +642,9 @@
     const items = filteredItems();
     if (!items.length) {
       const empty = U.el('div', 'empty');
-      empty.appendChild(U.el('div', 'empty-icon', state.q ? '🔍' : '🕐'));
-      if (state.q) {
-        empty.appendChild(U.el('div', 'empty-title', '未找到相关快讯'));
-        empty.appendChild(U.el('div', 'empty-desc', '没有标题/摘要/来源包含「' + state.q + '」的条目，换个关键词试试。'));
-      } else {
-        empty.appendChild(U.el('div', 'empty-title', '近 ' + (state.meta ? state.meta.window_minutes : 30) + ' 分钟暂无热点'));
-        empty.appendChild(U.el('div', 'empty-desc', '当前来源暂无新快讯，稍后会自动刷新。'));
-      }
+      empty.appendChild(U.el('div', 'empty-icon', '🕐'));
+      empty.appendChild(U.el('div', 'empty-title', '近 ' + (state.meta ? state.meta.window_minutes : state.minutes) + ' 分钟暂无热点'));
+      empty.appendChild(U.el('div', 'empty-desc', '当前来源暂无新快讯，稍后会自动刷新。'));
       host.appendChild(empty);
       return;
     }
@@ -788,7 +940,7 @@
     state.loading = true;
     if (isCurrent() && !state.items.length) render();
     try {
-      const data = await API.hotspot(30, force);
+      const data = await API.hotspot(state.minutes, force);
       state.items = data.items || [];
       state.meta = data.meta || null;
       state.error = (data.meta && data.meta.error) || null;
@@ -812,12 +964,19 @@
     mount: function () {
       state.filter = 'all';
       state.q = '';
+      state.search.q = '';
+      state.search.items = [];
+      state.search.meta = null;
+      state.search.error = null;
+      state.search.loading = false;
       state.error = null;
       render();
       return load(false);
     },
     refresh: function () { return load(true); },
     tick: function () {
+      // 正在搜索时不自动刷新：整页重绘会顶掉搜索框焦点与光标
+      if ((state.q || '').trim()) return;
       // 自动刷新节流到 60s：后端聚合结果本身有 90s 缓存，无需每 5s 打一次
       if (Date.now() - state.lastAuto < 60000) return;
       load(false);

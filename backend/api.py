@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, hotspot as hotspot_mod, hotspot_ai, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage, value_screener, valuecfg
+from . import analysis, hotspot as hotspot_mod, hotspot_ai, hotspot_search, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage, value_screener, valuecfg
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import describe_exc, is_trading_now, normalize_code, resolve_market
@@ -395,6 +395,23 @@ async def hotspot(
     带 media_badge 标记；结果整体缓存 HOTSPOT_TTL 秒避免反复打外部快讯接口。
     """
     return await hotspot_mod.get_hotspot(minutes=minutes, force=refresh)
+
+
+@router.get("/hotspot/search")
+async def hotspot_search_api(
+    # 关键词进入缓存 key，限长以收敛 key 基数（与 /api/search 同口径，前端同样限 32 字符）
+    q: str = Query("", min_length=0, max_length=32),
+    days: int = Query(7, ge=1, le=30, description="回溯天数：默认 7"),
+    limit: int = Query(30, ge=1, le=50),
+    refresh: bool = Query(False),
+) -> dict[str, Any]:
+    """按关键词检索热点资讯——真正打到服务端，不是过滤当前页。
+
+    默认走东方财富站内全文检索（免费）；配置 SEARCH_API_KEY 后改走全网搜索
+    （Serper/Tavily），全网轨故障时自动回退站内轨。返回条目 shape 与 /api/hotspot
+    一致，前端可直接复用列表渲染。
+    """
+    return await hotspot_search.search(q, days=days, limit=limit, force=refresh)
 
 
 @router.post("/hotspot/analyze")
