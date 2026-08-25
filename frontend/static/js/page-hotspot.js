@@ -694,6 +694,12 @@
     metaLine.appendChild(src);
     const origin = U.el('span', 'hotspot-origin', it.origin || '');
     metaLine.appendChild(origin);
+    // AI 分析按钮移到源行末尾（margin-left: auto 由 CSS 推到最右），与「内容出处」语义关联，
+    // 不再占据卡片底部独立行；弹窗交互保留不变。
+    const aiBtn = U.el('button', 'btn btn-sm btn-primary hotspot-ai-btn', '🤖 AI 分析');
+    aiBtn.title = '分析该快讯对行业的影响与关联度最高的股票';
+    aiBtn.onclick = function () { openAnalysis(it); };
+    metaLine.appendChild(aiBtn);
     body.appendChild(metaLine);
 
     // 外链地址过白名单：7x24 快讯源较杂，非 http(s) 地址退化为纯文本标题
@@ -713,14 +719,6 @@
       sum.title = it.summary;
       body.appendChild(sum);
     }
-
-    // 操作区：AI 分析（分析该快讯利好/利空哪些行业 + 关联度最高的股票）
-    const acts = U.el('div', 'hotspot-item-actions');
-    const aiBtn = U.el('button', 'btn btn-sm btn-primary', '🤖 AI 分析');
-    aiBtn.title = '分析该快讯对行业的影响与关联度最高的股票';
-    aiBtn.onclick = function () { openAnalysis(it); };
-    acts.appendChild(aiBtn);
-    body.appendChild(acts);
 
     row.appendChild(body);
     return row;
