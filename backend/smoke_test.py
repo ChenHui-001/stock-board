@@ -906,7 +906,8 @@ def _mk_detail(**kw) -> dict:
 
 
 def _ma_item(w: int, v: float, slope: str = "上行") -> dict:
-    return {"window": w, "value": v, "slope": slope, "position": "站上", "deviation_pct": 0.0}
+    return {"window": w, "value": v, "slope": slope, "position": "站上",
+            "deviation_pct": 0.0, "slope_pct": 0.0}
 
 
 def test_financials() -> None:
@@ -975,6 +976,23 @@ def test_rule_precision() -> None:
     vol_shrink_up = analysis._volume_confirm(bars([9, 9.1, 9.2, 9.3, 9.4, 9.5], [100, 100, 100, 100, 100, 60]))
     check("量能确认: 缩量上涨 -3", vol_shrink_up[0] == -3, str(vol_shrink_up))
     check("量能确认: 数据不足 0", analysis._volume_confirm([])[0] == 0)
+
+    # 1.1) 地量股放量阈值上调：近5日均量远低于60日均量时，量比 1.4 不再判放量
+    # 构造 60 根 bar：前 55 根均量 1000（高位），近 5 根均量 100（地量），
+    # 最后一日量 140（相对近5日均量的 1.4 倍，但绝对量仍远低于历史均值）
+    def bars60() -> list:
+        rows = []
+        for i in range(60):
+            # 前 54 根高位量 1000，近 5 根地量 100，最后一天 140
+            vol = 1000 if i < 54 else (100 if i < 59 else 140)
+            close = 9.0 + (i - 54) * 0.2  # 近 5 日上涨
+            rows.append({"date": f"2026-{i//30+1:02d}-{i%30+1:02d}", "close": close, "volume": vol})
+        return rows
+
+    # 近5日均量 = (100*5)/5 = 100；60日均量 = (1000*54 + 100*5)/60 ≈ 908
+    # 100 < 908*0.7=636 → 地量股，阈值上调到 1.5；量比 140/100=1.4 不达标 → 0
+    check("量能确认: 地量股量比1.4不判放量", analysis._volume_confirm(bars60())[0] == 0,
+          str(analysis._volume_confirm(bars60())))
 
     # 2) 乖离修正：价格超 MA20 8% -> 超买风险进 risks + tech 扣分
     detail_over = _mk_detail(
@@ -1208,6 +1226,194 @@ def test_rule_precision() -> None:
     s = fb_w["advice"]["scores"]
     check("默认权重下总分=分面和", abs(s["tech"] + s["capital"] + s["news"] - s["total"]) < 0.05, str(s))
     check("权重字段输出", fb_w["advice"]["weights"] == {"tech": 1.0, "capital": 1.0, "news": 1.0}, str(fb_w["advice"]["weights"]))
+
+
+# ------------------------------------------------------------------ LLM 输出兜底校验
+# _sanitize 是 LLM 路径唯一的安全网：缺失/越界/非枚举值都用规则引擎补齐。
+# 这是「模型幻觉」与「JSON 不规范」的最后一道防线，任何分支失效都会让坏值流到前端。
+def test_ai_sanitize() -> None:
+    # 构造一个「真实可用」的 fallback：作为兜底值参考基准
+    detail_ok = _mk_detail(
+        quote={"code": "600000", "name": "浦发银行", "price": 10.0, "prev_close": 9.9,
+               "change_pct": 1.01, "open": 9.95, "high": 10.1, "low": 9.85},
+        ma=[_ma_item(5, 9.8), _ma_item(10, 9.7), _ma_item(20, 9.5), _ma_item(60, 9.0)],
+        ma_summary={"arrangement": "多头排列", "above_count": 4,
+                    "above": ["MA5", "MA10", "MA20", "MA60"], "below": [], "series": {}},
+        fund_flow={"rows": [], "summary": {"main_total": 1e8, "main_last": 0.5e8,
+                                          "main_last5": 0.3e8, "streak": 3, "streak_dir": "流入"}},
+    )
+    fb = analysis.rule_based(detail_ok)
+    price = 10.0  # 与 quote.price 对齐，用于价位越界判断
+
+    # 1) LLM 返回完整且合规：直接通过（无回退）
+    out_ok = analysis._sanitize(fb, fb, price)
+    check("兜底: 完整合规输入直通", out_ok["advice"]["action"] == fb["advice"]["action"],
+          str(out_ok["advice"]["action"]))
+    check("兜底: 价位保留原值 2 位", out_ok["advice"]["support"] == round(fb["advice"]["support"], 2),
+          str(out_ok["advice"]["support"]))
+
+    # 2) action 子串模糊匹配：「继续持有」含「持有」→ 命中「持有观望」（ACTIONS = [积极持仓/加仓, 持有观望, 减仓规避, 清仓离场]）
+    llm_substr = {**fb, "advice": {**fb["advice"], "action": "继续持有"}}
+    out_substr = analysis._sanitize(llm_substr, fb, price)
+    check("兜底: action 子串匹配→持有观望", out_substr["advice"]["action"] == "持有观望",
+          str(out_substr["advice"]["action"]))
+    check("兜底: 子串匹配无 action_note", "action_note" not in out_substr["advice"], str(out_substr["advice"]))
+
+    # 2.1) action 完全不在 4 选 1（前 2 字不在 ACTIONS 任何项里）：回退规则值 + action_note 标注
+    # 「减持规避」含「减持」但 ACTIONS 里只有「减仓」 → 模糊匹配失败
+    llm_no_match = {**fb, "advice": {**fb["advice"], "action": "减持规避"}}
+    out_nm = analysis._sanitize(llm_no_match, fb, price)
+    check("兜底: 完全不合规action回退规则", out_nm["advice"]["action"] == fb["advice"]["action"],
+          str(out_nm["advice"]["action"]))
+    check("兜底: action_note 标注模型输出",
+          "action_note" in out_nm["advice"] and "减持规避" in out_nm["advice"]["action_note"],
+          str(out_nm["advice"].get("action_note")))
+
+    # 3) 价位越界：support=1.0（现价 10 的 10%）→ 回退；resistance=50（5 倍现价）→ 回退
+    llm_bad_levels = {**fb, "advice": {
+        **fb["advice"],
+        "support": 1.0, "resistance": 50.0, "stop_loss": 0, "take_profit": -5,
+    }}
+    out_lvl = analysis._sanitize(llm_bad_levels, fb, price)
+    # 现价 10，±50% 区间 = [5, 15]
+    check("兜底: support=1.0越界回退", out_lvl["advice"]["support"] == fb["advice"]["support"], str(out_lvl["advice"]["support"]))
+    check("兜底: resistance=50.0越界回退", out_lvl["advice"]["resistance"] == fb["advice"]["resistance"], str(out_lvl["advice"]["resistance"]))
+    check("兜底: take_profit=-5越界回退", out_lvl["advice"]["take_profit"] == fb["advice"]["take_profit"], str(out_lvl["advice"]["take_profit"]))
+    check("兜底: stop_loss=0越界回退", out_lvl["advice"]["stop_loss"] == fb["advice"]["stop_loss"], str(out_lvl["advice"]["stop_loss"]))
+
+    # 3.0) 价位在合理区间：应保留并保留 2 位小数
+    fb_support = fb["advice"]["support"]
+    fb_resistance = fb["advice"]["resistance"]
+    out_ok_levels = analysis._sanitize({
+        **fb,
+        "advice": {**fb["advice"], "support": 9.5, "resistance": 10.5, "stop_loss": 9.5, "take_profit": 10.5},
+    }, fb, price)
+    check("兜底: support=9.5保留(2位)", out_ok_levels["advice"]["support"] == 9.5, str(out_ok_levels["advice"]["support"]))
+    check("兜底: resistance=10.5保留(2位)", out_ok_levels["advice"]["resistance"] == 10.5, str(out_ok_levels["advice"]["resistance"]))
+    check("兜底: take_profit=10.5保留(2位)", out_ok_levels["advice"]["take_profit"] == 10.5, str(out_ok_levels["advice"]["take_profit"]))
+
+    # 3.1) 价位非数字（字符串）：回退规则值
+    llm_str_level = {**fb, "advice": {**fb["advice"], "support": "约九块五", "resistance": None}}
+    out_str = analysis._sanitize(llm_str_level, fb, price)
+    check("兜底: 非数字价位回退", out_str["advice"]["support"] == fb["advice"]["support"], str(out_str["advice"]["support"]))
+    check("兜底: None价位回退", out_str["advice"]["resistance"] == fb["advice"]["resistance"], str(out_str["advice"]["resistance"]))
+
+    # 3.2) 价位 0 或负数：视为非法 → 回退
+    llm_zero = {**fb, "advice": {**fb["advice"], "stop_loss": 0, "take_profit": -5}}
+    out_zero = analysis._sanitize(llm_zero, fb, price)
+    check("兜底: stop_loss=0回退", out_zero["advice"]["stop_loss"] == fb["advice"]["stop_loss"], str(out_zero["advice"]["stop_loss"]))
+    check("兜底: take_profit=-5回退", out_zero["advice"]["take_profit"] == fb["advice"]["take_profit"], str(out_zero["advice"]["take_profit"]))
+
+    # 4) confidence 越界：150 → 截到 100；-10 → 截到 0；"abc" → 默认 70
+    llm_conf_high = {**fb, "advice": {**fb["advice"], "confidence": 150}}
+    out_ch = analysis._sanitize(llm_conf_high, fb, price)
+    check("兜底: confidence=150截到100", out_ch["advice"]["confidence"] == 100, str(out_ch["advice"]["confidence"]))
+    llm_conf_low = {**fb, "advice": {**fb["advice"], "confidence": -10}}
+    out_cl = analysis._sanitize(llm_conf_low, fb, price)
+    check("兜底: confidence=-10截到0", out_cl["advice"]["confidence"] == 0, str(out_cl["advice"]["confidence"]))
+    llm_conf_str = {**fb, "advice": {**fb["advice"], "confidence": "abc"}}
+    out_cs = analysis._sanitize(llm_conf_str, fb, price)
+    check("兜底: confidence=字符串默认70", out_cs["advice"]["confidence"] == 70, str(out_cs["advice"]["confidence"]))
+
+    # 5) risk.opportunities/risks 非列表（字符串/空）：回退规则值；超过 5 条截断
+    llm_risk_str = {**fb, "risk": {**fb["risk"], "opportunities": "多头格局", "risks": []}}
+    out_rs = analysis._sanitize(llm_risk_str, fb, price)
+    check("兜底: opportunities字符串→列表", isinstance(out_rs["risk"]["opportunities"], list)
+          and out_rs["risk"]["opportunities"] == ["多头格局"], str(out_rs["risk"]["opportunities"]))
+    check("兜底: risks空列表回退", out_rs["risk"]["risks"] == fb["risk"]["risks"], str(out_rs["risk"]["risks"]))
+
+    # 5.1) opportunities 超过 5 条：截断到 5
+    llm_too_many = {**fb, "risk": {**fb["risk"], "opportunities": [f"机会{i}" for i in range(8)]}}
+    out_tm = analysis._sanitize(llm_too_many, fb, price)
+    check("兜底: opportunities>5截到5", len(out_tm["risk"]["opportunities"]) == 5,
+          str(out_tm["risk"]["opportunities"]))
+
+    # 6) 各 section 顶层字段缺失：用 fallback 补（不全空）
+    llm_partial = {"advice": fb["advice"], "risk": {**fb["risk"]}}
+    # trend/capital/fundamental 缺失，应整体用 fallback
+    out_partial = analysis._sanitize(llm_partial, fb, price)
+    check("兜底: 缺失trend/capital/fundamental用fallback", out_partial["trend"] == fb["trend"]
+          and out_partial["capital"] == fb["capital"] and out_partial["fundamental"] == fb["fundamental"],
+          str({k: out_partial.get(k) for k in ("trend", "capital", "fundamental")}))
+
+    # 6.1) trend.summary 是空串：视为空值，用 fallback 的 summary 补
+    llm_empty_summary = {**fb, "trend": {**fb["trend"], "summary": ""}}
+    out_es = analysis._sanitize(llm_empty_summary, fb, price)
+    check("兜底: 空字符串summary用fallback补", out_es["trend"]["summary"] == fb["trend"]["summary"],
+          str(out_es["trend"]["summary"]))
+
+    # 7) 低置信度撤销激进建议：confidence<50 且 action 为积极/清仓 → 撤销为持有观望
+    llm_agg_low = {**fb, "advice": {**fb["advice"], "action": "积极持仓/加仓", "confidence": 40}}
+    out_al = analysis._sanitize(llm_agg_low, fb, price)
+    check("兜底: 低置信度撤销激进加仓", out_al["advice"]["action"] == "持有观望",
+          str(out_al["advice"]["action"]))
+    check("兜底: 撤销时标注 action_note",
+          "action_note" in out_al["advice"] and "置信度过低" in out_al["advice"]["action_note"],
+          str(out_al["advice"].get("action_note")))
+    llm_liq_low = {**fb, "advice": {**fb["advice"], "action": "清仓离场", "confidence": 30}}
+    out_ll = analysis._sanitize(llm_liq_low, fb, price)
+    check("兜底: 低置信度撤销清仓", out_ll["advice"]["action"] == "持有观望",
+          str(out_ll["advice"]["action"]))
+
+    # 7.1) 非激进 action 低置信度不撤销；高置信度激进不撤销
+    llm_hold_low = {**fb, "advice": {**fb["advice"], "action": "持有观望", "confidence": 40}}
+    out_hl = analysis._sanitize(llm_hold_low, fb, price)
+    check("兜底: 低置信度持有观望不撤销", out_hl["advice"]["action"] == "持有观望", str(out_hl["advice"]["action"]))
+    llm_agg_high = {**fb, "advice": {**fb["advice"], "action": "积极持仓/加仓", "confidence": 80}}
+    out_ah = analysis._sanitize(llm_agg_high, fb, price)
+    check("兜底: 高置信度激进不撤销", out_ah["advice"]["action"] == "积极持仓/加仓", str(out_ah["advice"]["action"]))
+
+    # 8) risk 列表按含数字条目优先：泛泛而谈的空话排后
+    llm_risk_order = {**fb, "risk": {
+        **fb["risk"],
+        "opportunities": ["重大利好催化", "营收同比增长20%", "订单饱满"],
+    }}
+    out_ro = analysis._sanitize(llm_risk_order, fb, price)
+    check("兜底: 含数字条目排前", "20%" in out_ro["risk"]["opportunities"][0],
+          str(out_ro["risk"]["opportunities"]))
+
+
+# ------------------------------------------------------------------ LLM 投喂质量
+# build_payload 是喂给 LLM 的唯一数据源，字段完整性与准确性直接决定模型结论上限。
+def test_payload_quality() -> None:
+    # 构造 60 根 K 线：volume 前 30 根 1e8 股、后 30 根 5e7 股，均量可验证
+    kline = [
+        {"date": f"2026-{i // 30 + 1:02d}-{i % 30 + 1:02d}",
+         "close": 9.0 + i * 0.01, "volume": 1e8 if i < 30 else 5e7}
+        for i in range(60)
+    ]
+    detail = _mk_detail(
+        quote={"code": "600000", "name": "浦发银行", "price": 9.6, "prev_close": 9.5,
+               "change": 0.1, "change_pct": 1.05, "open": 9.5, "high": 9.7, "low": 9.4,
+               "volume": 5e6, "amount": 4.8e8, "turnover": 1.0, "volume_ratio": 1.2},
+        kline=kline,
+        ma=[_ma_item(5, 9.5), _ma_item(10, 9.4), _ma_item(20, 9.3), _ma_item(60, 9.0)],
+        ma_summary={"arrangement": "多头排列", "above_count": 4,
+                    "above": ["MA5", "MA10", "MA20", "MA60"], "below": [], "series": {}},
+        fund_flow={"rows": [], "summary": {"main_total": 1e8, "main_last": 0.5e8,
+                                          "main_last5": 0.3e8, "streak": 3, "streak_dir": "流入"}},
+        support_resistance={"support": 9.4, "resistance": 9.8, "state": "突破"},
+    )
+    payload = analysis.build_payload(detail, None, None)
+
+    # 1) 近 60 日均量字段存在且值正确：
+    #    sum = 1e8*30 + 5e7*30 = 4.5e9 股；avg = 4.5e9/60 = 7.5e7 股
+    #    万手 = 7.5e7 / 1e6 = 75.0
+    base = payload["基础数据"]
+    check("投喂: 基础数据含近60日均量", "近60日均量_万手" in base, str(list(base.keys())))
+    check("投喂: 近60日均量数值正确",
+          base["近60日均量_万手"] is not None and abs(base["近60日均量_万手"] - 75.0) < 0.01,
+          str(base["近60日均量_万手"]))
+
+    # 2) 近 60 日收盘序列存在且长度 60
+    ma_block = payload["均线技术数据"]
+    check("投喂: 含近60日收盘序列", "近60日收盘序列" in ma_block, str(list(ma_block.keys())))
+    seq60 = ma_block["近60日收盘序列"]
+    check("投喂: 近60日序列长度=60", len(seq60) == 60, f"len={len(seq60)}")
+
+    # 3) 近 30 日序列仍在且长度为 30（未误删旧字段）
+    check("投喂: 近30日序列仍存在且长度=30",
+          len(ma_block["近30日收盘序列"]) == 30, str(len(ma_block["近30日收盘序列"])))
 
 
 # ------------------------------------------------------------------ K 线滞后判定
@@ -1664,6 +1870,8 @@ def main() -> int:
     test_ai_lock()
     test_ai_cache_freshness()
     test_ai_cache_blank_degraded_invalidated()
+    test_ai_sanitize()
+    test_payload_quality()
     test_indicators()
     test_registry()
     test_watch_monitor()

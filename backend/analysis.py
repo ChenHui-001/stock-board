@@ -109,6 +109,15 @@ def build_payload(
     intraday_pos = round((price - lo) / (hi - lo) * 100, 1) if (price and hi and lo and hi > lo) else None
     gap = round((opn - prev) / prev * 100, 2) if (opn and prev) else None
 
+    # 近 60 日均量（万手）：作为「当日/近5日是否放量」的长期参照基准，
+    # 避免模型仅凭近 5 日均量误判异动（如长期地量股短期小幅放量被误读为「放量上攻」）。
+    # volume 单位为股，1 万手 = 1e6 股，与「成交量_万手」口径一致。
+    bars_60 = bars[-60:]
+    avg_vol_60 = (
+        round(sum(b.get("volume") or 0 for b in bars_60) / max(len(bars_60), 1) / 1e6, 1)
+        if bars_60 else None
+    )
+
     return {
         "基础数据": {
             "股票名称": q.get("name"),
@@ -126,6 +135,7 @@ def build_payload(
             "盘中位置%": intraday_pos,  # 现价处于当日高低区间的相对位置 0-100
             "量比": q.get("volume_ratio"),
             "成交量_万手": round((q.get("volume") or 0) / 1e6, 2),
+            "近60日均量_万手": avg_vol_60,  # 放量/缩量的长期参照基准
             "成交额_亿元": yi(q.get("amount")),
             "换手率%": q.get("turnover"),
             "交易状态": q.get("status_text") or "正常交易",
@@ -149,6 +159,8 @@ def build_payload(
             "近20日涨跌幅%": detail.get("status", {}).get("trend", {}).get("chg_20d"),
             "近60日涨跌幅%": detail.get("status", {}).get("trend", {}).get("chg_60d"),
             "近30日收盘序列": [round(b["close"], 2) for b in bars[-30:]],
+            # 60 日收盘序列供模型观察中长期趋势形态（MA60 计算与区间位置需要足够样本）
+            "近60日收盘序列": [round(b["close"], 2) for b in bars_60],
         },
         "技术指标_MACD_KDJ": _payload_oscillators(detail.get("oscillators") or {}),
         "支撑压力": detail.get("support_resistance", {}),
@@ -315,6 +327,9 @@ def _volume_confirm(bars: list[dict[str, Any]]) -> tuple[int, str]:
 
     返回 (加分, 说明)。放量上涨/缩量下跌偏多，放量下跌/缩量上涨偏空，
     数据不足时返回 (0, "")。volume 单位约定为股（各源已统一）。
+
+    长期量能参照：地量股（近 5 日均量不足近 60 日均量 70%）的「放量」需更大幅度
+    才有信号意义，阈值从 1.3 提升到 1.5，降低地量股小反弹被误判为放量的概率。
     """
     if len(bars) < 6:
         return 0, ""
@@ -327,9 +342,17 @@ def _volume_confirm(bars: list[dict[str, Any]]) -> tuple[int, str]:
     chg5 = (closes[-1] - closes[-6]) / closes[-6] * 100
     base = sum(vols[:-1]) / 5
     recent = vols[-1] / base if base else 0.0
-    if chg5 > 1 and recent >= 1.3:
+
+    # 放量阈值：地量股上调到 1.5，普通股保持 1.3
+    volume_threshold = 1.3
+    if len(bars) >= 60:
+        avg60 = sum(b.get("volume") or 0 for b in bars[-60:]) / 60
+        if avg60 > 0 and base < avg60 * 0.7:
+            volume_threshold = 1.5
+
+    if chg5 > 1 and recent >= volume_threshold:
         return 6, f"近5日涨 {chg5:.1f}% 且放量（量比 {recent:.1f}），量价配合良好"
-    if chg5 < -1 and recent >= 1.3:
+    if chg5 < -1 and recent >= volume_threshold:
         return -6, f"近5日跌 {abs(chg5):.1f}% 且放量（量比 {recent:.1f}），抛压较重"
     if chg5 < -1 and recent <= 0.7:
         return 3, f"近5日跌 {abs(chg5):.1f}% 但缩量（量比 {recent:.1f}），抛压减轻"
@@ -1001,6 +1024,16 @@ def _sanitize(result: dict[str, Any], fallback: dict[str, Any], price: float | N
     except (TypeError, ValueError):
         advice["confidence"] = 70
 
+    # 低置信度撤销激进建议：模型自己都不确定（confidence < 50）却给出
+    # 「积极持仓/加仓」或「清仓离场」这类不可逆操作，是典型幻觉/过度自信，
+    # 撤销为「持有观望」并标注，避免用户依据低置信结论做出激进操作。
+    if advice["confidence"] < 50 and advice["action"] in (ACTIONS[0], ACTIONS[3]):
+        advice["action_note"] = (
+            f"模型置信度过低（{advice['confidence']}%），已撤销激进建议"
+            f"「{advice['action']}」，改为持有观望"
+        )
+        advice["action"] = ACTIONS[1]
+
     risk = out["risk"]
     for key in ("opportunities", "risks"):
         val = risk.get(key)
@@ -1009,7 +1042,11 @@ def _sanitize(result: dict[str, Any], fallback: dict[str, Any], price: float | N
         elif not isinstance(val, list) or not val:
             risk[key] = fallback["risk"][key]
         else:
-            risk[key] = [str(x) for x in val][:5]
+            # 含具体数字（依据）的条目优先，模型泛泛而谈的空话排后，再截断到 5 条
+            risk[key] = sorted(
+                [str(x) for x in val],
+                key=lambda s: (0 if any(c.isdigit() for c in s) else 1),
+            )[:5]
     return out
 
 
