@@ -273,7 +273,13 @@
   function flowSubtitle(d) {
     const s = d.fund_flow.summary || {};
     if (!s.available) return '暂无资金流向数据';
-    return s.days + ' 个交易日 · ' + s.trend + ' · ' + s.state;
+    // 资金区副标题：把「价量背离」与「主力类型」这两个专业操盘信号展示出来，
+    // 让用户一眼看到当前资金动作的性质——高位诱多/低位吸筹/机构主导等。
+    // 数据缺失时跳过该片段，保持简短可读。
+    const parts = [s.days + ' 个交易日', s.trend, s.state];
+    if (s.price_flow_note) parts.push(s.price_flow_note);
+    if (s.xl_dominance) parts.push(s.xl_dominance);
+    return parts.join(' · ');
   }
 
   // 当日资金流向未发布（盘中 / 收盘后 16 点前）：东财/新浪日级资金流向通常

@@ -294,6 +294,97 @@ def support_resistance(bars: Sequence[Bar], price: float | None, ma_values: dict
     return result
 
 
+# ------------------------------------------------------------------ 资金价量背离
+
+def _compute_price_flow_note(rows: Sequence[FlowDay]) -> str:
+    """价量背离判定：用最近 5 日 vs 前 5 日的均价 / 资金均量方向对比，
+    输出四象限信号。这是专业操盘最看重的指标——比单独看资金流入更能
+    判断"主力在高位派发"还是"低位吸筹"。
+    依赖 FlowDay.close（东财/新浪/akshare 都带）。
+    要求至少 10 日数据：5 日「近期」+ 5 日「前期」，确保两边样本对称可比。"""
+    if len(rows) < 10:
+        return ""
+
+    closes = [r.close for r in rows if r.close is not None]
+    mains = [r.main for r in rows]
+    if len(closes) < 10 or len(mains) < 10:
+        return ""
+
+    # 前期 = 前 5 日（indices 0-4），近期 = 后 5 日（indices -5 至末尾）
+    price_prev = sum(closes[:5]) / 5
+    price_now = sum(closes[-5:]) / 5
+    flow_prev = sum(mains[:5]) / 5
+    flow_now = sum(mains[-5:]) / 5
+
+    # 用相对变化率判定方向，阈值避免噪声误判（价格 ±0.3%, 资金 ±5%）
+    price_up = price_now > price_prev * 1.003
+    price_down = price_now < price_prev * 0.997
+    flow_up = flow_now > flow_prev * 1.05
+    flow_down = flow_now < flow_prev * 0.95
+
+    if price_up and flow_up:
+        return "价格↑资金↑ 共振看多"
+    if price_down and flow_down:
+        return "价格↓资金↓ 共振看空"
+    if price_up and flow_down:
+        return "价格↑资金↓ 高位诱多"
+    if price_down and flow_up:
+        return "价格↓资金↑ 低位吸筹"
+    return ""
+
+
+def _compute_main_dominance(rows: Sequence[FlowDay]) -> str:
+    """主力类型分类：超大单占比 = |xl| / (|main|+1)。
+    占比越高说明越倾向机构资金主导，而非分散大户。
+    新浪等兜底源没有 xl 拆分时返回空。"""
+    if not rows:
+        return ""
+    xl_abs = sum(abs(r.xl) for r in rows)
+    main_abs = sum(abs(r.main) for r in rows)
+    if main_abs < 1e6:  # 样本金额太小（<100 万）跳过
+        return ""
+    if not any(r.xl for r in rows):  # 新浪兜底源 xl=0，无超大单数据
+        return ""
+    ratio = xl_abs / (main_abs + 1e-6)
+    if ratio >= 0.7:
+        return "机构主导（超大单占主力70%+）"
+    if ratio >= 0.4:
+        return "机构+大单混合（超大单占主力40-70%）"
+    return "主力分散（超大单占主力40%以下）"
+
+
+def _grade_flow_state(main_last: float, streak: int, streak_dir: str,
+                      xl_dominance: str, fresh: bool, last5: float,
+                      main_total: float) -> tuple[str, str]:
+    """5 档资金状态分级：
+        主力抢筹（连入3日+且超大单主导）
+        主力净流入（普通净入）
+        资金观望（接近0）
+        主力净流出（普通净出）
+        主力出逃（连出3日+且超大单主导）
+    fresh=False 时降级为「近5日」口径，保留括号日期语义。"""
+    # 是否超大单主导：xl_dominance 字符串前缀匹配
+    is_inst = "机构主导" in xl_dominance
+    strong_in = streak >= 3 and streak_dir == "流入" and is_inst
+    strong_out = streak >= 3 and streak_dir == "流出" and is_inst
+
+    suffix = "" if fresh else "（近5日）"
+
+    if fresh:
+        if main_last > 0:
+            return ("主力抢筹" if strong_in else "主力净流入"), "inflow"
+        if main_last < 0:
+            return ("主力出逃" if strong_out else "主力净流出"), "outflow"
+        return "资金观望", "neutral"
+
+    # fresh=False：退回近5日/累计口径
+    if last5 > 0 and main_total > 0:
+        return ("主力抢筹" + suffix if strong_in else "主力净流入" + suffix), "inflow"
+    if last5 < 0 and main_total < 0:
+        return ("主力出逃" + suffix if strong_out else "主力净流出" + suffix), "outflow"
+    return "资金观望", "neutral"
+
+
 # ------------------------------------------------------------------ 资金流向
 
 def summarize_flow(rows: Sequence[FlowDay], ref_date: str | None = None) -> dict[str, Any]:
@@ -356,22 +447,18 @@ def summarize_flow(rows: Sequence[FlowDay], ref_date: str | None = None) -> dict
     else:
         trend = "震荡反复"
 
-    # 状态判定：当日资金流向已发布（fresh）时以「当日」为主；未发布（盘中 /
-    # 收盘后 16 点前）退回近5日/累计口径，并把日期语义写进 state，避免把
-    # 前一交易日的数据标成「当日」误导用户。累计视角始终保留在 trend。
-    if fresh:
-        if main_last > 0:
-            state = "主力净流入"
-        elif main_last < 0:
-            state = "主力净流出"
-        else:
-            state = "资金观望"
-    elif last5 > 0 and main_total > 0:
-        state = "主力净流入（近5日）"
-    elif last5 < 0 and main_total < 0:
-        state = "主力净流出（近5日）"
-    else:
-        state = "资金观望"
+    # 价量背离 + 主力类型（专业操盘维度，比单一资金流向更有信号价值）
+    price_flow_note = _compute_price_flow_note(rows)
+    xl_dominance = _compute_main_dominance(rows)
+    streak_dir = "流入" if direction > 0 else ("流出" if direction < 0 else "持平")
+
+    # 5 档状态分级：基于「金额方向 + 连续性 + 主力类型」三维评分。
+    # fresh=False 时降级为「主力净流入（近5日）」语义，避免把昨日数据当「当日」。
+    state, state_grade = _grade_flow_state(
+        main_last=main_last, streak=streak, streak_dir=streak_dir,
+        xl_dominance=xl_dominance, fresh=fresh,
+        last5=last5, main_total=main_total,
+    )
 
     return {
         "available": True,
@@ -390,6 +477,9 @@ def summarize_flow(rows: Sequence[FlowDay], ref_date: str | None = None) -> dict
         "streak_dir": "流入" if direction > 0 else ("流出" if direction < 0 else "持平"),
         "trend": trend,
         "state": state,
+        "state_grade": state_grade,
+        "price_flow_note": price_flow_note,
+        "xl_dominance": xl_dominance,
         "last_date": last_date,
         "fresh": fresh,
     }
@@ -521,7 +611,13 @@ def _tone_trend(label: str) -> str:
 
 
 def _tone_flow(label: str) -> str:
-    return {"主力净流入": "up", "主力净流出": "down"}.get(label, "flat")
+    # 5 档分级：抢筹/流入=绿，出逃/流出=红，观望=中性。
+    # 兼容旧版"主力净流入（近5日）"等带括号日期的标签。
+    if "抢筹" in label or "流入" in label:
+        return "up"
+    if "出逃" in label or "流出" in label:
+        return "down"
+    return "flat"
 
 
 def _tone_sr(label: str) -> str:

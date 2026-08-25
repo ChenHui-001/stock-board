@@ -166,7 +166,12 @@ def build_payload(
         "支撑压力": detail.get("support_resistance", {}),
         "资金数据_近30日": {
             **{k: v for k, v in detail.get("fund_flow", {}).get("summary", {}).items()
-               if k in ("trend", "state", "inflow_days", "outflow_days", "streak", "streak_dir")},
+               if k in ("trend", "state", "inflow_days", "outflow_days",
+                        "streak", "streak_dir", "state_grade",
+                        "price_flow_note", "xl_dominance")},
+            # 价量背离 + 主力类型是专业操盘最看重的两个信号，单独抽出以便 LLM 优先关注
+            "价量背离信号": detail.get("fund_flow", {}).get("summary", {}).get("price_flow_note"),
+            "主力类型分类": detail.get("fund_flow", {}).get("summary", {}).get("xl_dominance"),
             "数据口径": (
                 "完整四档（超大单/大单/中单/小单）"
                 if detail.get("fund_flow", {}).get("summary", {}).get("tiered")
