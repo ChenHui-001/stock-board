@@ -1215,17 +1215,36 @@ main {
   flex-wrap: wrap;
 }
 
+.detail-change {
+  font-size: 17px;
+  font-family: var(--mono);
+  font-weight: 600;
+  /* 心跳平滑过渡：颜色变化 (up/down 调色) 用 300ms 过渡，避免每 5s 报价更新时数字「闪一下」；
+     prefers-reduced-motion 下取消过渡，符合无障碍偏好。 */
+  transition: color .3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-change { transition: none; }
+}
+
+/* 报价更新时短暂高亮：给用户一个「刚刚有变化」的视觉锚点，500ms 后自动退去。
+   keyframes 用 opacity 而不是 background-color，避免覆盖涨跌色（up/down/flat）调色。 */
+@keyframes detail-price-flash {
+  0%   { opacity: 0.55; }
+  100% { opacity: 1; }
+}
 .detail-price {
   font-size: 34px;
   font-weight: 700;
   font-family: var(--mono);
   line-height: 1.1;
+  /* 平滑过渡 + 心跳闪烁：每次 patchHead 替换 className 时颜色渐变 + 数字微微淡入 */
+  transition: color .3s ease;
+  animation: detail-price-flash .4s ease-out;
 }
-
-.detail-change {
-  font-size: 17px;
-  font-family: var(--mono);
-  font-weight: 600;
+@media (prefers-reduced-motion: reduce) {
+  .detail-price { transition: none; animation: none; }
 }
 
 .quote-grid {

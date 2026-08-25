@@ -570,6 +570,9 @@
   // 只拉轻量行情（单只报价），避免每 3 秒整包重传 K线/资金/两融历史数据
   async function tick() {
     if (!state.data) return;
+    // 盘后/节假日/用户手动停刷新时，session.auto_refresh=false，跳过本轮请求，
+    // 避免每 5s 都打后端。session 由 API.quote 的响应持续同步，是权威来源。
+    if (state.data.session && state.data.session.auto_refresh === false) return;
     if (state.ticking) return;            // 上一轮未回，跳过本轮，避免请求堆叠
     state.ticking = true;
     const seq = state.seq;
@@ -577,6 +580,8 @@
       const data = await API.quote(state.code, false);
       if (seq !== state.seq) return;      // 已切股票，丢弃
       if (!data || !data.quote) return;
+      // 同步最新 session 到本地（盘后切换时 auto_refresh 会从 true 变 false）
+      if (data.session) state.data.session = data.session;
       state.data.quote = data.quote;
       patchHead(data);
       App.setSession(data.session);
