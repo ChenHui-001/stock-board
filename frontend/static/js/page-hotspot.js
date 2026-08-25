@@ -424,6 +424,9 @@
     } else if (state.meta) {
       sub.textContent = '近 ' + state.meta.window_minutes + ' 分钟 · ' + state.meta.total + ' 条'
         + ' · 更新于 ' + ((state.meta.fetched_at || '').slice(11, 19) || '--');
+      // 数据源健康度徽标：6/6 正常 / 部分失败 / 全部失败
+      const badge = renderSourceHealthBadge();
+      if (badge) sub.appendChild(badge);
     } else {
       sub.textContent = '正在聚合多源 7x24 快讯…';
     }
@@ -438,6 +441,29 @@
     };
     head.appendChild(refresh);
     return head;
+  }
+
+  // 数据源健康度徽标：state.meta.sources 含每源 ok/count/error，渲染成单个小标签。
+  // 三档配色：全部正常 .ok / 部分失败 .warn / 全部失败 .err；
+  // 鼠标悬浮展示每源明细（title 属性），便于一眼定位故障源。
+  function renderSourceHealthBadge() {
+    const sources = (state.meta && state.meta.sources) || [];
+    if (!sources.length) return null;
+    const okCount = sources.filter(function (s) { return s.ok; }).length;
+    const total = sources.length;
+    const tier = okCount === total ? 'ok' : (okCount === 0 ? 'err' : 'warn');
+    const failed = sources.filter(function (s) { return !s.ok; });
+    let text = okCount + '/' + total + ' 源' + (tier === 'ok' ? '正常' : (tier === 'err' ? '不可用' : '故障'));
+    // 故障时把失败源名也带上：「4/6 源故障（财联社/金十）」
+    if (tier === 'warn' && failed.length) {
+      text += '（' + failed.map(function (s) { return s.name; }).join(' / ') + '）';
+    }
+    const badge = U.el('span', 'tag hotspot-source-stat hotspot-source-' + tier, text);
+    // title 展示每源明细：成功源含条数，失败源含错误原因
+    badge.title = sources.map(function (s) {
+      return (s.ok ? '✓ ' : '✗ ') + s.name + ': ' + (s.ok ? s.count + ' 条' : s.error || '失败');
+    }).join('\n');
+    return badge;
   }
 
   function renderFilters() {

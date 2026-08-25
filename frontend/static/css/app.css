@@ -489,6 +489,13 @@ main {
 .tag.down { border-color: rgba(23, 178, 106, .3); background: rgba(23, 178, 106, .1); }
 .tag.warn { border-color: rgba(245, 158, 11, .35); background: rgba(245, 158, 11, .12); color: var(--warn); }
 
+/* 数据源健康度徽标：3 档配色对应 ok/warn/err，与涨/跌/警告同源设计 token。
+   inline-block + 8px 左 margin 让标签紧跟在 sub 文案后不挤在一起。 */
+.hotspot-source-stat { display: inline-block; margin-left: 8px; cursor: help; }
+.hotspot-source-ok { border-color: rgba(23, 178, 106, .3); background: rgba(23, 178, 106, .1); color: var(--up); }
+.hotspot-source-warn { border-color: rgba(245, 158, 11, .35); background: rgba(245, 158, 11, .12); color: var(--warn); }
+.hotspot-source-err { border-color: rgba(245, 70, 93, .3); background: rgba(245, 70, 93, .1); color: var(--down); }
+
 .price-cell { text-align: right; font-family: var(--mono); font-size: 15px; }
 .pct-cell { text-align: right; font-family: var(--mono); font-size: 14px; font-weight: 600; }
 .prev-cell { text-align: right; font-family: var(--mono); color: var(--text-dim); }
