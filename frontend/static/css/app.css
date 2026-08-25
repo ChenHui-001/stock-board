@@ -3464,14 +3464,16 @@ main {
 .hotspot-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 5px;
 }
 
-/* AI 分析按钮放在源行末尾：用 margin-left:auto 推到行尾，避开源名拥挤；
-   padding/字体略小于默认 btn-sm，与"次要操作"语义匹配，不抢标题视觉。 */
+/* AI 分析按钮放在源行内：紧跟在源名后面（不再用 margin-left:auto 推到行尾）；
+   padding/字体略小于默认 btn-sm，与"次要操作"语义匹配，不抢标题视觉。
+   窄屏下随 metaLine wrap 换行，避免挤压标题。 */
 .hotspot-ai-btn {
-  margin-left: auto;
+  margin-left: 0;
   padding: 2px 8px;
   font-size: 11px;
 }
