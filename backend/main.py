@@ -88,6 +88,18 @@ async def healthz() -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@app.get("/metrics")
+async def metrics_endpoint() -> Response:
+    """Prometheus 指标端点：单源抓取请求/熔断/耗时等可观测性数据。
+
+    文本格式（text/plain; version=0.0.4），由 Prometheus 服务端定期抓取。
+    CORS 已开 *，跨域抓取无需额外头。
+    """
+    from . import metrics as _metrics
+    body, content_type = _metrics.export()
+    return Response(content=body, media_type=content_type)
+
+
 if FRONTEND_DIR.exists():
     app.mount(
         "/static",

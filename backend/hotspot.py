@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
@@ -27,6 +28,7 @@ from .cache import cache
 from .config import settings
 from .providers.base import ProviderError, fetch
 from .utils import TZ, now
+from . import metrics
 
 log = logging.getLogger("hotspot")
 
@@ -63,32 +65,60 @@ class SourceStat:
         self.cooldown = cooldown
         self._consecutive_failures = 0
         self._circuit_opened_at: float | None = None
+        # _SOURCE_STATS 是进程级共享状态，FastAPI 异步并发下同一源可能被多协程
+        # 同时调用 record_success/failure。读改写（如 += 1）非原子，需要串行化。
+        # 锁开销 < 1µs，且修改频率极低（每分钟最多几次），可忽略。
+        self._lock = asyncio.Lock()
 
-    def record_success(self) -> None:
-        """成功后清零计数 + 关闭熔断。"""
-        self._consecutive_failures = 0
-        self._circuit_opened_at = None
-
-    def record_failure(self) -> None:
-        """失败累加；达到阈值时打熔断并打点。"""
-        self._consecutive_failures += 1
-        if self._consecutive_failures >= self.open_at and self._circuit_opened_at is None:
-            import time as _time
-            self._circuit_opened_at = _time.monotonic()
-            log.warning("热点源 %s 连续失败 %d 次，触发熔断冷却 %.0fs",
-                        self.name, self._consecutive_failures, self.cooldown)
-
-    def is_open(self) -> bool:
-        """是否处于熔断冷却中。冷却到期自动恢复（半开放）。"""
-        if self._circuit_opened_at is None:
-            return False
-        import time as _time
-        if _time.monotonic() - self._circuit_opened_at >= self.cooldown:
-            # 冷却到期：放开一次尝试，成功则 record_success 自动清零；失败重新打熔断
-            self._circuit_opened_at = None
+    async def record_success(self) -> None:
+        """成功后清零计数 + 关闭熔断。async + 锁：与并发 record_failure 串行化。"""
+        async with self._lock:
             self._consecutive_failures = 0
-            return False
-        return True
+            self._circuit_opened_at = None
+        self._sync_metrics()
+
+    async def record_failure(self) -> None:
+        """失败累加；达到阈值时打熔断并打点。async + 锁：读改写 ( += 1)非原子。"""
+        async with self._lock:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.open_at and self._circuit_opened_at is None:
+                self._circuit_opened_at = time.monotonic()
+                log.warning("热点源 %s 连续失败 %d 次，触发熔断冷却 %.0fs",
+                            self.name, self._consecutive_failures, self.cooldown)
+        self._sync_metrics()
+
+    async def is_open(self) -> bool:
+        """是否处于熔断冷却中。冷却到期自动恢复（半开放）。
+
+        注：查询时有副作用（冷却到期会重置状态）。这是有意为之——`is_open()`
+        实际上等同于「我该不该短路」，冷却到期返回 False 等同于「这次放行」。
+        async + 锁：与并发 record_* 串行化，避免读到半修改状态。
+        """
+        async with self._lock:
+            if self._circuit_opened_at is None:
+                result = False
+            elif time.monotonic() - self._circuit_opened_at >= self.cooldown:
+                # 冷却到期：放开一次尝试（半开放），成功则 record_success 自动清零；失败重新打熔断。
+                self._reset()
+                result = False
+            else:
+                result = True
+        # 同步 metric 在锁外（写入 Gauge 本身不需串行化，且 metrics 内部无锁）
+        metrics.update_source_gauge(self.name, self._consecutive_failures, result)
+        return result
+
+    def _reset(self) -> None:
+        """熔断状态完全清零（冷却到期时由 is_open 调用，外部不应直接调用）。"""
+        self._circuit_opened_at = None
+        self._consecutive_failures = 0
+
+    def _sync_metrics(self) -> None:
+        """把当前 _consecutive_failures 与熔断状态同步到 Prometheus Gauge。
+
+        在 record_success/record_failure 末尾调用，无需等下次 is_open 才能反映到指标。
+        """
+        circuit_open = self._circuit_opened_at is not None
+        metrics.update_source_gauge(self.name, self._consecutive_failures, circuit_open)
 
     @property
     def consecutive_failures(self) -> int:
@@ -408,19 +438,36 @@ async def _fetch_one(
     """
     last: Exception | None = None
     attempts = len(retry_backoffs) + 1
+    start_ts = metrics.now_ts()  # 起点：用于直方图统计单源耗时
     for attempt in range(attempts):
         try:
             resp = await asyncio.wait_for(fetch(url, headers=headers), timeout=timeout)
             rows = parse(resp.text)
             if source_stats is not None and name in source_stats:
-                source_stats[name].record_success()
+                await source_stats[name].record_success()
+            elapsed = metrics.now_ts() - start_ts
+            metrics.observe_duration(name, "success", elapsed)
+            metrics.SOURCE_REQUESTS.labels(source=name, result="success").inc()
+            metrics.SOURCE_ITEMS.labels(source=name).inc(len(rows))
             return [r for r in rows if _in_window(r["ts"], minutes)], True, ""
+        except asyncio.TimeoutError:
+            last = asyncio.TimeoutError("单源抓取超时")
+            if attempt < attempts - 1:
+                await asyncio.sleep(retry_backoffs[attempt])  # 指数 backoff：1s → 2s
         except Exception as exc:  # noqa: BLE001 - 单源失败不影响其他源
             last = exc
             if attempt < attempts - 1:
                 await asyncio.sleep(retry_backoffs[attempt])  # 指数 backoff：1s → 2s
     if source_stats is not None and name in source_stats:
-        source_stats[name].record_failure()
+        await source_stats[name].record_failure()
+    # 区分超时 vs 其他错误，便于按 result 标签切片
+    elapsed = metrics.now_ts() - start_ts
+    if isinstance(last, asyncio.TimeoutError):
+        result_label = "timeout"
+    else:
+        result_label = "error"
+    metrics.observe_duration(name, result_label, elapsed)
+    metrics.SOURCE_REQUESTS.labels(source=name, result=result_label).inc()
     log.info("热点源 %s 抓取失败：%s", name, last)
     return [], False, f"{type(last).__name__}: {last}"
 
@@ -445,7 +492,7 @@ async def _fetch_all(minutes: int) -> tuple[list[dict[str, Any]], list[dict[str,
     to_fetch: list[tuple[Any, ...]] = []
     for feed in _FEEDS:
         name = feed[0]
-        if stats[name].is_open():
+        if await stats[name].is_open():
             short_circuit.append((name, False, "circuit_open"))
         else:
             to_fetch.append(feed)
@@ -477,7 +524,7 @@ async def _fetch_all(minutes: int) -> tuple[list[dict[str, Any]], list[dict[str,
                     fetched_results.append(t.result())
                 else:
                     fetched_results.append(([], False, "timeout"))
-                    stats[name].record_failure()
+                    await stats[name].record_failure()
             log.warning("热点聚合超出预算 %.1fs，%d 个源被截断", budget, len(pending))
 
     # 把熔断短路结果与抓取结果按 _FEEDS 顺序拼回去，保证 sources 列表对齐
@@ -485,8 +532,9 @@ async def _fetch_all(minutes: int) -> tuple[list[dict[str, Any]], list[dict[str,
     results: list[tuple[list[dict[str, Any]], bool, str]] = []
     for feed in _FEEDS:
         name = feed[0]
-        if stats[name].is_open():
+        if await stats[name].is_open():
             results.append(([], False, "circuit_open"))
+            metrics.SOURCE_REQUESTS.labels(source=name, result="circuit_open").inc()
         else:
             try:
                 results.append(next(fetched_iter))
@@ -499,6 +547,16 @@ async def _fetch_all(minutes: int) -> tuple[list[dict[str, Any]], list[dict[str,
     for (name, _url, _headers, _parse, _tier), (rows, ok, error) in zip(_FEEDS, results):
         sources.append({"name": name, "ok": ok, "count": len(rows), "error": error if not ok else ""})
         items.extend(rows)
+    # 聚合摘要日志：仅在有失败时输出 INFO，正常成功路径走 DEBUG 不刷屏；
+    # 一次性看到「6 源耗时结果 + 各自条数 + 失败原因」，排障不用再翻 6 个 warn。
+    failed = [s for s in sources if not s["ok"]]
+    total_count = sum(s["count"] for s in sources)
+    if failed:
+        log.info("热点聚合完成 %d/%d 源成功，共 %d 条；失败：%s",
+                 len(sources) - len(failed), len(sources), total_count,
+                 "; ".join(f"{f['name']}={f['error']}" for f in failed))
+    else:
+        log.debug("热点聚合完成 %d 源成功，共 %d 条", len(sources), total_count)
     if not items and not any(s["ok"] for s in sources):
         raise ProviderError("全部热点快讯源均不可用")
     return items, sources

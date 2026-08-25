@@ -583,19 +583,25 @@ def test_hotspot() -> None:
           f"budget={settings.HOTSPOT_BUDGET}")
     # SourceStat：连续失败 → 熔断 → 冷却 → 自动恢复，半开放重试
     from backend.hotspot import SourceStat
-    stat = SourceStat("测试源", open_at=2, cooldown=0.5)
-    check("热点_熔断: 初始未熔断", stat.is_open() is False, "")
-    stat.record_failure()
-    check("热点_熔断: 失败 1 次仍未熔断", stat.is_open() is False
-          and stat.consecutive_failures == 1, "")
-    stat.record_failure()
-    check("热点_熔断: 失败达阈值后熔断", stat.is_open() is True
-          and stat.consecutive_failures == 2, "")
-    import asyncio
-    asyncio.run(asyncio.sleep(0.6))
-    check("热点_熔断: 冷却到期自动恢复（半开放）", stat.is_open() is False, "")
-    stat.record_success()
-    check("热点_熔断: 成功后清零计数", stat.consecutive_failures == 0, "")
+    import asyncio as _aio
+
+    async def _run_circuit() -> bool:
+        """熔断生命周期：调用 SourceStat 的 async API（加锁后改 async）。"""
+        stat = SourceStat("测试源", open_at=2, cooldown=0.5)
+        check("热点_熔断: 初始未熔断", await stat.is_open() is False, "")
+        await stat.record_failure()
+        check("热点_熔断: 失败 1 次仍未熔断", await stat.is_open() is False
+              and stat.consecutive_failures == 1, "")
+        await stat.record_failure()
+        check("热点_熔断: 失败达阈值后熔断", await stat.is_open() is True
+              and stat.consecutive_failures == 2, "")
+        await _aio.sleep(0.6)
+        check("热点_熔断: 冷却到期自动恢复（半开放）", await stat.is_open() is False, "")
+        await stat.record_success()
+        check("热点_熔断: 成功后清零计数", stat.consecutive_failures == 0, "")
+        return True
+
+    _aio.run(_run_circuit())
     # _fetch_one 重试参数化为指数序列
     import inspect
     sig = inspect.signature(_hp._fetch_one)
@@ -609,6 +615,56 @@ def test_hotspot() -> None:
           str(settings.HOTSPOT_CIRCUIT_OPEN_AT))
     check("热点_熔断: 配置项 COOLDOWN=120s", settings.HOTSPOT_CIRCUIT_COOLDOWN == 120.0,
           str(settings.HOTSPOT_CIRCUIT_COOLDOWN))
+
+    # Prometheus 指标：模块可导入、5 个指标注册、记录后能取回值
+    from backend import metrics as _mt
+    check("热点_指标: 模块可导入", hasattr(_mt, "SOURCE_REQUESTS"), "")
+    check("热点_指标: 5 个核心指标都已注册",
+          all(hasattr(_mt, n) for n in (
+              "SOURCE_REQUESTS", "SOURCE_FAILURES", "SOURCE_CIRCUIT_OPEN",
+              "SOURCE_ITEMS", "SOURCE_DURATION",
+          )), "")
+
+    async def _run_metrics() -> bool:
+        """驱动一次 SourceStat + 直方图打点，验证 Gauge 增量与 Counter 递增。"""
+        stat = SourceStat("指标测试源", open_at=2, cooldown=60.0)
+        await stat.record_failure()           # 失败 1 → gauge=1, circuit=0
+        await stat.record_failure()           # 失败 2 → 触发熔断，gauge=2, circuit=1
+        # 取 Gauge 当前值（无需 scrape）
+        from prometheus_client import REGISTRY
+        def _gauge(name: str) -> float:
+            return REGISTRY.get_sample_value(
+                name, {"source": "指标测试源"}) or 0.0
+        check("热点_指标: 连续失败 Gauge 同步到 2",
+              _gauge("hotspot_source_consecutive_failures") == 2.0,
+              str(_gauge("hotspot_source_consecutive_failures")))
+        check("热点_指标: 熔断状态 Gauge=1",
+              _gauge("hotspot_source_circuit_open") == 1.0,
+              str(_gauge("hotspot_source_circuit_open")))
+        await stat.record_success()           # 恢复 → gauge=0, circuit=0
+        check("热点_指标: 恢复后连续失败=0",
+              _gauge("hotspot_source_consecutive_failures") == 0.0,
+              str(_gauge("hotspot_source_consecutive_failures")))
+        check("热点_指标: 恢复后熔断=0",
+              _gauge("hotspot_source_circuit_open") == 0.0,
+              str(_gauge("hotspot_source_circuit_open")))
+        # 模拟一次抓取：record_request + observe_duration
+        _mt.SOURCE_REQUESTS.labels(source="指标测试源", result="success").inc()
+        _mt.observe_duration("指标测试源", "success", 0.123)
+        check("热点_指标: Counter 递增成功",
+              REGISTRY.get_sample_value(
+                  "hotspot_source_requests_total",
+                  {"source": "指标测试源", "result": "success"}) or 0 >= 1,
+              "")
+        # export() 输出非空 + content_type 正确
+        body, ctype = _mt.export()
+        check("热点_指标: /metrics 输出含 Counter",
+              b"hotspot_source_requests_total" in body, f"len={len(body)}")
+        check("热点_指标: content_type 正确",
+              "text/plain" in ctype, ctype)
+        return True
+
+    _aio.run(_run_metrics())
 
     # 财联社签名与 URL：参数固定后签名可复现，URL 含 sign 字段
     sign1 = _hp._cls_sign(_hp._CLS_ROLL_PARAMS)
