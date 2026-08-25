@@ -1350,11 +1350,16 @@ main {
 }
 
 .status-tag.up {
-  border-color: rgba(245, 70, 93, .35);
+  /* 信号方向=上行=积极=绿色调（与「可加仓」「多头排列」等正面信号一致）。
+     注：本组件的 .up/.down 与全项目其它处的 .up/.down（股价涨跌）语义不同，
+     独立配色避免「红=涨」误读为「信号上行=涨」。 */
+  border-color: rgba(23, 178, 106, .35);
+  background: rgba(23, 178, 106, .08);
 }
 
 .status-tag.down {
-  border-color: rgba(23, 178, 106, .35);
+  border-color: rgba(245, 70, 93, .35);
+  background: rgba(245, 70, 93, .08);
 }
 
 .status-tag.warn {

@@ -199,22 +199,24 @@
     const stats = U.el('div', 'stat-row');
     stats.style.marginTop = '14px';
     stats.style.marginBottom = '0';
+    // 区间位置按 50% 阈值染色：上半区偏多（绿） / 下半区偏空（红），
+    // 给用户一眼的位置感；5/20/60 日涨跌与均线段重复，不重复染色，仅展示。
+    const rangePosTone = U.isNum(sr.range_pos_pct)
+      ? (sr.range_pos_pct >= 50 ? 'up' : 'down')
+      : '';
     [
       ['当前支撑位', U.price(sr.support) + (sr.support_from ? ' (' + sr.support_from + ')' : '')],
       ['当前压力位', U.price(sr.resistance) + (sr.resistance_from ? ' (' + sr.resistance_from + ')' : '')],
       ['20日区间', U.price(sr.low_20) + ' ~ ' + U.price(sr.high_20)],
       ['60日区间', U.price(sr.low_60) + ' ~ ' + U.price(sr.high_60)],
-      ['区间位置', U.isNum(sr.range_pos_pct) ? sr.range_pos_pct.toFixed(1) + '%' : U.NBSP],
+      ['区间位置', U.isNum(sr.range_pos_pct) ? sr.range_pos_pct.toFixed(1) + '%' : U.NBSP, rangePosTone],
       ['近5日涨跌', U.pct(d.status.trend.chg_5d)],
       ['近20日涨跌', U.pct(d.status.trend.chg_20d)],
       ['近60日涨跌', U.pct(d.status.trend.chg_60d)]
     ].forEach(function (s, i) {
       const node = U.el('div', 'stat');
       node.appendChild(U.el('div', 'stat-label', s[0]));
-      const cls = i >= 5 ? U.tone(
-        i === 5 ? d.status.trend.chg_5d : i === 6 ? d.status.trend.chg_20d : d.status.trend.chg_60d
-      ) : '';
-      node.appendChild(U.el('div', 'stat-value ' + cls, s[1]));
+      node.appendChild(U.el('div', 'stat-value' + (s[2] ? ' ' + s[2] : ''), s[1]));
       stats.appendChild(node);
     });
     wrap.appendChild(stats);
