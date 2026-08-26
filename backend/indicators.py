@@ -478,10 +478,10 @@ def _grade_flow_state(main_last: float, streak: int, streak_dir: str,
 
     if fresh:
         if main_last > 0:
-            return ("主力抢筹" if strong_in else "主力净流入"), "inflow"
+            return ("主力抢筹（当日）" if strong_in else "主力净流入（当日）"), "inflow"
         if main_last < 0:
-            return ("主力出逃" if strong_out else "主力净流出"), "outflow"
-        return "资金观望", "neutral"
+            return ("主力出逃（当日）" if strong_out else "主力净流出（当日）"), "outflow"
+        return "资金观望（当日）", "neutral"
 
     # fresh=False：退回近5日/累计口径
     if last5 > 0 and main_total > 0:
@@ -825,6 +825,27 @@ def build_status(
     两个开关同时为 True 时 pre_open 优先（盘前本身就是"没数据"状态）。
     """
     trend = trend_state(bars, ma_summary, atr=atr)
+    # 震荡细分：基于5日涨跌 + 资金状态 grade 区分方向偏好
+    refined_trend_label = _refine_choppy_label(
+        trend["label"], trend.get("chg_5d"), flow.get("state_grade"))
+    # 盘中一致性：当日 60 分线趋势 vs 昨日日线趋势
+    consistency = intraday_consistency(refined_trend_label, intraday)
+
+    # 趋势状态主标签：盘中一致时附加当日累计%；背离时降 warn 色
+    trend_label = _trend_label_with_volume({"label": refined_trend_label,
+                                              "volume_confirm": trend.get("volume_confirm")})
+    trend_tone = _tone_trend(refined_trend_label)
+    if consistency["aligned"] is True and consistency["chg"] is not None:
+        chg_text = f"{consistency['chg']:+.2f}%"
+        trend_label = f"{trend_label} · 盘中{chg_text}"
+    elif consistency["aligned"] is False:
+        trend_tone = "warn"  # 盘中日线背离时染色警示
+
+    # 盘口信号：仅在盘中有数据时（非 pre_open + 非 delayed）才评估
+    intraday_signal = {"label": "", "tone": "flat"}
+    if not pre_open and not delayed:
+        intraday_signal = intraday_state_from_quote(quote)
+
     if pre_open:
         # 盘前：所有数据类标签统一为"待开盘"，连带均线形态也置灰
         placeholders = {
@@ -833,28 +854,33 @@ def build_status(
             "支撑压力": "待开盘",
             "两融情绪": "待开盘",
             "均线形态": "待开盘",
+            "盘口位置": "待开盘",
         }
         tags = [
             {"group": g, "label": placeholders[g], "tone": "warn"}
-            for g in ("趋势状态", "资金状态", "支撑压力", "两融情绪", "均线形态")
+            for g in ("趋势状态", "资金状态", "支撑压力", "两融情绪", "均线形态", "盘口位置")
         ]
     elif delayed:
         # 数据延迟：标签保留原内容便于诊断，但 tone 全部置 warn 染色警示
+        # 原写法 `_tone_flow(...) or "warn"` 只在 tone 为空时才回退为 warn，
+        # 导致资金状态仍按"up/down"染色，与延迟语义矛盾 → 强制全 warn
         tags = [
-            {"group": "趋势状态", "label": _trend_label_with_volume(trend), "tone": "warn"},
-            {"group": "资金状态", "label": flow.get("state", "无数据"), "tone": _tone_flow(flow.get("state", "")) or "warn"},
-            {"group": "支撑压力", "label": sr.get("state", "数据不足"), "tone": _tone_sr(sr.get("state", "")) or "warn"},
-            {"group": "两融情绪", "label": margin.get("sentiment_with_date", margin.get("sentiment", "无两融数据")), "tone": _tone_margin(margin.get("sentiment", "")) or "warn"},
+            {"group": "趋势状态", "label": trend_label, "tone": "warn"},
+            {"group": "资金状态", "label": flow.get("state", "无数据"), "tone": "warn"},
+            {"group": "支撑压力", "label": sr.get("state", "数据不足"), "tone": "warn"},
+            {"group": "两融情绪", "label": margin.get("sentiment_with_date", margin.get("sentiment", "无两融数据")), "tone": "warn"},
             {"group": "均线形态", "label": ma_summary.get("arrangement", "均线交织"), "tone": "warn"},
+            {"group": "盘口位置", "label": intraday_signal["label"] or "数据延迟", "tone": "warn"},
         ]
     else:
         # 正常时段：两融情绪 label 加披露日期后缀，避免 T+1 延迟数据被误读为实时
         tags = [
-            {"group": "趋势状态", "label": _trend_label_with_volume(trend), "tone": _tone_trend(trend["label"])},
+            {"group": "趋势状态", "label": trend_label, "tone": trend_tone},
             {"group": "资金状态", "label": flow.get("state", "无数据"), "tone": _tone_flow(flow.get("state", ""))},
             {"group": "支撑压力", "label": sr.get("state", "数据不足"), "tone": _tone_sr(sr.get("state", ""))},
             {"group": "两融情绪", "label": margin.get("sentiment_with_date", margin.get("sentiment", "无两融数据")), "tone": _tone_margin(margin.get("sentiment", ""))},
             {"group": "均线形态", "label": ma_summary.get("arrangement", "均线交织"), "tone": _tone_trend(ma_summary.get("arrangement", ""))},
+            {"group": "盘口位置", "label": intraday_signal["label"] or "—", "tone": intraday_signal["tone"]},
         ]
 
     # P2-7：盘中 60 分钟趋势作为子标签附加
@@ -884,6 +910,118 @@ def _tone_trend(label: str) -> str:
     if label in ("空头趋势", "短期下跌", "空头排列", "短期空头"):
         return "down"
     return "flat"
+
+
+# ---------------------------------------------------------- 盘口信号（build_status 专用）
+def intraday_state_from_quote(quote: Quote) -> dict[str, str]:
+    """从 quote 提一个当日盘口主导信号：盘中位置×涨跌方向 + 量比×涨跌方向 + 振幅。
+
+    返回 {label, tone}：与 build_status 同结构。
+    量化阈值与 _intraday_score（analysis.py）一致但取最显著的一条作为标签，
+    避免盘口条件多时标签爆炸。盘中数据缺失时返回空字符串 + flat（不展示）。
+    """
+    price = getattr(quote, "price", None)
+    prev = getattr(quote, "prev_close", None)
+    hi = getattr(quote, "high", None)
+    lo = getattr(quote, "low", None)
+    chg = getattr(quote, "change_pct", None)
+    vr = getattr(quote, "volume_ratio", None)
+    if not (price and prev and hi and lo and hi > lo and chg is not None):
+        return {"label": "", "tone": "flat"}
+
+    pos = (price - lo) / (hi - lo) * 100          # 0-100
+    amp = (hi - lo) / prev * 100                  # %
+    candidates: list[tuple[int, str, str]] = []  # (|score|, label, tone)
+
+    # 盘中位置 × 涨跌方向
+    if pos >= 75:
+        if chg > 0:
+            candidates.append((3, f"高位强势（{pos:.0f}%）", "up"))
+        else:
+            candidates.append((4, f"冲高回落（{pos:.0f}%）", "down"))
+    elif pos <= 25:
+        if chg < 0:
+            candidates.append((4, f"弱势探底（{pos:.0f}%）", "down"))
+        else:
+            candidates.append((2, f"空头衰竭（{pos:.0f}%）", "up"))
+
+    # 量比 × 涨跌方向
+    if vr is not None:
+        if vr >= 2:
+            if chg > 0:
+                candidates.append((3, f"放量上攻（量比 {vr:.2f}）", "up"))
+            else:
+                candidates.append((3, f"放量下挫（量比 {vr:.2f}）", "down"))
+        elif vr <= 0.6:
+            if chg > 0:
+                candidates.append((1, f"缩量上涨（量比 {vr:.2f}）", "flat"))
+            else:
+                candidates.append((1, f"缩量下跌（量比 {vr:.2f}）", "flat"))
+
+    # 振幅剧烈：单独一条
+    if amp >= 8:
+        candidates.append((2, f"波动剧烈（振幅 {amp:.1f}%）", "warn"))
+
+    if not candidates:
+        return {"label": "", "tone": "flat"}
+    # 取 |score| 最大的那条：score 为负的看空信号与正的多头信号按绝对值排，
+    # 否则 -4 的「冲高回落」会被 +2 的「波动剧烈」挤掉
+    candidates.sort(key=lambda x: abs(x[0]), reverse=True)
+    return {"label": candidates[0][1], "tone": candidates[0][2]}
+
+
+# ---------------------------------------------------------- 震荡细分
+def _refine_choppy_label(trend_label: str, chg_5d: float | None,
+                          flow_grade: str | None) -> str:
+    """把「震荡整理」细分为「偏多震荡/偏空震荡/中性震荡」。
+
+    判定逻辑：5 日方向 × 资金方向，权重各半。
+      短期正 + 资金流入或中性 → 偏多震荡
+      短期负 + 资金流出或中性 → 偏空震荡
+      其他 → 中性震荡
+    非震荡 label 原样返回，保持 5 档趋势体系不变。
+    """
+    if trend_label != "震荡整理":
+        return trend_label
+    if chg_5d is None:
+        return "中性震荡"
+    grade = flow_grade or "neutral"
+    if chg_5d > 0.5 and grade in ("inflow", "neutral"):
+        return "偏多震荡"
+    if chg_5d < -0.5 and grade in ("outflow", "neutral"):
+        return "偏空震荡"
+    return "中性震荡"
+
+
+# ---------------------------------------------------------- 盘中趋势一致性
+def intraday_consistency(trend_label: str, intraday: dict[str, Any] | None) -> dict[str, Any]:
+    """盘中 60 分线趋势 vs 昨日日线趋势的一致性。
+
+    返回 {aligned: bool, hint: str}：
+      - aligned=True  → 主标签更新为 "{trend_label} · {当日累计%}"，反映当日实时
+      - aligned=False → 主标签 tone 降 warn，hint 给背离说明
+    intraday 不可用时返回 aligned=None（不参与调整），保持现状。
+    """
+    if not intraday or not intraday.get("available"):
+        return {"aligned": None, "hint": "", "chg": None}
+    intra_label = intraday.get("label", "")
+    intra_chg = intraday.get("chg")
+    # 一致性映射：昨日"上涨/多头" vs 盘中"上涨"；昨日"下跌/空头" vs 盘中"下跌"
+    up_keys = {"上涨"}
+    down_keys = {"下跌"}
+    flat_keys = {"震荡"}
+    if trend_label in ("多头趋势", "短期上涨", "多头排列", "短期多头") and intra_label in up_keys:
+        return {"aligned": True, "hint": "盘中延续涨势", "chg": intra_chg}
+    if trend_label in ("空头趋势", "短期下跌", "空头排列", "短期空头") and intra_label in down_keys:
+        return {"aligned": True, "hint": "盘中延续跌势", "chg": intra_chg}
+    if trend_label in ("多头趋势", "短期上涨", "多头排列", "短期多头") and intra_label in down_keys:
+        return {"aligned": False, "hint": "昨日多头盘中转弱", "chg": intra_chg}
+    if trend_label in ("空头趋势", "短期下跌", "空头排列", "短期空头") and intra_label in up_keys:
+        return {"aligned": False, "hint": "昨日空头盘中反弹", "chg": intra_chg}
+    if trend_label == "震荡整理" and intra_label in flat_keys:
+        return {"aligned": True, "hint": "盘中维持震荡", "chg": intra_chg}
+    # 其他组合：涨跌 vs 震荡、震荡 vs 涨跌 等"中性分歧"
+    return {"aligned": False, "hint": "盘中日线趋势分歧", "chg": intra_chg}
 
 
 def _trend_label_with_volume(trend: dict[str, Any]) -> str:
