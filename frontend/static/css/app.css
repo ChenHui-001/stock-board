@@ -1324,8 +1324,9 @@ main {
 }
 
 .status-tags {
-  display: flex;
-  flex-wrap: wrap;
+  /* 6 个状态标签改3 列固定网格：宽屏下整齐对齐，避免堆在一行挤在左侧 */
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 7px;
 }
 
@@ -1337,7 +1338,26 @@ main {
   border-radius: var(--radius-sm);
   background: var(--bg-elev-2);
   border: 1px solid var(--line);
-  min-width: 100px;
+}
+
+/* 盘中背离警告条：当日 60 分线趋势与昨日日线背离时，趋势标签 tone 降 warn，
+   status section 顶部同步加醒目的黄色横幅提示 */
+.status-warn-banner {
+  background: rgba(245, 158, 11, .12);
+  border: 1px solid rgba(245, 158, 11, .45);
+  color: var(--warn);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.status-warn-banner::before {
+  content: '⚠';
+  font-size: 15px;
 }
 
 .status-tag .g {

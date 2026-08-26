@@ -260,6 +260,12 @@
 
   function renderStatus(d) {
     const wrap = U.el('div');
+    // 盘中背离警告条：后端 build_status 在 60 分线趋势与日线背离时
+    // 返回 divergence_hint（aligned=False），前端据此在 status 顶部加醒目的黄横幅
+    if (d.status.divergence_hint) {
+      const banner = U.el('div', 'status-warn-banner', d.status.divergence_hint);
+      wrap.appendChild(banner);
+    }
     const tags = U.el('div', 'status-tags');
     (d.status.tags || []).forEach(function (t) {
       const node = U.el('div', 'status-tag ' + (t.tone || 'flat'));

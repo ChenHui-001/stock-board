@@ -901,7 +901,19 @@ def build_status(
 
     if quote.status != "normal" and quote.status_text:
         tags.insert(0, {"group": "交易状态", "label": quote.status_text, "tone": "warn"})
-    return {"trend": trend, "tags": tags}
+    # 盘中背离提示：仅在盘中趋势与日线背离时（aligned=False）返回 hint 文本，
+    # 前端 status section 顶部据此显示「⚠ 盘中日线背离」警告条。
+    # 抑制条件：
+    #   - 一致时（aligned=True）：不返回，标签里已有「·盘中+X.XX%」，无需重复
+    #   - 盘前/延迟时：consistency 仍可能判定背离，但此时页面顶部已有「数据延迟」
+    #     黄色提示，再叠背离警告会重复噪音 → 强制置空
+    if pre_open or delayed:
+        divergence_hint = ""
+    elif consistency.get("aligned") is False:
+        divergence_hint = consistency.get("hint", "")
+    else:
+        divergence_hint = ""
+    return {"trend": trend, "tags": tags, "divergence_hint": divergence_hint}
 
 
 def _tone_trend(label: str) -> str:
