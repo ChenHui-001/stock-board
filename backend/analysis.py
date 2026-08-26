@@ -10,7 +10,7 @@ from typing import Any
 
 from . import llm
 from .scorecfg import get_weights
-from .utils import now, round2
+from .utils import describe_exc, now, round2
 
 log = logging.getLogger("analysis")
 
@@ -118,6 +118,26 @@ def build_payload(
         if bars_60 else None
     )
 
+    # 抽出 trend / vol_atr 复用：原来 analysis.py:165 写错成 `quote.price`（NameError，
+    # 几乎所有股都触发），同时下面 7 处 `detail.get("status", {}).get("trend", {})`
+    # 重复展开，现在统一走局部变量；vol_unit_atr 是 trend 的二级字段也要预解包，
+    # 否则 .get("vol_unit_atr", {}).get(...) 这种链式访问在 trend 缺失时不会报错，
+    # 但读起来非常啰嗦。
+    trend = detail.get("status", {}).get("trend") or {}
+    vol_atr = trend.get("vol_unit_atr") or {}
+    atr = trend.get("atr")
+
+    # ATR14 占股价% 是 build_payload 里唯一一处需要做除法的字段，
+    # 价格缺失 / ATR 异常等情况必须降级为 None，否则会再次发生类似 NameError
+    # 的隐藏 bug 把整次 AI 分析拖崩。try/except 兜底是该函数唯一的非 dict-get
+    # 算术点，单点保护足够，其他字段天然 None-safe。
+    atr_pct: float | None = None
+    if atr and price:
+        try:
+            atr_pct = round(float(atr) / float(price) * 100, 2)
+        except (TypeError, ValueError, ZeroDivisionError) as exc:
+            log.warning("build_payload: ATR14占股价%% 计算异常已降级 None: %s", describe_exc(exc))
+
     return {
         "基础数据": {
             "股票名称": q.get("name"),
@@ -155,24 +175,20 @@ def build_payload(
             "排列形态": detail.get("ma_summary", {}).get("arrangement"),
             "站上均线": detail.get("ma_summary", {}).get("above"),
             "跌破均线": detail.get("ma_summary", {}).get("below"),
-            "近5日涨跌幅%": detail.get("status", {}).get("trend", {}).get("chg_5d"),
-            "近20日涨跌幅%": detail.get("status", {}).get("trend", {}).get("chg_20d"),
-            "近60日涨跌幅%": detail.get("status", {}).get("trend", {}).get("chg_60d"),
+            "近5日涨跌幅%": trend.get("chg_5d"),
+            "近20日涨跌幅%": trend.get("chg_20d"),
+            "近60日涨跌幅%": trend.get("chg_60d"),
             # ATR(14)：把波动率绝对值与相对股价幅度喂给模型，
             # 让 LLM 判读"突破/跌破是否有效"时不再只盯着固定百分比
-            "ATR14": detail.get("status", {}).get("trend", {}).get("atr"),
-            "ATR14占股价%": (
-                round(detail["status"]["trend"]["atr"] / quote.price * 100, 2)
-                if detail.get("status", {}).get("trend", {}).get("atr") and quote.price
-                else None
-            ),
-            "近5日波幅_单位ATR": detail.get("status", {}).get("trend", {}).get("vol_unit_atr", {}).get("chg_5d"),
-            "近20日波幅_单位ATR": detail.get("status", {}).get("trend", {}).get("vol_unit_atr", {}).get("chg_20d"),
-            "近60日波幅_单位ATR": detail.get("status", {}).get("trend", {}).get("vol_unit_atr", {}).get("chg_60d"),
-            "是否ATR归一化判定": detail.get("status", {}).get("trend", {}).get("atr_normalized"),
+            "ATR14": atr,
+            "ATR14占股价%": atr_pct,
+            "近5日波幅_单位ATR": vol_atr.get("chg_5d"),
+            "近20日波幅_单位ATR": vol_atr.get("chg_20d"),
+            "近60日波幅_单位ATR": vol_atr.get("chg_60d"),
+            "是否ATR归一化判定": trend.get("atr_normalized"),
             # P1-5：量能验证（放量/缩量/平量）让 LLM 判读趋势可信度
-            "近1日量_5日均量比": detail.get("status", {}).get("trend", {}).get("vol_5d_ratio"),
-            "量能验证": detail.get("status", {}).get("trend", {}).get("volume_confirm"),
+            "近1日量_5日均量比": trend.get("vol_5d_ratio"),
+            "量能验证": trend.get("volume_confirm"),
             "近30日收盘序列": [round(b["close"], 2) for b in bars[-30:]],
             # 60 日收盘序列供模型观察中长期趋势形态（MA60 计算与区间位置需要足够样本）
             "近60日收盘序列": [round(b["close"], 2) for b in bars_60],
