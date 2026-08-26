@@ -308,6 +308,7 @@ def support_resistance(
         "state": "数据不足",
         "atr": round(atr, 4) if atr else None,
         "atr_breakout": "未触及",
+        "secondary_support": [], "secondary_resistance": [],
     }
     if not bars or not price:
         return result
@@ -340,6 +341,25 @@ def support_resistance(
     if above:
         v, tag = min(above, key=lambda x: x[0])
         result["resistance"], result["resistance_from"] = round(v, 2), tag
+
+    # P1-4：列出次要支撑/压力候选（最多 3 个），给用户看"下一个位置"
+    # 排除最近的那一对（已经在 support/resistance），按距离现价的远近排序
+    primary_support = result.get("support")
+    primary_resistance = result.get("resistance")
+    secondary_support: list[dict[str, Any]] = []
+    secondary_resistance: list[dict[str, Any]] = []
+    for v, tag in below:
+        v_r = round(v, 2)
+        if v_r != primary_support:
+            secondary_support.append({"price": v_r, "from": tag})
+    for v, tag in above:
+        v_r = round(v, 2)
+        if v_r != primary_resistance:
+            secondary_resistance.append({"price": v_r, "from": tag})
+    secondary_support.sort(key=lambda x: x["price"], reverse=True)
+    secondary_resistance.sort(key=lambda x: x["price"])
+    result["secondary_support"] = secondary_support[:3]
+    result["secondary_resistance"] = secondary_resistance[:3]
 
     # 区间位置判定：用同样的 ATR 容差决定「已突破」与「逼近」
     if price >= high20 + tol:
@@ -528,6 +548,12 @@ def summarize_flow(rows: Sequence[FlowDay], ref_date: str | None = None) -> dict
     xl_dominance = _compute_main_dominance(rows)
     streak_dir = "流入" if direction > 0 else ("流出" if direction < 0 else "持平")
 
+    # P1-6：streak_text 让前端副标题展示「连 3 日流入」等依据，
+    # 用户看到 5 档分级的连续性基础（不只是看一个标签）
+    streak_text = ""
+    if streak >= 2 and streak_dir in ("流入", "流出"):
+        streak_text = f"连 {streak} 日{streak_dir}"
+
     # 5 档状态分级：基于「金额方向 + 连续性 + 主力类型」三维评分。
     # fresh=False 时降级为「主力净流入（近5日）」语义，避免把昨日数据当「当日」。
     state, state_grade = _grade_flow_state(
@@ -556,6 +582,7 @@ def summarize_flow(rows: Sequence[FlowDay], ref_date: str | None = None) -> dict
         "state_grade": state_grade,
         "price_flow_note": price_flow_note,
         "xl_dominance": xl_dominance,
+        "streak_text": streak_text,
         "last_date": last_date,
         "fresh": fresh,
     }
@@ -592,6 +619,12 @@ def summarize_margin(rows: Sequence[MarginDay]) -> dict[str, Any]:
     else:
         sentiment = "两融情绪平稳"
 
+    # 两融数据 T+1 公布：用户看到的是"最新披露日"数据，追加日期后缀避免被误读为实时
+    last_date_short = (last.date or "")[:10]  # 形如 2026-08-25
+    sentiment_with_date = (
+        f"{sentiment}（截至 {last_date_short}）" if last_date_short else sentiment
+    )
+
     return {
         "available": True,
         "days": len(rows),
@@ -607,6 +640,8 @@ def summarize_margin(rows: Sequence[MarginDay]) -> dict[str, Any]:
         "rzrqye_last": last.rzrqye,
         "rzyezb_last": last.rzyezb,
         "sentiment": sentiment,
+        "sentiment_with_date": sentiment_with_date,
+        "last_date": last_date_short,
     }
 
 
@@ -688,12 +723,31 @@ def trend_state(
     else:
         overall = "震荡整理"
 
+    # P1-5：量能验证——近 1 日成交量 / 近 5 日均量
+    # 量比 < 0.7：缩量（趋势可信度低）；> 1.3：放量（趋势可信度高）
+    vol_5d_ratio: float | None = None
+    if len(bars) >= 6:
+        last_vol = bars[-1].volume or 0
+        avg_5d_vol = sum(b.volume or 0 for b in bars[-6:-1]) / 5
+        if avg_5d_vol > 0:
+            vol_5d_ratio = round(last_vol / avg_5d_vol, 2)
+    if vol_5d_ratio is None:
+        volume_confirm = ""
+    elif vol_5d_ratio >= 1.3:
+        volume_confirm = "放量"
+    elif vol_5d_ratio <= 0.7:
+        volume_confirm = "缩量"
+    else:
+        volume_confirm = "平量"
+
     return {
         "short": short, "mid": mid, "long": long_, "label": overall,
         "chg_5d": c5, "chg_20d": c20, "chg_60d": c60,
         "atr": round(atr, 4) if atr else None,
         "vol_unit_atr": vol_unit_atr,
         "atr_normalized": bool(atr and bars[-1].close),
+        "vol_5d_ratio": vol_5d_ratio,
+        "volume_confirm": volume_confirm,
     }
 
 
@@ -705,16 +759,50 @@ def build_status(
     ma_summary: dict[str, Any],
     sr: dict[str, Any],
     atr: float | None = None,
+    pre_open: bool = False,
+    delayed: bool = False,
 ) -> dict[str, Any]:
-    """需求 5.2.5：四类标准化状态标签。"""
+    """需求 5.2.5：四类标准化状态标签。
+
+    pre_open / delayed 两个开关用于统一控制标签输出：
+      - pre_open=True（盘前 9:30 之前）：所有数据类标签降级为"待开盘"，
+        避免用户看到"昨日数据当实时"的误导。
+      - delayed=True（数据源延迟/长假未更新）：所有数据类标签降级为"数据延迟"，
+        并用 warn 色提醒，避免静默误导。
+    两个开关同时为 True 时 pre_open 优先（盘前本身就是"没数据"状态）。
+    """
     trend = trend_state(bars, ma_summary, atr=atr)
-    tags = [
-        {"group": "趋势状态", "label": trend["label"], "tone": _tone_trend(trend["label"])},
-        {"group": "资金状态", "label": flow.get("state", "无数据"), "tone": _tone_flow(flow.get("state", ""))},
-        {"group": "支撑压力", "label": sr.get("state", "数据不足"), "tone": _tone_sr(sr.get("state", ""))},
-        {"group": "两融情绪", "label": margin.get("sentiment", "无两融数据"), "tone": _tone_margin(margin.get("sentiment", ""))},
-        {"group": "均线形态", "label": ma_summary.get("arrangement", "均线交织"), "tone": _tone_trend(ma_summary.get("arrangement", ""))},
-    ]
+    if pre_open:
+        # 盘前：所有数据类标签统一为"待开盘"，连带均线形态也置灰
+        placeholders = {
+            "趋势状态": "待开盘",
+            "资金状态": "待开盘",
+            "支撑压力": "待开盘",
+            "两融情绪": "待开盘",
+            "均线形态": "待开盘",
+        }
+        tags = [
+            {"group": g, "label": placeholders[g], "tone": "warn"}
+            for g in ("趋势状态", "资金状态", "支撑压力", "两融情绪", "均线形态")
+        ]
+    elif delayed:
+        # 数据延迟：标签保留原内容便于诊断，但 tone 全部置 warn 染色警示
+        tags = [
+            {"group": "趋势状态", "label": _trend_label_with_volume(trend), "tone": "warn"},
+            {"group": "资金状态", "label": flow.get("state", "无数据"), "tone": _tone_flow(flow.get("state", "")) or "warn"},
+            {"group": "支撑压力", "label": sr.get("state", "数据不足"), "tone": _tone_sr(sr.get("state", "")) or "warn"},
+            {"group": "两融情绪", "label": margin.get("sentiment_with_date", margin.get("sentiment", "无两融数据")), "tone": _tone_margin(margin.get("sentiment", "")) or "warn"},
+            {"group": "均线形态", "label": ma_summary.get("arrangement", "均线交织"), "tone": "warn"},
+        ]
+    else:
+        # 正常时段：两融情绪 label 加披露日期后缀，避免 T+1 延迟数据被误读为实时
+        tags = [
+            {"group": "趋势状态", "label": _trend_label_with_volume(trend), "tone": _tone_trend(trend["label"])},
+            {"group": "资金状态", "label": flow.get("state", "无数据"), "tone": _tone_flow(flow.get("state", ""))},
+            {"group": "支撑压力", "label": sr.get("state", "数据不足"), "tone": _tone_sr(sr.get("state", ""))},
+            {"group": "两融情绪", "label": margin.get("sentiment_with_date", margin.get("sentiment", "无两融数据")), "tone": _tone_margin(margin.get("sentiment", ""))},
+            {"group": "均线形态", "label": ma_summary.get("arrangement", "均线交织"), "tone": _tone_trend(ma_summary.get("arrangement", ""))},
+        ]
     if quote.status != "normal" and quote.status_text:
         tags.insert(0, {"group": "交易状态", "label": quote.status_text, "tone": "warn"})
     return {"trend": trend, "tags": tags}
@@ -726,6 +814,20 @@ def _tone_trend(label: str) -> str:
     if label in ("空头趋势", "短期下跌", "空头排列", "短期空头"):
         return "down"
     return "flat"
+
+
+def _trend_label_with_volume(trend: dict[str, Any]) -> str:
+    """P1-5：把量能验证结果拼到趋势 label 后面，让用户看到「短期上涨（缩量）」等可信度提示。
+
+    震荡/数据不足时不加后缀，避免噪音。
+    """
+    label = trend.get("label", "")
+    if not label or label in ("震荡整理", "数据不足"):
+        return label
+    vc = trend.get("volume_confirm", "")
+    if vc:
+        return f"{label}（{vc}）"
+    return label
 
 
 def _tone_flow(label: str) -> str:

@@ -184,6 +184,16 @@
   }
 
   // ---------------------------------------------------------- 状态标签
+  function _formatSecondaryList(list) {
+    // 把后端给定的 [{price, from}] 列表渲染为「X.XX (来源) / Y.YY (来源)」，
+    // 最多 3 项。空数组返回空格占位。
+    if (!Array.isArray(list) || list.length === 0) return U.NBSP;
+    return list.map(function (item) {
+      const p = U.price(item.price);
+      return p + (item.from ? ' (' + item.from + ')' : '');
+    }).join(' / ');
+  }
+
   function renderStatus(d) {
     const wrap = U.el('div');
     const tags = U.el('div', 'status-tags');
@@ -223,6 +233,9 @@
       // atr_breakout 用文字描述当前与区间的位置关系
       ['ATR(14)', U.isNum(sr.atr) ? sr.atr.toFixed(2) + ' 元' : U.NBSP],
       ['ATR突破判定', (sr.atr_breakout || '—') + (U.isNum(sr.atr) ? '（容差 ' + (sr.atr / 2).toFixed(2) + ' 元）' : ''), breakTone],
+      // P1-4：次要支撑/压力，让用户看到"下一个位置"
+      ['次要支撑', _formatSecondaryList(sr.secondary_support), ''],
+      ['次要压力', _formatSecondaryList(sr.secondary_resistance), ''],
       ['近5日涨跌', U.pct(d.status.trend.chg_5d)],
       ['近20日涨跌', U.pct(d.status.trend.chg_20d)],
       ['近60日涨跌', U.pct(d.status.trend.chg_60d)],
@@ -288,10 +301,11 @@
   function flowSubtitle(d) {
     const s = d.fund_flow.summary || {};
     if (!s.available) return '暂无资金流向数据';
-    // 资金区副标题：把「价量背离」与「主力类型」这两个专业操盘信号展示出来，
-    // 让用户一眼看到当前资金动作的性质——高位诱多/低位吸筹/机构主导等。
+    // 资金区副标题：把「价量背离」「主力类型」「连涨天数」等专业操盘信号展示出来，
+    // 让用户一眼看到当前资金动作的性质——高位诱多/低位吸筹/机构主导/连涨天数等。
     // 数据缺失时跳过该片段，保持简短可读。
     const parts = [s.days + ' 个交易日', s.trend, s.state];
+    if (s.streak_text) parts.push(s.streak_text);
     if (s.price_flow_note) parts.push(s.price_flow_note);
     if (s.xl_dominance) parts.push(s.xl_dominance);
     return parts.join(' · ');

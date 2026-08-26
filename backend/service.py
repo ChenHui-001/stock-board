@@ -414,8 +414,16 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     # summarize_flow 据此降级判定并标注，避免把昨日数据当「当日」
     flow_summary = indicators.summarize_flow(flow_pack["rows"], ref_date=last_bar_date)
     margin_summary = indicators.summarize_margin(margin_pack["rows"])
+    # P0-1/P0-3：盘前 9:30 之前所有数据类标签统一降级为"待开盘"；
+    # P0-3 数据延迟时给所有标签 warn 染色避免静默误导。
+    # 两者都先暂存 quote_dict，再把最终延迟判定（基于 last_bar_date）传进 build_status
+    delayed_for_status = data_is_stale(last_bar_date) or kline_is_stale(last_bar_date)
+    pre_open_for_status = session_state() == "pre_open"
     status = indicators.build_status(
-        quote, bars, flow_summary, margin_summary, ma_summary, sr, atr=last_atr,
+        quote, bars, flow_summary, margin_summary, ma_summary, sr,
+        atr=last_atr,
+        pre_open=pre_open_for_status,
+        delayed=delayed_for_status,
     )
     osc = indicators.compute_oscillators(bars)
 

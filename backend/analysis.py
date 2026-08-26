@@ -170,6 +170,9 @@ def build_payload(
             "近20日波幅_单位ATR": detail.get("status", {}).get("trend", {}).get("vol_unit_atr", {}).get("chg_20d"),
             "近60日波幅_单位ATR": detail.get("status", {}).get("trend", {}).get("vol_unit_atr", {}).get("chg_60d"),
             "是否ATR归一化判定": detail.get("status", {}).get("trend", {}).get("atr_normalized"),
+            # P1-5：量能验证（放量/缩量/平量）让 LLM 判读趋势可信度
+            "近1日量_5日均量比": detail.get("status", {}).get("trend", {}).get("vol_5d_ratio"),
+            "量能验证": detail.get("status", {}).get("trend", {}).get("volume_confirm"),
             "近30日收盘序列": [round(b["close"], 2) for b in bars[-30:]],
             # 60 日收盘序列供模型观察中长期趋势形态（MA60 计算与区间位置需要足够样本）
             "近60日收盘序列": [round(b["close"], 2) for b in bars_60],
@@ -183,7 +186,8 @@ def build_payload(
         "资金数据_近30日": {
             **{k: v for k, v in detail.get("fund_flow", {}).get("summary", {}).items()
                if k in ("trend", "state", "inflow_days", "outflow_days",
-                        "streak", "streak_dir", "state_grade",
+                        "streak", "streak_dir", "streak_text",
+                        "state_grade",
                         "price_flow_note", "xl_dominance")},
             # 价量背离 + 主力类型是专业操盘最看重的两个信号，单独抽出以便 LLM 优先关注
             "价量背离信号": detail.get("fund_flow", {}).get("summary", {}).get("price_flow_note"),
@@ -208,6 +212,9 @@ def build_payload(
         },
         "两融数据_近30日": {
             "情绪": detail.get("margin", {}).get("summary", {}).get("sentiment"),
+            # 两融数据 T+1 公布，明确告知 LLM 数据日期，避免误读为实时
+            "情绪含披露日期": detail.get("margin", {}).get("summary", {}).get("sentiment_with_date"),
+            "最新披露日期": detail.get("margin", {}).get("summary", {}).get("last_date"),
             "最新融资余额_亿元": yi(detail.get("margin", {}).get("summary", {}).get("rzye_last")),
             "融资余额30日变动%": detail.get("margin", {}).get("summary", {}).get("rz_change_pct"),
             "融资净买入合计_亿元": yi(detail.get("margin", {}).get("summary", {}).get("rz_net_total")),

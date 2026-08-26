@@ -1781,6 +1781,135 @@ def test_indicators() -> None:
           and t_noatr["vol_unit_atr"]["chg_5d"] is None,
           f"atr_norm={t_noatr['atr_normalized']}, atr={t_noatr['atr']}")
 
+    # --------------------- P0/P1: 状态标签准确性 + 时效性 ---------------------
+
+    # P1-4：支撑压力次要支撑/压力列表
+    sr_secondary = support_resistance(sr_breach, 11.5, {}, atr=1.0)
+    check("次要支撑压力: 字段存在",
+          isinstance(sr_secondary.get("secondary_support"), list)
+          and isinstance(sr_secondary.get("secondary_resistance"), list),
+          str({k: sr_secondary.get(k) for k in ("secondary_support", "secondary_resistance")}))
+
+    # P1-5：量能验证（缩量/放量/平量）
+    from backend.indicators import trend_state as _trend_state
+    flat_bars2 = [
+        Bar(date=f"2026-03-{i:02d}", open=20.0, close=20.0, high=20.05, low=19.95, volume=100.0)
+        for i in range(1, 67)
+    ]
+    for i in range(5):
+        flat_bars2[-(i + 1)].close = 20.0 + 0.024 * (5 - i)
+    # 平量：最后一天 volume=100（与近 5 日均量相等）
+    t_vol_flat = _trend_state(flat_bars2, {"arrangement": "均线交织", "above_count": 0}, atr=None)
+    check("量能验证: 平量(volume_ratio≈1)",
+          t_vol_flat["volume_confirm"] == "平量" and t_vol_flat["vol_5d_ratio"] is not None,
+          f"vc={t_vol_flat['volume_confirm']}, ratio={t_vol_flat['vol_5d_ratio']}")
+
+    # 放量：最后一天 volume=300
+    flat_bars3 = [Bar(date=b.date, open=b.open, close=b.close, high=b.high, low=b.low, volume=b.volume)
+                  for b in flat_bars2]
+    flat_bars3[-1].volume = 300.0
+    t_vol_up = _trend_state(flat_bars3, {"arrangement": "均线交织", "above_count": 0}, atr=None)
+    check("量能验证: 放量(volume_ratio>=1.3)",
+          t_vol_up["volume_confirm"] == "放量" and t_vol_up["vol_5d_ratio"] >= 1.3,
+          f"vc={t_vol_up['volume_confirm']}, ratio={t_vol_up['vol_5d_ratio']}")
+
+    # 缩量：最后一天 volume=10
+    flat_bars4 = [Bar(date=b.date, open=b.open, close=b.close, high=b.high, low=b.low, volume=b.volume)
+                  for b in flat_bars2]
+    flat_bars4[-1].volume = 10.0
+    t_vol_down = _trend_state(flat_bars4, {"arrangement": "均线交织", "above_count": 0}, atr=None)
+    check("量能验证: 缩量(volume_ratio<=0.7)",
+          t_vol_down["volume_confirm"] == "缩量" and t_vol_down["vol_5d_ratio"] <= 0.7,
+          f"vc={t_vol_down['volume_confirm']}, ratio={t_vol_down['vol_5d_ratio']}")
+
+    # P0-2：两融 sentiment_with_date 带披露日期
+    from backend.indicators import summarize_margin
+    from backend.providers.base import MarginDay
+    margin_rows = [
+        MarginDay(date="2026-08-20", rzye=1500000000.0, rqye=10000000.0),
+        MarginDay(date="2026-08-21", rzye=1550000000.0, rqye=11000000.0),
+        MarginDay(date="2026-08-25", rzye=1600000000.0, rqye=12000000.0),
+    ]
+    margin_sum = summarize_margin(margin_rows)
+    check("两融披露日期: sentiment_with_date含日期后缀",
+          "2026-08-25" in margin_sum["sentiment_with_date"],
+          margin_sum["sentiment_with_date"])
+    check("两融披露日期: sentiment本身不含日期",
+          "2026" not in margin_sum["sentiment"],
+          margin_sum["sentiment"])
+    check("两融披露日期: last_date字段",
+          margin_sum["last_date"] == "2026-08-25", str(margin_sum["last_date"]))
+
+    # P0-1/P0-3：build_status 三种模式
+    from backend.indicators import build_status
+    from backend.providers.base import Quote
+
+    # 准备一份能产生正常标签的 quote+bars+summary
+    long_bars = [
+        Bar(date=f"2026-06-{i:02d}", open=10 + i * 0.1, close=10 + i * 0.1 + 0.05,
+            high=10 + i * 0.1 + 0.1, low=10 + i * 0.1 - 0.05, volume=100.0)
+        for i in range(1, 31)
+    ]
+    long_bars = [
+        Bar(date=f"2026-{m:02d}-{d:02d}", open=10 + i * 0.1, close=10 + i * 0.1 + 0.05,
+            high=10 + i * 0.1 + 0.1, low=10 + i * 0.1 - 0.05, volume=100.0)
+        for i, (m, d) in enumerate(((6, d) for d in range(1, 31)), 1)
+    ]
+    quote = Quote(code="600000", market="SH", price=11.0, prev_close=10.95, change_pct=0.46,
+                  status="normal")
+    trend_normal = trend_state(long_bars, {"arrangement": "均线交织", "above_count": 2})
+    flow_normal = {"state": "主力净流入", "available": True}
+    sr_normal = {"state": "区间中枢震荡"}
+    margin_normal = {"sentiment": "两融情绪平稳",
+                     "sentiment_with_date": "两融情绪平稳（截至 2026-08-25）"}
+
+    # 正常模式
+    st_normal = build_status(quote, long_bars, flow_normal, margin_normal,
+                              {"arrangement": "均线交织"}, sr_normal)
+    tag_groups = {t["group"]: t for t in st_normal["tags"]}
+    check("build_status: 正常模式 两融带披露日期",
+          "2026-08-25" in tag_groups["两融情绪"]["label"],
+          tag_groups["两融情绪"]["label"])
+    check("build_status: 正常模式 趋势无warn染色",
+          tag_groups["趋势状态"]["tone"] != "warn",
+          str(tag_groups["趋势状态"]))
+
+    # 盘前模式
+    st_pre = build_status(quote, long_bars, flow_normal, margin_normal,
+                           {"arrangement": "均线交织"}, sr_normal, pre_open=True)
+    pre_groups = {t["group"]: t for t in st_pre["tags"]}
+    check("build_status: 盘前模式 所有数据类标签为'待开盘'",
+          all(pre_groups[g]["label"] == "待开盘" for g in
+              ("趋势状态", "资金状态", "支撑压力", "两融情绪", "均线形态")),
+          str({g: pre_groups[g]["label"] for g in pre_groups}))
+    check("build_status: 盘前模式 全部warn染色",
+          all(pre_groups[g]["tone"] == "warn" for g in
+              ("趋势状态", "资金状态", "支撑压力", "两融情绪", "均线形态")),
+          str({g: pre_groups[g]["tone"] for g in pre_groups}))
+
+    # 延迟模式
+    st_delayed = build_status(quote, long_bars, flow_normal, margin_normal,
+                               {"arrangement": "均线交织"}, sr_normal, delayed=True)
+    del_groups = {t["group"]: t for t in st_delayed["tags"]}
+    check("build_status: 延迟模式 趋势warn染色",
+          del_groups["趋势状态"]["tone"] == "warn",
+          str(del_groups["趋势状态"]))
+    check("build_status: 延迟模式 两融保留日期",
+          "2026-08-25" in del_groups["两融情绪"]["label"],
+          del_groups["两融情绪"]["label"])
+
+    # P1-6：streak_text 出现在 summary 里
+    # flow_strong_in 实际是连续 11 日流入，这里验证格式正确（连 N 日流入/流出）
+    flow_with_streak = summarize_flow(flow_strong_in, ref_date="2026-08-18")
+    check("资金 streak_text: 连N日流入格式",
+          flow_with_streak["streak_text"] == "连 11 日流入",
+          str(flow_with_streak.get("streak_text")))
+    # 反向：连出场景
+    flow_with_streak_out = summarize_flow(flow_strong_out, ref_date="2026-08-18")
+    check("资金 streak_text: 连N日流出格式",
+          flow_with_streak_out["streak_text"] == "连 11 日流出",
+          str(flow_with_streak_out.get("streak_text")))
+
 
 # ------------------------------------------------------------------ 数据源装配（不触网）
 def test_registry() -> None:
