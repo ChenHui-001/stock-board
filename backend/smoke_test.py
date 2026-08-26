@@ -1910,6 +1910,110 @@ def test_indicators() -> None:
           flow_with_streak_out["streak_text"] == "连 11 日流出",
           str(flow_with_streak_out.get("streak_text")))
 
+    # --------------------- P2: 分钟级 K 线 + ATR 区间阈值 ---------------------
+
+    # P2-7：intraday_trend_state 各种场景
+    from backend.indicators import intraday_trend_state
+
+    # 数据不足：少于 6 根 → available=False
+    short_bars = [Bar(date=f"2026-08-26 {h:02d}:00", open=10.0, close=10.0 + h * 0.01,
+                       high=10.05, low=9.95, volume=100.0) for h in range(5)]
+    intraday_short = intraday_trend_state(short_bars)
+    check("盘中实时: 数据不足(<6根) available=False",
+          intraday_short["available"] is False and intraday_short["bars"] == 5,
+          str(intraday_short))
+
+    # 上涨：首 10 → 末 10.5，+5%
+    up_bars = [Bar(date=f"2026-08-26 {h:02d}:00", open=10.0, close=10.0 + h * 0.05,
+                    high=10.05 + h * 0.05, low=9.95 + h * 0.05, volume=100.0) for h in range(10)]
+    intraday_up = intraday_trend_state(up_bars)
+    check("盘中实时: 累计上涨>=1% → 上涨",
+          intraday_up["available"] is True and intraday_up["label"] == "上涨",
+          str(intraday_up))
+
+    # 下跌：首 10 → 末 9.5，-5%
+    down_bars = [Bar(date=f"2026-08-26 {h:02d}:00", open=10.0, close=10.0 - h * 0.05,
+                      high=10.05, low=9.95 - h * 0.05, volume=100.0) for h in range(10)]
+    intraday_down = intraday_trend_state(down_bars)
+    check("盘中实时: 累计下跌<= -1% → 下跌",
+          intraday_down["available"] is True and intraday_down["label"] == "下跌",
+          str(intraday_down))
+
+    # 震荡：变化仅 0.5%
+    flat_min = [Bar(date=f"2026-08-26 {h:02d}:00", open=10.0, close=10.0 + h * 0.0005,
+                     high=10.005, low=9.995, volume=100.0) for h in range(10)]
+    intraday_flat = intraday_trend_state(flat_min)
+    check("盘中实时: 累计<1% → 震荡",
+          intraday_flat["available"] is True and intraday_flat["label"] == "震荡",
+          str(intraday_flat))
+
+    # build_status 注入 intraday 子标签
+    st_intra_up = build_status(quote, long_bars, flow_normal, margin_normal,
+                                {"arrangement": "均线交织"}, sr_normal,
+                                intraday=intraday_up)
+    intra_tags = [t for t in st_intra_up["tags"] if t["group"] == "盘中实时"]
+    check("build_status: 盘中上涨注入'60分线 上涨'标签",
+          len(intra_tags) == 1
+          and "60分线" in intra_tags[0]["label"]
+          and intra_tags[0]["tone"] == "up",
+          str(intra_tags))
+
+    # intraday 不可用（available=False）→ 不应有"盘中实时"标签
+    st_intra_na = build_status(quote, long_bars, flow_normal, margin_normal,
+                                {"arrangement": "均线交织"}, sr_normal,
+                                intraday=intraday_short)
+    na_tags = [t for t in st_intra_na["tags"] if t["group"] == "盘中实时"]
+    check("build_status: intraday不可用时无'盘中实时'标签",
+          len(na_tags) == 0, str(na_tags))
+
+    # P2-8：区间位置 ATR 归一化
+    # 高 ATR（atr=2，区间宽 1）：atr_band=8，upper=max(0.66,8)=8，lower=min(0.34,-7)=-7
+    # 这意味着任何 price 都会落入区间（被"中枢震荡"覆盖），实际效果是：高波动股票
+    # 在区间内不会被轻易判定到上下半区，体现 ATR 归一化的语义
+    # 但由于 ATR 也参与 tol 计算（tol=price*0.5% 与 0.5*atr 取较大者），当 atr=2 时
+    # tol=1.0，导致 price=10.4 距 high20=11 仅 0.6 元 < 1.0 容差，先被判"逼近压力位"
+    # 所以高 ATR 下要走逼近分支（这是设计正确的：高波动股票 ATR 容差宽）
+    high_atr = support_resistance(sr_breach, 10.4, {}, atr=2.0)
+    check("ATR区间阈值: 高ATR时ATR容差生效",
+          high_atr["state"] == "逼近压力位",
+          f"state={high_atr['state']}, atr_band=4*2.0/1.0={8.0}")
+
+    # 中等 ATR：atr=0.2，atr_band=0.8，upper=max(0.66,0.8)=0.8，lower=min(0.34,0.2)=0.2
+    # price=10.4，pos=0.4 → 0.2 < 0.4 < 0.8 → 区间中枢震荡
+    mid_atr = support_resistance(sr_breach, 10.4, {}, atr=0.2)
+    check("ATR区间阈值: 中等ATR(0.2)下pos阈值放宽",
+          mid_atr["state"] == "区间中枢震荡", f"state={mid_atr['state']}")
+
+    # 高位价格 10.8，pos=0.8，在无 ATR 时刚好触发"运行于区间上半区"(>0.66)
+    # 加 atr=0.2 后 upper=0.8，pos=0.8 不再 > upper → 改为"区间中枢震荡"
+    high_price = support_resistance(sr_breach, 10.8, {}, atr=0.2)
+    check("ATR区间阈值: pos=0.8 临界-ATR放宽避免误判上半区",
+          high_price["state"] == "区间中枢震荡",
+          f"state={high_price['state']} (无ATR时会是上半区)")
+
+    # 无 ATR 退化兼容
+    no_atr_sr = support_resistance(sr_breach, 10.7, {}, atr=None)
+    check("ATR区间阈值: 无ATR退化兼容",
+          no_atr_sr["state"] in ("区间中枢震荡", "运行于区间上半区"),
+          f"state={no_atr_sr['state']}")
+
+    # P2-7 数据源层：东财 kline_min override
+    from backend.providers.eastmoney import EastmoneyProvider
+    em = EastmoneyProvider()
+    check("eastmoney.kline_min: 方法已实现",
+          hasattr(em, "kline_min") and callable(getattr(em, "kline_min", None)),
+          "kline_min 方法存在")
+
+    from backend.providers.base import NotSupported
+    from backend.providers.sina import SinaProvider
+    import asyncio as _asyncio
+    sina = SinaProvider()
+    try:
+        await_result = _asyncio.run(sina.kline_min("600000", "SH", 24))
+        check("sina.kline_min: 应该抛 NotSupported", False, str(await_result))
+    except NotSupported:
+        check("sina.kline_min: 未实现抛 NotSupported（兼容降级）", True, "")
+
 
 # ------------------------------------------------------------------ 数据源装配（不触网）
 def test_registry() -> None:

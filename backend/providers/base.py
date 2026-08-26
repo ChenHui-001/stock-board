@@ -299,6 +299,11 @@ class Provider:
     async def kline(self, code: str, market: str, limit: int) -> list[Bar]:
         raise NotSupported
 
+    async def kline_min(self, code: str, market: str, limit: int, klt: int = 60) -> list[Bar]:
+        """分钟级 K 线（默认 60 分钟）。多数数据源不提供，调用方需捕获 NotSupported
+        做降级。仅 eastmoney 等少数源支持。"""
+        raise NotSupported
+
     async def fund_flow(self, code: str, market: str, days: int) -> list[FlowDay]:
         raise NotSupported
 

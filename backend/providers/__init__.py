@@ -264,6 +264,16 @@ class Registry:
         bars, src = await self._first("kline", lambda p: p.kline(code, market, limit))
         return bars, src
 
+    async def kline_min(self, code: str, market: str, limit: int,
+                        klt: int = 60) -> tuple[list[Bar], str]:
+        """分钟 K 线：仅支持的数据源返回。NotSupported 时返回 ([], "") 让上层降级。"""
+        try:
+            bars, src = await self._first(
+                "kline_min", lambda p: p.kline_min(code, market, limit, klt))
+            return bars, src
+        except NotSupported:
+            return [], ""
+
     async def fund_flow(self, code: str, market: str, days: int) -> tuple[list[FlowDay], str]:
         rows, src = await self._first(
             "fund_flow", lambda p: p.fund_flow(code, market, days), empty_ok=True

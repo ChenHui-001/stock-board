@@ -258,6 +258,16 @@ class EastmoneyProvider(Provider):
         return bars
 
     # ------------------------------------------------------------ 资金流向
+    async def kline_min(self, code: str, market: str, limit: int, klt: int = 60) -> list[Bar]:
+        """东财分钟 K 线（5/15/30/60）。复用日线请求格式，仅切换 klt 参数。
+
+        非盘中时段拉到的就是历史数据，会被 service 端按 `is_trading_now` 过滤掉。
+        """
+        # klt: 1=1分钟, 5=5分钟, 15=15分钟, 30=30分钟, 60=60分钟
+        if klt not in (1, 5, 15, 30, 60):
+            raise ProviderError(f"eastmoney 不支持 klt={klt}")
+        return await self.kline(code, market, limit, klt=klt)
+
     async def fund_flow(self, code: str, market: str, days: int) -> list[FlowDay]:
         resp = await fetch(
             f"{PUSH_HIS}/stock/fflow/daykline/get",

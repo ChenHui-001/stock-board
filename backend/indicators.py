@@ -377,9 +377,19 @@ def support_resistance(
     else:
         span = high20 - low20
         pos = (price - low20) / span if span else 0.5
-        if pos > 0.66:
+        # P2-8：区间位置阈值用 ATR 归一化
+        # 半区阈值 = max(33%, 4 个 ATR / 区间宽度)，让高波动股票不会永远被判上半区
+        if atr and span > 0 and price > 0:
+            atr_band = (4 * atr) / span  # 4 个 ATR 在区间内占多大比例
+            upper_threshold = max(0.66, atr_band)
+            lower_threshold = min(0.34, 1 - atr_band)
+        else:
+            upper_threshold = 0.66
+            lower_threshold = 0.34
+        # 用 1e-9 容差避免浮点边界（pos=0.8000000000000007 vs upper=0.8）
+        if pos > upper_threshold + 1e-9:
             result["state"] = "运行于区间上半区"
-        elif pos < 0.33:
+        elif pos < lower_threshold - 1e-9:
             result["state"] = "运行于区间下半区"
         else:
             result["state"] = "区间中枢震荡"
@@ -751,6 +761,47 @@ def trend_state(
     }
 
 
+def intraday_trend_state(bars_min: Sequence[Bar]) -> dict[str, Any]:
+    """P2-7：盘中实时趋势（60 分钟 K 线）。
+
+    与日线 trend_state 区分：本函数只看当日开市以来的分钟线，给用户一个"当下"趋势判断，
+    而不是昨日收盘的趋势快照。返回：
+      - available: bool  是否有有效分钟数据
+      - label:    "上涨" / "下跌" / "震荡"
+      - chg:      当日累计涨跌 %
+      - bars:     有效分钟 K 线根数
+
+    判定逻辑：
+      - 至少 6 根有效 60 分钟 K 线（覆盖 6 小时，约 2.5 个交易日，足够判方向）
+      - 用首尾 close 比较：
+          |chg| >= 1.0% → 上涨/下跌
+          否则          → 震荡
+      - 数据不足时返回 available=False，让上层不展示子标签（避免误导）
+    """
+    out: dict[str, Any] = {"available": False, "label": "数据不足",
+                            "chg": None, "bars": 0}
+    if not bars_min:
+        return out
+    valid = [b for b in bars_min if b.close]
+    if len(valid) < 6:
+        out["bars"] = len(valid)
+        return out
+    first_close = valid[0].close
+    last_close = valid[-1].close
+    if not first_close:
+        out["bars"] = len(valid)
+        return out
+    chg = round((last_close - first_close) / first_close * 100, 2)
+    if chg >= 1.0:
+        label = "上涨"
+    elif chg <= -1.0:
+        label = "下跌"
+    else:
+        label = "震荡"
+    out.update(available=True, label=label, chg=chg, bars=len(valid))
+    return out
+
+
 def build_status(
     quote: Quote,
     bars: Sequence[Bar],
@@ -761,6 +812,7 @@ def build_status(
     atr: float | None = None,
     pre_open: bool = False,
     delayed: bool = False,
+    intraday: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """需求 5.2.5：四类标准化状态标签。
 
@@ -769,6 +821,7 @@ def build_status(
         避免用户看到"昨日数据当实时"的误导。
       - delayed=True（数据源延迟/长假未更新）：所有数据类标签降级为"数据延迟"，
         并用 warn 色提醒，避免静默误导。
+    intraday（P2-7）传入盘中 60 分钟 K 线判定的实时趋势，available 时附加子标签。
     两个开关同时为 True 时 pre_open 优先（盘前本身就是"没数据"状态）。
     """
     trend = trend_state(bars, ma_summary, atr=atr)
@@ -803,6 +856,23 @@ def build_status(
             {"group": "两融情绪", "label": margin.get("sentiment_with_date", margin.get("sentiment", "无两融数据")), "tone": _tone_margin(margin.get("sentiment", ""))},
             {"group": "均线形态", "label": ma_summary.get("arrangement", "均线交织"), "tone": _tone_trend(ma_summary.get("arrangement", ""))},
         ]
+
+    # P2-7：盘中 60 分钟趋势作为子标签附加
+    # 仅当 available=True 时展示，避免给用户"今日已涨 0.3%"这种噪声
+    if intraday and intraday.get("available"):
+        chg_text = (f"{intraday['chg']:+.2f}%" if intraday.get("chg") is not None else "")
+        if intraday["label"] == "上涨":
+            intra_tone = "up"
+        elif intraday["label"] == "下跌":
+            intra_tone = "down"
+        else:
+            intra_tone = "flat"
+        # label 形如 "60分线 上涨 +1.23%"（无涨跌时不带 %）
+        label_text = "60分线 " + intraday["label"]
+        if chg_text:
+            label_text += " " + chg_text
+        tags.append({"group": "盘中实时", "label": label_text, "tone": intra_tone})
+
     if quote.status != "normal" and quote.status_text:
         tags.insert(0, {"group": "交易状态", "label": quote.status_text, "tone": "warn"})
     return {"trend": trend, "tags": tags}

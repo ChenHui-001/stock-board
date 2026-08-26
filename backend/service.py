@@ -322,6 +322,26 @@ async def _kline(code: str, market: str, force: bool) -> dict[str, Any]:
     return await cached_pack(f"kline:{code}.{market}", history_ttl(), loader, force)
 
 
+def _kline_min_ttl() -> float:
+    """P2-7：分钟 K 线缓存 TTL。盘中 30s 实时，盘后 10 分钟历史数据基本不变。"""
+    return 30.0 if is_trading_now() else 600.0
+
+
+async def _kline_min(code: str, market: str, force: bool) -> dict[str, Any]:
+    """60 分钟 K 线（最近 24 根 = 10 个交易日 × 4 时段），仅盘中拉取时延展到位。
+
+    非盘中时段仍可拉（东财保留历史分钟数据），用于给用户看"今日累计走势"。
+    """
+    async def loader() -> Any:
+        bars, src = await registry().kline_min(code, market, 24, klt=60)
+        return {"bars": bars, "source": src}
+
+    return await cached_pack(
+        f"kline60:{code}.{market}", _kline_min_ttl(), loader, force,
+        empty={"bars": [], "source": ""},
+    )
+
+
 async def _flow(code: str, market: str, force: bool) -> dict[str, Any]:
     async def loader() -> Any:
         rows, src = await registry().fund_flow(code, market, settings.FLOW_DAYS)
@@ -381,6 +401,8 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     tasks = {
         "quote": asyncio.create_task(get_quote(code, market, force=force)),
         "kline": asyncio.create_task(_kline(code, market, force)),
+        # P2-7：盘中拉取 60 分钟 K 线；任一源失败即降级返回空 bars
+        "kline_min": asyncio.create_task(_kline_min(code, market, force)),
         "flow": asyncio.create_task(_flow(code, market, force)),
         "margin": asyncio.create_task(_margin(code, market, force)),
         "financials": asyncio.create_task(_financials(code, market, force)),
@@ -398,6 +420,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
 
     quote = tasks["quote"].result()
     kline_pack = tasks["kline"].result()
+    kline_min_pack = tasks["kline_min"].result()
     flow_pack = tasks["flow"].result()
     margin_pack = tasks["margin"].result()
     financial_pack = tasks["financials"].result()
@@ -409,6 +432,8 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     # ATR(14)：把每根 Bar.atr 写满，返回最后一根的 ATR 给支撑压力/趋势判定用
     last_atr = indicators.decorate_bars_with_atr(bars)
     sr = indicators.support_resistance(bars, quote.price, ma_values, atr=last_atr)
+    # P2-7：盘中 60 分钟趋势（数据不足/源不支持时 available=False）
+    intraday = indicators.intraday_trend_state(kline_min_pack.get("bars") or [])
     last_bar_date = bars[-1].date if bars else ""
     # ref_date=K线最新日期：资金流向当日数据未发布（盘中/16点前）时
     # summarize_flow 据此降级判定并标注，避免把昨日数据当「当日」
@@ -424,6 +449,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
         atr=last_atr,
         pre_open=pre_open_for_status,
         delayed=delayed_for_status,
+        intraday=intraday,
     )
     osc = indicators.compute_oscillators(bars)
 
@@ -481,6 +507,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
         "sources": {
             "quote": quote.source,
             "kline": kline_pack.get("source", ""),
+            "kline_min": kline_min_pack.get("source", ""),
             "fund_flow": flow_pack.get("source", ""),
             "margin": margin_pack.get("source", ""),
             "financials": financial_pack.get("source", ""),
@@ -490,6 +517,8 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
                 if pack.get("stale")
             ],
         },
+        # P2-7：60 分钟 K 线原始 bars（用于前端画当日实时走势）
+        "kline_min": [asdict(b) for b in (kline_min_pack.get("bars") or [])[-24:]],
         "session": session_info(),
     }
 
