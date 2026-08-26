@@ -76,11 +76,19 @@
     });
   }
 
-  /** 收盘价 + 四条均线 */
+  /** 收盘价 + 四条均线 + 量能柱（底部 20% 高度） */
   function maChart(dom, bars, maSeries) {
     if (!bars || !bars.length) return null;
     const dates = bars.map(function (b) { return b.date; });
     const closes = bars.map(function (b) { return b.close; });
+    const volumes = bars.map(function (b) { return b.volume || 0; });
+
+    // 缩量/放量颜色：与涨跌色一致（中国 A 股惯例）
+    const volColors = bars.map(function (b, i) {
+      if (i === 0) return '#6b7688';
+      const prev = closes[i - 1];
+      return b.close >= prev ? UP : DOWN;
+    });
 
     const series = [{
       name: '收盘价',
@@ -118,20 +126,64 @@
       });
     });
 
+    // 量能柱：缩量/放量颜色与涨跌色一致；底部 20% 高度不影响主图阅读
+    series.push({
+      name: '成交量',
+      type: 'bar',
+      data: volumes,
+      itemStyle: { color: function (p) { return volColors[p.dataIndex] || '#6b7688'; } },
+      barMaxWidth: 10,
+      xAxisIndex: 1,
+      yAxisIndex: 1,
+      z: 1
+    });
+
     const option = baseOption();
-    option.xAxis.data = dates;
+    option.xAxis = [{
+      type: 'category',
+      gridIndex: 0,
+      data: dates,
+      boundaryGap: false,
+      axisLine: { lineStyle: { color: GRID_LINE } },
+      axisLabel: { color: TEXT_FAINT, fontSize: 11 },
+      axisTick: { show: false }
+    }, {
+      type: 'category',
+      gridIndex: 1,
+      data: dates,
+      boundaryGap: false,
+      axisLine: { lineStyle: { color: GRID_LINE } },
+      axisLabel: { show: false },
+      axisTick: { show: false }
+    }];
+    option.yAxis = [{
+      type: 'value', scale: true, gridIndex: 0,
+      axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { lineStyle: { color: GRID_LINE, type: 'dashed' } },
+      axisLabel: { color: TEXT_FAINT, fontSize: 11 }
+    }, {
+      type: 'value', gridIndex: 1,
+      axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { show: false },
+      axisLabel: { show: false }
+    }];
+    option.grid = [
+      { left: 58, right: 58, top: 34, height: '62%' },
+      { left: 58, right: 58, top: '78%', height: '14%' }
+    ];
     option.series = series;
-    option.grid.top = 30;
     option.dataZoom = [
-      { type: 'inside', start: 50, end: 100 },
-      { type: 'slider', start: 50, end: 100, height: 16, bottom: 4,
+      { type: 'inside', xAxisIndex: [0, 1], start: 50, end: 100 },
+      { type: 'slider', xAxisIndex: [0, 1], start: 50, end: 100, height: 16, bottom: 4,
         borderColor: GRID_LINE, fillerColor: 'rgba(59,130,246,.14)',
         handleStyle: { color: '#3b82f6' }, textStyle: { color: TEXT_FAINT, fontSize: 10 } }
     ];
-    option.grid.bottom = 46;
+    option.grid[1].bottom = 46;
     option.tooltip.valueFormatter = function (v) {
       return v == null ? '--' : Number(v).toFixed(2);
     };
+    // 十字游标联动：双 grid + axisPointer.link
+    option.axisPointer = { type: 'cross', link: [{ xAxisIndex: 'all' }] };
     return mount(dom, option);
   }
 

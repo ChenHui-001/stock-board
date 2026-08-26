@@ -12,6 +12,7 @@
   --flat: #9aa4b6;
   --accent: #3b82f6;
   --accent-soft: rgba(59, 130, 246, .14);
+  --bg-hover: rgba(59, 130, 246, .08);
   --warn: #f59e0b;
   --radius: 10px;
   --radius-sm: 6px;
@@ -1461,6 +1462,127 @@ main {
 
 .section {
   margin-bottom: 10px;
+}
+
+/* 详情页 · 关键指标条（顶部一眼可见） */
+.detail-keymetrics {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 1px;
+  margin-top: 12px;
+  background: var(--line-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.km-cell {
+  background: var(--bg-elev);
+  padding: 9px 12px;
+  min-width: 0;
+  transition: background .15s;
+}
+.km-cell:hover {
+  background: var(--bg-hover, rgba(59, 130, 246, .08));
+}
+.km-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 2px;
+  letter-spacing: .2px;
+}
+.km-value {
+  font-size: 15px;
+  font-family: var(--mono);
+  font-weight: 600;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.km-value.up { color: var(--up); }
+.km-value.down { color: var(--down); }
+.km-sub {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 详情页 · 移动端适配（≤768px） */
+@media (max-width: 768px) {
+  /* 关键指标条：6列→3列×2行 */
+  .detail-keymetrics {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  /* stat-row：4列→2列，stat 卡片之间不挤 */
+  .stat-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  /* MA 卡：4列→2列 */
+  .ma-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  /* 表格：横向滚动、首列 sticky */
+  .data-table {
+    font-size: 12px;
+  }
+  .table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .data-table th:first-child,
+  .data-table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--bg-elev);
+    z-index: 1;
+    box-shadow: 1px 0 0 var(--line-soft);
+  }
+  /* 详情头部：价格缩小 */
+  .detail-price {
+    font-size: 32px;
+  }
+  .detail-name {
+    font-size: 18px;
+  }
+  /* 状态标签：紧凑 */
+  .status-tags {
+    grid-template-columns: 1fr 1fr;
+  }
+  /* 详情 nav 按钮：变小 */
+  .detail-nav .btn {
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+}
+
+/* 详情页 · 超窄屏（≤420px）：关键指标条 2 列 */
+@media (max-width: 420px) {
+  .detail-keymetrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .stat-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .ma-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .quote-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* 视觉细节：卡片阴影 + hover 微动效（桌面端） */
+@media (hover: hover) and (min-width: 769px) {
+  .card.section {
+    transition: box-shadow .18s ease, transform .18s ease;
+  }
+  .card.section:hover {
+    box-shadow: 0 4px 18px rgba(0, 0, 0, .25);
+    transform: translateY(-1px);
+  }
 }
 
 /* ------------------------------------------------------------ 弹窗 */

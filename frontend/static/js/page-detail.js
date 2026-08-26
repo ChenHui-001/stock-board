@@ -148,7 +148,71 @@
     priceRow.appendChild(chg);
     wrap.appendChild(priceRow);
 
+    // 关键指标条：一眼可见的「支撑·压力·区间位置·ATR·资金状态·两融情绪」，
+    // 紧凑横排，减少下拉翻找。桌面 6 列、平板 3 列、手机 2 列。
+    wrap.appendChild(renderKeyMetrics(d));
+
     return wrap;
+  }
+
+  // ---------------------------------------------------------- 关键指标条
+  function renderKeyMetrics(d) {
+    const sr = d.support_resistance || {};
+    const fs = d.fund_flow.summary || {};
+    const ms = d.margin.summary || {};
+    const ts = d.status.trend || {};
+    const rangePos = U.isNum(sr.range_pos_pct) ? sr.range_pos_pct.toFixed(0) + '%' : U.NBSP;
+    const rangeTone = U.isNum(sr.range_pos_pct) ? (sr.range_pos_pct >= 50 ? 'up' : 'down') : '';
+    const atrTone = sr.atr_breakout === '已突破' ? 'up'
+      : sr.atr_breakout === '已跌破' ? 'down' : '';
+    const fundTone = fs.state_grade === '强' || fs.state_grade === '中' ? 'up'
+      : fs.state_grade === '弱' || fs.state_grade === '溃' ? 'down' : '';
+    const marginTone = ms.sentiment && ms.sentiment.indexOf('偏多') >= 0 ? 'up'
+      : ms.sentiment && ms.sentiment.indexOf('偏空') >= 0 ? 'down' : '';
+
+    const cells = [
+      {
+        label: '支撑', value: U.price(sr.support),
+        sub: sr.support_from ? '来源 ' + sr.support_from : '',
+        tone: '', tip: '当前 0.5×ATR 容差下的有效支撑位'
+      },
+      {
+        label: '压力', value: U.price(sr.resistance),
+        sub: sr.resistance_from ? '来源 ' + sr.resistance_from : '',
+        tone: '', tip: '当前 0.5×ATR 容差下的有效压力位'
+      },
+      {
+        label: '区间位置', value: rangePos, sub: '近 20 日', tone: rangeTone,
+        tip: '现价在 20 日区间内的相对位置；≥50% 偏多、<50% 偏空'
+      },
+      {
+        label: 'ATR(14)', value: U.isNum(sr.atr) ? sr.atr.toFixed(2) : U.NBSP,
+        sub: sr.atr_breakout || '—', tone: atrTone,
+        tip: '近 14 日平均真实波幅；突破/跌破用 0.5×ATR 容差判定'
+      },
+      {
+        label: '资金', value: fs.available ? (fs.state || '—') : '—',
+        sub: fs.trend || '暂无数据', tone: fundTone,
+        tip: '近 30 日主力资金净额状态：强/中/弱/溃，叠加趋势方向'
+      },
+      {
+        label: '两融', value: ms.available ? (ms.sentiment || '—') : '—',
+        sub: ms.last_date ? '披露 ' + ms.last_date : '无两融',
+        tone: marginTone,
+        tip: '近 30 日两融情绪（含融资余额变动方向），T+1 公布'
+      }
+    ];
+
+    const row = U.el('div', 'detail-keymetrics');
+    cells.forEach(function (c) {
+      const cell = U.el('div', 'km-cell');
+      if (c.tip) cell.title = c.tip;
+      cell.appendChild(U.el('div', 'km-label', c.label));
+      cell.appendChild(U.el('div', 'km-value ' + c.tone, c.value));
+      cell.appendChild(U.el('div', 'km-sub', c.sub));
+      row.appendChild(cell);
+    });
+    return row;
   }
 
   function renderQuoteGrid(d) {
