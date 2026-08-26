@@ -100,11 +100,17 @@ async def get_quote(code: str, market: str | None = None, force: bool = False) -
 
 # ------------------------------------------------------------------ 自选股看板
 
-def watch_monitor(data: dict[str, Any]) -> dict[str, str]:
+def watch_monitor(data: dict[str, Any], atr: float | None = None) -> dict[str, str]:
     """根据实时行情生成首页关键监测提示。
 
     只在信号足够明确时给出加减仓提示，其余情况保持观察，避免用单一涨跌幅
     把普通波动误报成操作信号。
+
+    判定逻辑（v2，ATR 归一化 + 量比过滤）：
+      - 「可加仓」要求涨幅相当于 ≥ 1.5 倍 ATR（不同波动股票自适应），
+        且量比 ≥ 1.5（无量拉升不算）。ATR 不可用时退回到固定 3% 门槛。
+      - 「应减仓」要求跌幅 ≤ -3% 且量比 ≥ 0.8（地量阴跌往往空头衰竭，
+        不应机械触发减仓），否则降级为「继续观察」。
     """
     status = data.get("status") or "unknown"
     if status != "normal":
@@ -119,25 +125,56 @@ def watch_monitor(data: dict[str, Any]) -> dict[str, str]:
     if not isinstance(change, (int, float)):
         return {"action": "继续观察", "tone": "flat", "reason": "涨跌幅暂无数据"}
 
-    if change <= -3:
+    has_vr = isinstance(volume_ratio, (int, float))
+    vr_text = f"，量比 {volume_ratio:.2f}" if has_vr else ""
+
+    # ---- 应减仓：跌幅 ≤ -3% 且量比 ≥ 0.8（缩量阴跌属于空头衰竭，不触发减仓）
+    if change <= -3 and (not has_vr or volume_ratio >= 0.8):
         return {
             "action": "应减仓",
             "tone": "down",
-            "reason": f"跌幅 {change:+.2f}%，短线风险升高",
+            "reason": f"跌幅 {change:+.2f}%{vr_text}，短线风险升高",
         }
-    if change >= 3 and isinstance(volume_ratio, (int, float)) and volume_ratio >= 1.5:
+
+    # ---- 可加仓：涨幅用 ATR 归一化，避免高波动股票永远触发
+    # unit_atr = abs(change%) / (atr% / 100)，ATR 占股价的百分比 = atr / price * 100
+    price = data.get("price")
+    if isinstance(atr, (int, float)) and atr > 0 \
+            and isinstance(price, (int, float)) and price > 0:
+        # ATR 可用时严格走归一化判定（不再走固定 3% 兜底，避免形同虚设）
+        atr_pct = atr / price * 100  # ATR 占股价的百分比
+        unit_atr = abs(change) / atr_pct if atr_pct > 0 else 0
+        if change >= 1 and unit_atr >= 1.5 and has_vr and volume_ratio >= 1.5:
+            return {
+                "action": "可加仓",
+                "tone": "up",
+                "reason": (
+                    f"涨幅 {change:+.2f}% ≈ {unit_atr:.1f} 倍 ATR，量比 {volume_ratio:.2f}，动能较强"
+                ),
+            }
+    elif change >= 3 and has_vr and volume_ratio >= 1.5:
+        # ATR 不可用时退回到固定 3% 门槛（向后兼容历史行为）
         return {
             "action": "可加仓",
             "tone": "up",
             "reason": f"涨幅 {change:+.2f}% 且量比 {volume_ratio:.2f}，动能较强",
         }
-    volume_text = (
-        f"，量比 {volume_ratio:.2f}" if isinstance(volume_ratio, (int, float)) else ""
-    )
+
+    # ---- 缩量阴跌（跌幅 ≤ -3% 但量比 < 0.8）显式标注，避免误判
+    if change <= -3 and has_vr and volume_ratio < 0.8:
+        return {
+            "action": "继续观察",
+            "tone": "flat",
+            "reason": (
+                f"跌幅 {change:+.2f}% 但量比仅 {volume_ratio:.2f}，"
+                "地量阴跌，关注是否企稳"
+            ),
+        }
+
     return {
         "action": "继续观察",
         "tone": "flat",
-        "reason": f"涨跌幅 {change:+.2f}%{volume_text}，未形成明确信号",
+        "reason": f"涨跌幅 {change:+.2f}%{vr_text}，未形成明确信号",
     }
 
 
@@ -152,6 +189,21 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
     except ProviderError as exc:
         log.warning("看板行情获取失败：%s", exc)
         quotes = {}
+
+    # 并行预拉 K 线算 ATR：复用详情页 kline 缓存（首页请求触发的也作为预热），
+    # K 线拉取失败不会阻塞 monitor 判定——会退回到固定 3% 门槛
+    atr_by_key: dict[str, float | None] = {}
+    kline_results = await asyncio.gather(
+        *(_kline(r["code"], r["market"], False) for r in rows),
+        return_exceptions=True,
+    )
+    for r, kp in zip(rows, kline_results):
+        key = full_code(r["code"], r["market"])
+        if isinstance(kp, BaseException) or not kp:
+            atr_by_key[key] = None
+            continue
+        bars = kp.get("bars") or []
+        atr_by_key[key] = indicators.decorate_bars_with_atr(bars)
 
     # 板块兜底：腾讯/新浪行情不带行业字段，eastmoney 被限流时就会出现空板块。
     # 对缺失板块的股票用批量接口一次补齐（1 次请求覆盖多只，逐股 1 小时缓存），
@@ -189,7 +241,7 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
         if board and board != row.get("board"):
             storage.update_meta(row["code"], None, board)
         data["board"] = board
-        data["monitor"] = watch_monitor(data)
+        data["monitor"] = watch_monitor(data, atr=atr_by_key.get(key))
         data["sort_no"] = row["sort_no"]
         items.append(data)
 

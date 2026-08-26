@@ -1810,24 +1810,92 @@ def test_watch_monitor() -> None:
     check("关键监测: 下跌提示应减仓", reduce["action"] == "应减仓" and reduce["tone"] == "down", str(reduce))
     check("关键监测: 普通波动继续观察", observe["action"] == "继续观察", str(observe))
     check("关键监测: 异常行情不误报加减仓", delayed["action"] == "继续观察" and delayed["tone"] == "warn", str(delayed))
-    old_trading, old_session = service.is_trading_now, service.session_state
-    try:
-        service.is_trading_now = lambda: True
-        service.session_state = lambda: "open"
-        check("首页刷新周期: 5秒", service.session_info()["interval_ms"] == 5000)
-    finally:
-        service.is_trading_now, service.session_state = old_trading, old_session
 
+    # ---- v2: ATR 归一化 + 量比过滤 ----
 
-def test_watch_monitor() -> None:
-    add = service.watch_monitor({"status": "normal", "change_pct": 3.2, "volume_ratio": 1.8})
-    reduce = service.watch_monitor({"status": "normal", "change_pct": -3.0, "volume_ratio": 1.0})
-    observe = service.watch_monitor({"status": "normal", "change_pct": 1.2, "volume_ratio": 1.0})
-    delayed = service.watch_monitor({"status": "delayed", "status_text": "数据更新延迟"})
-    check("关键监测: 放量上涨提示可加仓", add["action"] == "可加仓" and add["tone"] == "up", str(add))
-    check("关键监测: 下跌提示应减仓", reduce["action"] == "应减仓" and reduce["tone"] == "down", str(reduce))
-    check("关键监测: 普通波动继续观察", observe["action"] == "继续观察", str(observe))
-    check("关键监测: 异常行情不误报加减仓", delayed["action"] == "继续观察" and delayed["tone"] == "warn", str(delayed))
+    # 高波动股票（ATR=2 元，股价 20 元，ATR% = 10%）：涨 3% 仅 0.3 倍 ATR，
+    # 不触发「可加仓」；涨 20% 才达到 2 倍 ATR，且量比达标
+    high_vol = service.watch_monitor(
+        {"status": "normal", "change_pct": 3.0, "volume_ratio": 2.0, "price": 20.0},
+        atr=2.0,
+    )
+    check("ATR归一化: 高波动股票小涨不触发加仓",
+          high_vol["action"] == "继续观察", str(high_vol))
+
+    high_vol_strong = service.watch_monitor(
+        {"status": "normal", "change_pct": 16.0, "volume_ratio": 2.0, "price": 20.0},
+        atr=2.0,
+    )
+    check("ATR归一化: 高波动股票大涨(unit_atr>=1.5)触发加仓",
+          high_vol_strong["action"] == "可加仓" and high_vol_strong["tone"] == "up",
+          str(high_vol_strong))
+    check("ATR归一化: reason含 ATR 倍数",
+          "ATR" in high_vol_strong["reason"], high_vol_strong["reason"])
+
+    # 低波动股票（ATR=0.1 元，股价 20 元，ATR% = 0.5%）：涨 1% 即 2 倍 ATR → 加仓
+    low_vol = service.watch_monitor(
+        {"status": "normal", "change_pct": 1.0, "volume_ratio": 1.6, "price": 20.0},
+        atr=0.1,
+    )
+    check("ATR归一化: 低波动股票小幅上涨触发加仓",
+          low_vol["action"] == "可加仓" and low_vol["tone"] == "up", str(low_vol))
+
+    # 大涨无量：不触发加仓（无量拉升是出货形态）
+    no_vol_add = service.watch_monitor(
+        {"status": "normal", "change_pct": 6.0, "volume_ratio": 0.6, "price": 20.0},
+        atr=0.1,
+    )
+    check("ATR归一化: 大涨无量不触发加仓",
+          no_vol_add["action"] == "继续观察", str(no_vol_add))
+
+    # ATR 不可用：退回到固定 3% 门槛（向后兼容）
+    legacy_add = service.watch_monitor(
+        {"status": "normal", "change_pct": 3.5, "volume_ratio": 1.6, "price": 20.0},
+        atr=None,
+    )
+    check("ATR归一化: 无ATR退回到固定3%门槛",
+          legacy_add["action"] == "可加仓" and "3.5" in legacy_add["reason"],
+          str(legacy_add))
+
+    # 缩量阴跌：跌幅 -3.5% 但量比 0.5 → 不应触发减仓
+    shrink_down = service.watch_monitor(
+        {"status": "normal", "change_pct": -3.5, "volume_ratio": 0.5},
+    )
+    check("量比过滤: 缩量阴跌不触发减仓",
+          shrink_down["action"] == "继续观察" and "地量阴跌" in shrink_down["reason"],
+          str(shrink_down))
+
+    # 放量下跌：跌幅 -3.5% 且量比 1.2 → 应减仓
+    vol_down = service.watch_monitor(
+        {"status": "normal", "change_pct": -3.5, "volume_ratio": 1.2},
+    )
+    check("量比过滤: 放量下跌触发减仓",
+          vol_down["action"] == "应减仓" and vol_down["tone"] == "down",
+          str(vol_down))
+
+    # 临界：跌幅 -3.0% 量比 0.79（边界以下）→ 不减仓
+    edge_down = service.watch_monitor(
+        {"status": "normal", "change_pct": -3.0, "volume_ratio": 0.79},
+    )
+    check("量比过滤: 量比0.79缩量边界不触发减仓",
+          edge_down["action"] == "继续观察", str(edge_down))
+
+    # 临界：跌幅 -3.0% 量比 0.80 → 触发减仓
+    edge_down2 = service.watch_monitor(
+        {"status": "normal", "change_pct": -3.0, "volume_ratio": 0.80},
+    )
+    check("量比过滤: 量比0.80刚好触发减仓",
+          edge_down2["action"] == "应减仓", str(edge_down2))
+
+    # ATR 数据异常：price=0 时归一化不生效，退回到固定门槛
+    atr_no_price = service.watch_monitor(
+        {"status": "normal", "change_pct": 3.5, "volume_ratio": 1.6, "price": 0},
+        atr=0.5,
+    )
+    check("ATR归一化: price缺失退回到固定门槛",
+          atr_no_price["action"] == "可加仓" and "ATR" not in atr_no_price["reason"],
+          str(atr_no_price))
+
     old_trading, old_session = service.is_trading_now, service.session_state
     try:
         service.is_trading_now = lambda: True
