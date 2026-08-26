@@ -158,12 +158,28 @@ def build_payload(
             "近5日涨跌幅%": detail.get("status", {}).get("trend", {}).get("chg_5d"),
             "近20日涨跌幅%": detail.get("status", {}).get("trend", {}).get("chg_20d"),
             "近60日涨跌幅%": detail.get("status", {}).get("trend", {}).get("chg_60d"),
+            # ATR(14)：把波动率绝对值与相对股价幅度喂给模型，
+            # 让 LLM 判读"突破/跌破是否有效"时不再只盯着固定百分比
+            "ATR14": detail.get("status", {}).get("trend", {}).get("atr"),
+            "ATR14占股价%": (
+                round(detail["status"]["trend"]["atr"] / quote.price * 100, 2)
+                if detail.get("status", {}).get("trend", {}).get("atr") and quote.price
+                else None
+            ),
+            "近5日波幅_单位ATR": detail.get("status", {}).get("trend", {}).get("vol_unit_atr", {}).get("chg_5d"),
+            "近20日波幅_单位ATR": detail.get("status", {}).get("trend", {}).get("vol_unit_atr", {}).get("chg_20d"),
+            "近60日波幅_单位ATR": detail.get("status", {}).get("trend", {}).get("vol_unit_atr", {}).get("chg_60d"),
+            "是否ATR归一化判定": detail.get("status", {}).get("trend", {}).get("atr_normalized"),
             "近30日收盘序列": [round(b["close"], 2) for b in bars[-30:]],
             # 60 日收盘序列供模型观察中长期趋势形态（MA60 计算与区间位置需要足够样本）
             "近60日收盘序列": [round(b["close"], 2) for b in bars_60],
         },
         "技术指标_MACD_KDJ": _payload_oscillators(detail.get("oscillators") or {}),
-        "支撑压力": detail.get("support_resistance", {}),
+        "支撑压力": {
+            **detail.get("support_resistance", {}),
+            # ATR 突破判定的语义化解读，避免 LLM 误把噪声当突破
+            "ATR突破解读": _atr_breakout_note(detail.get("support_resistance", {})),
+        },
         "资金数据_近30日": {
             **{k: v for k, v in detail.get("fund_flow", {}).get("summary", {}).items()
                if k in ("trend", "state", "inflow_days", "outflow_days",
@@ -505,6 +521,26 @@ def _payload_oscillators(osc: dict[str, Any]) -> dict[str, Any]:
             "区域": kdj.get("zone"),
         },
     }
+
+
+def _atr_breakout_note(sr: dict[str, Any]) -> str:
+    """ATR 突破判定的语义化解读，便于 LLM 在风险/机会描述里引用。
+
+    输入是 support_resistance() 输出：
+      atr         = 当前 ATR(14) 数值
+      atr_breakout = "已突破"/"已跌破"/"逼近"/"未触及"
+      state       = 文字标签
+    """
+    atr = sr.get("atr")
+    state = sr.get("state") or ""
+    flag = sr.get("atr_breakout") or "未触及"
+    if not atr:
+        return "ATR 不可用，支撑压力按固定比例阈值判定（兼容旧逻辑）"
+    if flag in ("已突破", "已跌破"):
+        return f"{state}，ATR(14)={atr}，突破幅度已超过 0.5 倍 ATR 容差，可信度较高"
+    if flag == "逼近":
+        return f"{state}，ATR(14)={atr}，距突破仅 0.5 倍 ATR 内，关注是否有效突破"
+    return f"运行于区间内部，ATR(14)={atr}，未触及压力/支撑边界"
 
 
 def _payload_intraday_signals(q: dict[str, Any]) -> list[dict[str, Any]]:

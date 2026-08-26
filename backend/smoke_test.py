@@ -1690,6 +1690,97 @@ def test_indicators() -> None:
     check("_tone_flow: 主力净流出→down", _tone_flow("主力净流出") == "down", _tone_flow("主力净流出"))
     check("_tone_flow: 资金观望→flat", _tone_flow("资金观望") == "flat", _tone_flow("资金观望"))
 
+    # --------------------- ATR(14) + 支撑压力 ATR 突破 + 趋势 ATR 归一化 ---------------------
+    from backend.indicators import compute_atr, decorate_bars_with_atr, trend_state
+
+    # ATR 基础：70 根单调上涨 bar，TR 始终 = high-low，ATR(14) ≈ 单根 TR
+    bars70 = [
+        Bar(date=f"2026-01-{i:02d}", open=10 + i, close=10 + i * 0.5,
+            high=12 + i, low=9 + i, volume=100.0)
+        for i in range(1, 71)
+    ]
+    atr_seq = compute_atr(bars70, period=14)
+    # 前 13 根（含第 0 根）应为 None，从第 13 根起开始有 ATR
+    check("ATR: 前13根为None",
+          all(v is None for v in atr_seq[:13]),
+          str([v for v in atr_seq[:14]]))
+    # 至少从第 14 根起全部有 ATR（包含最后）
+    check("ATR: 第14根起有值", atr_seq[13] is not None and atr_seq[-1] is not None,
+          f"atr[13]={atr_seq[13]}, atr[-1]={atr_seq[-1]}")
+    # 样本不足时全 None
+    atr_short = compute_atr(bars70[:5], period=14)
+    check("ATR: 样本不足返回全None", all(v is None for v in atr_short), str(atr_short))
+
+    # decorate_bars_with_atr 原地写入并返回最新值
+    bars_copy = [Bar(date=b.date, open=b.open, close=b.close, high=b.high, low=b.low, volume=b.volume)
+                 for b in bars70[:30]]
+    last_atr = decorate_bars_with_atr(bars_copy, period=14)
+    check("ATR 装饰: 写入Bar.atr",
+          all(b.atr is not None for b in bars_copy[13:]) and bars_copy[12].atr is None,
+          f"last_atr={last_atr}")
+    check("ATR 装饰: 返回最新ATR", last_atr is not None and last_atr > 0, str(last_atr))
+
+    # 支撑压力 ATR 突破：构造 20 日区间 [10, 11]、ATR=1.5、price=11.95
+    #   突破容差 = max(price*0.5%, 0.5*ATR) = max(0.06, 0.75) = 0.75
+    #   price >= high20 + tol => 11 + 0.75 = 11.75 → 11.95 已突破
+    sr_breach = [
+        Bar(date=f"2026-01-{i:02d}", open=10.5, close=10.5, high=11.0, low=10.0, volume=100.0)
+        for i in range(1, 21)
+    ]
+    sr_breach_dict = support_resistance(sr_breach, 11.95, {}, atr=1.5)
+    check("ATR突破: 已突破上沿+flag=已突破",
+          sr_breach_dict["state"] == "突破区间上沿" and sr_breach_dict["atr_breakout"] == "已突破",
+          f"state={sr_breach_dict['state']}, flag={sr_breach_dict['atr_breakout']}")
+
+    # 支撑压力 ATR 跌破：price=9.05，ATR=1.5，tol=0.75
+    #   price <= low20 - tol => 10 - 0.75 = 9.25 → 9.05 已跌破
+    sr_break_down = support_resistance(sr_breach, 9.05, {}, atr=1.5)
+    check("ATR突破: 已跌破下沿+flag=已跌破",
+          sr_break_down["state"] == "跌破区间下沿" and sr_break_down["atr_breakout"] == "已跌破",
+          f"state={sr_break_down['state']}, flag={sr_break_down['atr_breakout']}")
+
+    # 支撑压力 ATR 逼近：price=11.3，距 high20=11 差距 0.3 < tol=0.75 → 逼近
+    sr_near = support_resistance(sr_breach, 11.3, {}, atr=1.5)
+    check("ATR突破: 逼近上沿+flag=逼近",
+          sr_near["state"] == "逼近压力位" and sr_near["atr_breakout"] == "逼近",
+          f"state={sr_near['state']}, flag={sr_near['atr_breakout']}")
+
+    # 支撑压力 ATR 不可用：退化为 price*0.5% 容差
+    #   price=11.07，tol=11.07*0.005=0.0554，high20=11 > 11.07-0.0554=11.015 → 突破
+    sr_noatr = support_resistance(sr_breach, 11.07, {}, atr=None)
+    check("ATR突破: 无ATR退化兼容",
+          sr_noatr["state"] == "突破区间上沿" and sr_noatr["atr"] is None
+          and sr_noatr["atr_breakout"] == "已突破",
+          f"state={sr_noatr['state']}, atr={sr_noatr['atr']}")
+
+    # 趋势 ATR 归一化：构造近 5 日涨 1.2%，ATR=0.5（占股价 2.5%），sqrt(5)≈2.236
+    #   unit_atr = 0.012 / (0.025 * 2.236) ≈ 0.215 → 震荡
+    #   若 ATR=0.05（占 0.1%），则 unit_atr ≈ 53.7 → 上涨
+    flat_bars = [
+        Bar(date=f"2026-01-{i:02d}", open=20.0, close=20.0, high=20.05, low=19.95, volume=100.0)
+        for i in range(1, 67)
+    ]
+    # 把最后 5 根小幅推高 1.2%，让 chg_5d ≈ +1.2
+    for i in range(5):
+        flat_bars[-(i + 1)].close = 20.0 + 0.024 * (5 - i)  # 推高 0.024/0.048/.../0.12
+    t_high_vol = trend_state(flat_bars, {"arrangement": "均线交织", "above_count": 0}, atr=0.5)
+    check("趋势 ATR: 低波动+小幅上涨 → 震荡",
+          t_high_vol["short"] == "震荡" and t_high_vol["atr_normalized"] is True,
+          f"short={t_high_vol['short']}, atr_norm={t_high_vol['atr_normalized']}")
+
+    t_low_vol = trend_state(flat_bars, {"arrangement": "均线交织", "above_count": 0}, atr=0.05)
+    check("趋势 ATR: 低ATR下小幅上涨被放大为上涨",
+          t_low_vol["short"] == "上涨" and t_low_vol["atr_normalized"] is True,
+          f"short={t_low_vol['short']}")
+
+    # 趋势 ATR 不可用：退化为原 ±2%/±5%/±8% 阈值
+    t_noatr = trend_state(flat_bars, {"arrangement": "均线交织", "above_count": 0}, atr=None)
+    check("趋势 ATR: 无ATR退化兼容",
+          t_noatr["atr_normalized"] is False
+          and t_noatr["atr"] is None
+          and t_noatr["vol_unit_atr"]["chg_5d"] is None,
+          f"atr_norm={t_noatr['atr_normalized']}, atr={t_noatr['atr']}")
+
 
 # ------------------------------------------------------------------ 数据源装配（不触网）
 def test_registry() -> None:

@@ -105,6 +105,57 @@ def build_ma(bars: Sequence[Bar], price: float | None) -> tuple[list[MaInfo], di
 
 # ------------------------------------------------------------------ 支撑压力
 
+# ------------------------------------------------------------------ ATR（平均真实波幅）
+
+# ATR 周期：14 日是 A 股/海外日线默认，与 KDJ(9)/MACD(12,26,9) 同量级行业标准
+ATR_PERIOD = 14
+
+
+def compute_atr(bars: Sequence[Bar], period: int = ATR_PERIOD) -> list[float | None]:
+    """计算每根 Bar 的 ATR（Wilder 平滑）。
+
+    真实波幅 TR_i = max(high-low, |high-prev_close|, |low-prev_close|)，
+    首根用 high-low；之后用 Wilder 递推：ATR_i = (ATR_{i-1} * (period-1) + TR_i) / period。
+
+    数据不足 period+1 根时（首根无法与 prev_close 比较）返回 None 列表，
+    让上层按"无 ATR"路径走固定阈值，保持向后兼容。
+    返回长度与 bars 一致；前 period 个值为 None，从第 period 根起开始有 ATR。
+    """
+    n = len(bars)
+    out: list[float | None] = [None] * n
+    if n < period + 1:
+        return out
+
+    # 1) 计算 TR 序列
+    trs: list[float] = [0.0] * n
+    trs[0] = bars[0].high - bars[0].low
+    for i in range(1, n):
+        hi, lo = bars[i].high, bars[i].low
+        prev_close = bars[i - 1].close
+        trs[i] = max(hi - lo, abs(hi - prev_close), abs(lo - prev_close))
+
+    # 2) 初始 ATR = 前 period 根 TR 的简单平均（含首根 tr0）
+    init = sum(trs[:period]) / period
+    out[period - 1] = round(init, 4)
+    prev = init
+    for i in range(period, n):
+        prev = (prev * (period - 1) + trs[i]) / period
+        out[i] = round(prev, 4)
+    return out
+
+
+def decorate_bars_with_atr(bars: list[Bar], period: int = ATR_PERIOD) -> float | None:
+    """把 ATR(period) 写入每根 Bar.atr（原地），并返回最后一根的 ATR 值。
+    数据不足时所有 Bar.atr 保持 None，返回 None 让上层走兜底逻辑。"""
+    atr_seq = compute_atr(bars, period=period)
+    last = None
+    for bar, v in zip(bars, atr_seq):
+        bar.atr = v
+        if v is not None:
+            last = v
+    return last
+
+
 # ------------------------------------------------------------------ 摆动指标（MACD / KDJ）
 
 def _ema(values: Sequence[float], span: int) -> list[float | None]:
@@ -237,13 +288,26 @@ def compute_oscillators(bars: Sequence[Bar]) -> dict[str, Any]:
     return out
 
 
-def support_resistance(bars: Sequence[Bar], price: float | None, ma_values: dict[int, float | None]) -> dict[str, Any]:
-    """用近 20/60 日高低点 + 均线，取最近的下方支撑与上方压力。"""
+def support_resistance(
+    bars: Sequence[Bar],
+    price: float | None,
+    ma_values: dict[int, float | None],
+    atr: float | None = None,
+) -> dict[str, Any]:
+    """用近 20/60 日高低点 + 均线，取最近的下方支撑与上方压力。
+
+    突破/跌破容差同时考虑「价格固定比例」与「0.5 倍 ATR」：
+      tolerance = max(price * 0.5%, 0.5 * atr)
+    这样高波动股票不会被噪声触发突破，低波动股票也不会因容差太大永远到不了。
+    ATR 不可用时退回到原 price*0.5% 行为，保持向后兼容。
+    """
     result: dict[str, Any] = {
         "support": None, "resistance": None,
         "support_from": "", "resistance_from": "",
         "high_20": None, "low_20": None, "high_60": None, "low_60": None,
         "state": "数据不足",
+        "atr": round(atr, 4) if atr else None,
+        "atr_breakout": "未触及",
     }
     if not bars or not price:
         return result
@@ -265,8 +329,11 @@ def support_resistance(bars: Sequence[Bar], price: float | None, ma_values: dict
         if v:
             candidates.append((v, f"MA{w}"))
 
-    below = [(v, tag) for v, tag in candidates if v < price * 0.999]
-    above = [(v, tag) for v, tag in candidates if v > price * 1.001]
+    # 容差：price*0.5% 与 0.5*ATR 取较大者；ATR 不可用时退化为 price*0.5%
+    tol = max(price * 0.005, 0.5 * atr) if atr else price * 0.005
+
+    below = [(v, tag) for v, tag in candidates if v <= price - tol]
+    above = [(v, tag) for v, tag in candidates if v >= price + tol]
     if below:
         v, tag = max(below, key=lambda x: x[0])
         result["support"], result["support_from"] = round(v, 2), tag
@@ -274,11 +341,19 @@ def support_resistance(bars: Sequence[Bar], price: float | None, ma_values: dict
         v, tag = min(above, key=lambda x: x[0])
         result["resistance"], result["resistance_from"] = round(v, 2), tag
 
-    # 区间位置判定
-    if price >= high20 * 0.995:
-        result["state"] = "突破区间上沿" if price >= high20 else "逼近压力位"
-    elif price <= low20 * 1.005:
-        result["state"] = "跌破区间下沿" if price <= low20 else "逼近支撑位"
+    # 区间位置判定：用同样的 ATR 容差决定「已突破」与「逼近」
+    if price >= high20 + tol:
+        result["state"] = "突破区间上沿"
+        result["atr_breakout"] = "已突破"
+    elif price >= high20 - tol:
+        result["state"] = "逼近压力位"
+        result["atr_breakout"] = "逼近"
+    elif price <= low20 - tol:
+        result["state"] = "跌破区间下沿"
+        result["atr_breakout"] = "已跌破"
+    elif price <= low20 + tol:
+        result["state"] = "逼近支撑位"
+        result["atr_breakout"] = "逼近"
     else:
         span = high20 - low20
         pos = (price - low20) / span if span else 0.5
@@ -288,6 +363,7 @@ def support_resistance(bars: Sequence[Bar], price: float | None, ma_values: dict
             result["state"] = "运行于区间下半区"
         else:
             result["state"] = "区间中枢震荡"
+        result["atr_breakout"] = "未触及"
     result["range_pos_pct"] = (
         round((price - low20) / (high20 - low20) * 100, 1) if high20 > low20 else None
     )
@@ -536,7 +612,22 @@ def summarize_margin(rows: Sequence[MarginDay]) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ 趋势与总状态
 
-def trend_state(bars: Sequence[Bar], ma_summary: dict[str, Any]) -> dict[str, Any]:
+def trend_state(
+    bars: Sequence[Bar],
+    ma_summary: dict[str, Any],
+    atr: float | None = None,
+) -> dict[str, Any]:
+    """趋势状态：基于 N 日涨跌幅 + ATR 归一化判定方向。
+
+    ATR 归一化思路：把固定百分比阈值改成"相当于多少倍 ATR"，
+    利用时间平方根法则把 5/20/60 日换算到统一基准：
+        unit_atr = cN / (atr/price * sqrt(N))
+    阈值表：
+        |unit_atr| < 1.0 → 震荡
+        unit_atr ≥ 1.0  → 上涨
+        unit_atr ≤ -1.0 → 下跌
+    ATR 不可用时退回到原 ±2%/±5%/±8% 阈值。
+    """
     if len(bars) < 6:
         return {"short": "数据不足", "mid": "数据不足", "long": "数据不足", "label": "数据不足"}
 
@@ -548,6 +639,15 @@ def trend_state(bars: Sequence[Bar], ma_summary: dict[str, Any]) -> dict[str, An
 
     c5, c20, c60 = chg(5), chg(20), chg(60)
 
+    # ATR 归一化：unit_atr = (cN_pct/100) / (atr/price * sqrt(N))
+    # 返回值便于 AI/前端引用「近5日波幅相当于多少个 ATR」
+    vol_unit_atr: dict[str, float | None] = {"chg_5d": None, "chg_20d": None, "chg_60d": None}
+    if atr and bars[-1].close:
+        ref = atr / bars[-1].close
+        for key, c, days in (("chg_5d", c5, 5), ("chg_20d", c20, 20), ("chg_60d", c60, 60)):
+            if c is not None and ref > 0:
+                vol_unit_atr[key] = round((c / 100) / (ref * (days ** 0.5)), 2)
+
     def label(v: float | None, up: float, down: float) -> str:
         if v is None:
             return "数据不足"
@@ -557,9 +657,23 @@ def trend_state(bars: Sequence[Bar], ma_summary: dict[str, Any]) -> dict[str, An
             return "下跌"
         return "震荡"
 
-    short = label(c5, 2.0, -2.0)
-    mid = label(c20, 5.0, -5.0)
-    long_ = label(c60, 8.0, -8.0)
+    if atr and bars[-1].close:
+        # ATR 模式：以 ±1.0 个 ATR 为震荡/趋势分界
+        def label_atr(u: float | None) -> str:
+            if u is None:
+                return "数据不足"
+            if u >= 1.0:
+                return "上涨"
+            if u <= -1.0:
+                return "下跌"
+            return "震荡"
+        short = label_atr(vol_unit_atr["chg_5d"])
+        mid = label_atr(vol_unit_atr["chg_20d"])
+        long_ = label_atr(vol_unit_atr["chg_60d"])
+    else:
+        short = label(c5, 2.0, -2.0)
+        mid = label(c20, 5.0, -5.0)
+        long_ = label(c60, 8.0, -8.0)
 
     arrangement = ma_summary.get("arrangement", "")
     above_count = ma_summary.get("above_count", 0)
@@ -577,6 +691,9 @@ def trend_state(bars: Sequence[Bar], ma_summary: dict[str, Any]) -> dict[str, An
     return {
         "short": short, "mid": mid, "long": long_, "label": overall,
         "chg_5d": c5, "chg_20d": c20, "chg_60d": c60,
+        "atr": round(atr, 4) if atr else None,
+        "vol_unit_atr": vol_unit_atr,
+        "atr_normalized": bool(atr and bars[-1].close),
     }
 
 
@@ -587,9 +704,10 @@ def build_status(
     margin: dict[str, Any],
     ma_summary: dict[str, Any],
     sr: dict[str, Any],
+    atr: float | None = None,
 ) -> dict[str, Any]:
     """需求 5.2.5：四类标准化状态标签。"""
-    trend = trend_state(bars, ma_summary)
+    trend = trend_state(bars, ma_summary, atr=atr)
     tags = [
         {"group": "趋势状态", "label": trend["label"], "tone": _tone_trend(trend["label"])},
         {"group": "资金状态", "label": flow.get("state", "无数据"), "tone": _tone_flow(flow.get("state", ""))},

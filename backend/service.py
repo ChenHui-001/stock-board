@@ -354,13 +354,17 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     bars = kline_pack["bars"]
     ma_infos, ma_summary = indicators.build_ma(bars, quote.price)
     ma_values = {i.window: i.value for i in ma_infos}
-    sr = indicators.support_resistance(bars, quote.price, ma_values)
+    # ATR(14)：把每根 Bar.atr 写满，返回最后一根的 ATR 给支撑压力/趋势判定用
+    last_atr = indicators.decorate_bars_with_atr(bars)
+    sr = indicators.support_resistance(bars, quote.price, ma_values, atr=last_atr)
     last_bar_date = bars[-1].date if bars else ""
     # ref_date=K线最新日期：资金流向当日数据未发布（盘中/16点前）时
     # summarize_flow 据此降级判定并标注，避免把昨日数据当「当日」
     flow_summary = indicators.summarize_flow(flow_pack["rows"], ref_date=last_bar_date)
     margin_summary = indicators.summarize_margin(margin_pack["rows"])
-    status = indicators.build_status(quote, bars, flow_summary, margin_summary, ma_summary, sr)
+    status = indicators.build_status(
+        quote, bars, flow_summary, margin_summary, ma_summary, sr, atr=last_atr,
+    )
     osc = indicators.compute_oscillators(bars)
 
     quote_dict = quote.to_dict()

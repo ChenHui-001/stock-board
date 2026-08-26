@@ -204,15 +204,30 @@
     const rangePosTone = U.isNum(sr.range_pos_pct)
       ? (sr.range_pos_pct >= 50 ? 'up' : 'down')
       : '';
+    // ATR 突破判定染色：突破/跌破偏警示（up=绿已突破向上 / down=红已跌破向下）
+    // 逼近与未触及中性，不染。
+    const breakTone = sr.atr_breakout === '已突破' ? 'up'
+      : sr.atr_breakout === '已跌破' ? 'down' : '';
+    // 近 5 日波幅 (单位 ATR)：>1.0 偏强(up)，<-1.0 偏弱(down)
+    const trend5 = (d.status.trend.vol_unit_atr || {}).chg_5d;
+    const vol5Tone = U.isNum(trend5)
+      ? (trend5 >= 1 ? 'up' : trend5 <= -1 ? 'down' : '')
+      : '';
     [
       ['当前支撑位', U.price(sr.support) + (sr.support_from ? ' (' + sr.support_from + ')' : '')],
       ['当前压力位', U.price(sr.resistance) + (sr.resistance_from ? ' (' + sr.resistance_from + ')' : '')],
       ['20日区间', U.price(sr.low_20) + ' ~ ' + U.price(sr.high_20)],
       ['60日区间', U.price(sr.low_60) + ' ~ ' + U.price(sr.high_60)],
       ['区间位置', U.isNum(sr.range_pos_pct) ? sr.range_pos_pct.toFixed(1) + '%' : U.NBSP, rangePosTone],
+      // ATR(14)：用 0.5 倍 ATR 作为突破容差，比固定 ±0.5% 更贴合个股波动；
+      // atr_breakout 用文字描述当前与区间的位置关系
+      ['ATR(14)', U.isNum(sr.atr) ? sr.atr.toFixed(2) + ' 元' : U.NBSP],
+      ['ATR突破判定', (sr.atr_breakout || '—') + (U.isNum(sr.atr) ? '（容差 ' + (sr.atr / 2).toFixed(2) + ' 元）' : ''), breakTone],
       ['近5日涨跌', U.pct(d.status.trend.chg_5d)],
       ['近20日涨跌', U.pct(d.status.trend.chg_20d)],
-      ['近60日涨跌', U.pct(d.status.trend.chg_60d)]
+      ['近60日涨跌', U.pct(d.status.trend.chg_60d)],
+      // 波幅单位 ATR：把固定百分比阈值换成"相当于多少倍 ATR"，避免高波动股票永远被判震荡
+      ['近5日波幅', U.isNum(trend5) ? trend5.toFixed(2) + ' 个ATR' : U.NBSP, vol5Tone]
     ].forEach(function (s, i) {
       const node = U.el('div', 'stat');
       node.appendChild(U.el('div', 'stat-label', s[0]));

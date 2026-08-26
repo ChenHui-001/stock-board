@@ -200,6 +200,9 @@ class Bar:
     amount: float = 0.0
     change_pct: float | None = None
     turnover: float | None = None
+    # ATR(14)：在 service.py 由 indicators.compute_atr 注入；数据不足或
+    # 计算失败时为 None，便于上层判定是否启用 ATR 突破/归一化逻辑
+    atr: float | None = None
 
 
 @dataclass
