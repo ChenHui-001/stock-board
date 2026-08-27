@@ -68,15 +68,15 @@
 
     // 图表要在 DOM 挂载后再初始化
     requestAnimationFrame(function () {
-      Charts.maChart(document.getElementById('chart-ma'), d.kline, d.ma_summary.series);
+      Charts.maChart(document.getElementById('chart-ma'), d.kline, d.ma_summary.series, 'detail-charts');
       const flowRows = d.fund_flow.rows;
       if (flowRows && flowRows.length) {
-        Charts.flowChart(document.getElementById('chart-capital-flow'), flowRows, !!d.fund_flow.summary.tiered);
+        Charts.flowChart(document.getElementById('chart-capital-flow'), flowRows, !!d.fund_flow.summary.tiered, 'detail-charts');
       }
       const marginRows = d.margin.rows;
       if (marginRows && marginRows.length) {
-        Charts.marginChart(document.getElementById('chart-capital-margin-main'), marginRows);
-        Charts.marginFlowChart(document.getElementById('chart-capital-margin-flow'), marginRows);
+        Charts.marginChart(document.getElementById('chart-capital-margin-main'), marginRows, 'detail-charts');
+        Charts.marginFlowChart(document.getElementById('chart-capital-margin-flow'), marginRows, 'detail-charts');
       }
     });
   }
@@ -455,19 +455,6 @@
   }
 
   // ---------------------------------------------------------- 资金流向
-  function flowSubtitle(d) {
-    const s = d.fund_flow.summary || {};
-    if (!s.available) return '暂无资金流向数据';
-    // 资金区副标题：把「价量背离」「主力类型」「连涨天数」等专业操盘信号展示出来，
-    // 让用户一眼看到当前资金动作的性质——高位诱多/低位吸筹/机构主导/连涨天数等。
-    // 数据缺失时跳过该片段，保持简短可读。
-    const parts = [s.days + ' 个交易日', s.trend, s.state];
-    if (s.streak_text) parts.push(s.streak_text);
-    if (s.price_flow_note) parts.push(s.price_flow_note);
-    if (s.xl_dominance) parts.push(s.xl_dominance);
-    return parts.join(' · ');
-  }
-
   // 当日资金流向未发布（盘中 / 收盘后 16 点前）：东财/新浪日级资金流向通常
   // 16 点后才有当日数据，此时最后一行是前一交易日，必须明确标注日期避免误导
   function flowFreshNotice(d) {
@@ -573,61 +560,6 @@
     return wrap;
   }
 
-  function renderFlow(d) {
-    const wrap = U.el('div');
-    const s = d.fund_flow.summary || {};
-    const rows = d.fund_flow.rows || [];
-
-    if (!rows.length) {
-      wrap.appendChild(U.el('div', 'loading-block',
-        d.fund_flow.error ? ('资金流向暂不可用：' + d.fund_flow.error) : '暂无资金流向数据'));
-      return wrap;
-    }
-
-    if (!s.tiered) {
-      wrap.appendChild(notice(
-        '当前资金数据来自备用源（' + (d.fund_flow.source || '未知') + '），'
-        + '仅提供净流入与超大单口径，无大单/中单/小单四档拆分。', 'info'));
-    }
-
-    const freshNotice = flowFreshNotice(d);
-    if (freshNotice) {
-      wrap.appendChild(notice(freshNotice, 'warn'));
-    }
-
-    const stats = U.el('div', 'stat-row');
-    const lastLabel = s.fresh ? '当日主力' : '最近交易日主力';
-    const items = [
-      ['30日主力净额', U.signedMoney(s.main_total), U.tone(s.main_total)],
-      ['近5日主力', U.signedMoney(s.main_last5), U.tone(s.main_last5)],
-      [lastLabel, U.signedMoney(s.main_last), U.tone(s.main_last)],
-      ['超大单合计', U.signedMoney(s.xl_total), U.tone(s.xl_total)]
-    ];
-    if (s.tiered) {
-      items.push(['大单合计', U.signedMoney(s.lg_total), U.tone(s.lg_total)]);
-      items.push(['中单合计', U.signedMoney(s.md_total), U.tone(s.md_total)]);
-      items.push(['小单(散户)', U.signedMoney(s.sm_total), U.tone(s.sm_total)]);
-    }
-    items.push(['流入/流出天数', s.inflow_days + ' / ' + s.outflow_days, '']);
-    items.push(['当前连续', s.streak + ' 天' + s.streak_dir,
-      s.streak_dir === '流入' ? 'up' : s.streak_dir === '流出' ? 'down' : '']);
-
-    items.forEach(function (it) {
-      const node = U.el('div', 'stat');
-      node.appendChild(U.el('div', 'stat-label', it[0]));
-      node.appendChild(U.el('div', 'stat-value ' + it[2], it[1]));
-      stats.appendChild(node);
-    });
-    wrap.appendChild(stats);
-
-    const chart = U.el('div', 'chart');
-    chart.id = 'chart-capital-flow';
-    wrap.appendChild(chart);
-
-    wrap.appendChild(flowTable(rows, s.tiered));
-    return wrap;
-  }
-
   function flowTable(rows, tiered) {
     const scroll = U.el('div', 'table-scroll');
     scroll.style.marginTop = '12px';
@@ -666,55 +598,6 @@
   }
 
   // ---------------------------------------------------------- 两融
-  function marginSubtitle(d) {
-    const s = d.margin.summary || {};
-    if (!s.available) return '该股无两融数据';
-    return s.days + ' 个交易日 · ' + s.sentiment;
-  }
-
-  function renderMargin(d) {
-    const wrap = U.el('div');
-    const s = d.margin.summary || {};
-    const rows = d.margin.rows || [];
-
-    if (!rows.length) {
-      wrap.appendChild(U.el('div', 'loading-block',
-        d.margin.error
-          ? ('两融数据暂不可用：' + d.margin.error)
-          : '该股不是两融标的，或暂无两融数据'));
-      return wrap;
-    }
-
-    const stats = U.el('div', 'stat-row');
-    [
-      ['最新融资余额', U.money(s.rzye_last), ''],
-      ['30日融资变动', U.signedMoney(s.rz_change), U.tone(s.rz_change)],
-      ['30日变动幅度', U.pct(s.rz_change_pct), U.tone(s.rz_change_pct)],
-      ['30日融资净买入', U.signedMoney(s.rz_net_total), U.tone(s.rz_net_total)],
-      ['30日融资买入额', U.money(s.rz_buy_total), ''],
-      ['最新融券余额', U.money(s.rqye_last), ''],
-      ['30日融券变动', U.signedMoney(s.rq_change), U.tone(s.rq_change ? -s.rq_change : 0)],
-      ['融资余额占比', U.isNum(s.rzyezb_last) ? s.rzyezb_last.toFixed(2) + '%' : U.NBSP, '']
-    ].forEach(function (it) {
-      const node = U.el('div', 'stat');
-      node.appendChild(U.el('div', 'stat-label', it[0]));
-      node.appendChild(U.el('div', 'stat-value ' + it[2], it[1]));
-      stats.appendChild(node);
-    });
-    wrap.appendChild(stats);
-
-    const c1 = U.el('div', 'chart chart-sm');
-    c1.id = 'chart-capital-margin-main';
-    wrap.appendChild(c1);
-
-    const c2 = U.el('div', 'chart chart-sm');
-    c2.id = 'chart-capital-margin-flow';
-    wrap.appendChild(c2);
-
-    wrap.appendChild(marginTable(rows));
-    return wrap;
-  }
-
   function marginTable(rows) {
     const scroll = U.el('div', 'table-scroll');
     scroll.style.marginTop = '12px';

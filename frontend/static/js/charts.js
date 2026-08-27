@@ -49,7 +49,7 @@
     };
   }
 
-  function mount(dom, option) {
+  function mount(dom, option, group) {
     if (!dom) return null;
     if (!global.echarts) {
       dom.innerHTML = '<div class="loading-block">图表库未加载，无法渲染曲线</div>';
@@ -57,10 +57,20 @@
     }
     const existing = global.echarts.getInstanceByDom(dom);
     if (existing) existing.dispose();
-    const chart = global.echarts.init(dom, null, { renderer: 'canvas' });
+    const opts = { renderer: 'canvas' };
+    // echarts.connect: 同 group 的图表自动联动 (tooltip / axisPointer / dataZoom)
+    if (group) opts.group = group;
+    const chart = global.echarts.init(dom, null, opts);
     chart.setOption(option);
     instances.push(chart);
     return chart;
+  }
+
+  // connect(): 为后续创建的同 group 图表手动调用 echarts.connect
+  // (适用于事后注入的场景; mount 传入 group 时也会自动连接)
+  function connect(group) {
+    if (!global.echarts || !group) return;
+    try { global.echarts.connect(group); } catch (e) { /* ignore */ }
   }
 
   function disposeAll() {
@@ -77,7 +87,7 @@
   }
 
   /** 收盘价 + 四条均线 + 量能柱（底部 20% 高度） */
-  function maChart(dom, bars, maSeries) {
+  function maChart(dom, bars, maSeries, group) {
     if (!bars || !bars.length) return null;
     const dates = bars.map(function (b) { return b.date; });
     const closes = bars.map(function (b) { return b.close; });
@@ -184,11 +194,11 @@
     };
     // 十字游标联动：双 grid + axisPointer.link
     option.axisPointer = { type: 'cross', link: [{ xAxisIndex: 'all' }] };
-    return mount(dom, option);
+    return mount(dom, option, group);
   }
 
   /** 资金流向：逐日主力净额柱 + 累计净额线 */
-  function flowChart(dom, rows, tiered) {
+  function flowChart(dom, rows, tiered, group) {
     if (!rows || !rows.length) return null;
     const dates = rows.map(function (r) { return r.date.slice(5); });
     let cumulative = 0;
@@ -252,11 +262,11 @@
     option.tooltip.valueFormatter = function (v) {
       return v == null ? '--' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '亿';
     };
-    return mount(dom, option);
+    return mount(dom, option, group);
   }
 
   /** 两融：融资余额（亿）+ 融券余额（万） */
-  function marginChart(dom, rows) {
+  function marginChart(dom, rows, group) {
     if (!rows || !rows.length) return null;
     const dates = rows.map(function (r) { return r.date.slice(5); });
 
@@ -306,11 +316,11 @@
     option.tooltip.valueFormatter = function (v) {
       return v == null ? '--' : Number(v).toFixed(2);
     };
-    return mount(dom, option);
+    return mount(dom, option, group);
   }
 
   /** 融资买入 / 偿还 双向柱 */
-  function marginFlowChart(dom, rows) {
+  function marginFlowChart(dom, rows, group) {
     if (!rows || !rows.length) return null;
     const dates = rows.map(function (r) { return r.date.slice(5); });
     const option = baseOption();
@@ -347,7 +357,7 @@
     option.tooltip.valueFormatter = function (v) {
       return v == null ? '--' : Math.abs(Number(v)).toFixed(2);
     };
-    return mount(dom, option);
+    return mount(dom, option, group);
   }
 
   global.Charts = {
@@ -355,6 +365,7 @@
     flowChart: flowChart,
     marginChart: marginChart,
     marginFlowChart: marginFlowChart,
+    connect: connect,
     disposeAll: disposeAll,
     resizeAll: resizeAll
   };
