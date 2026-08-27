@@ -266,12 +266,19 @@ class Registry:
 
     async def kline_min(self, code: str, market: str, limit: int,
                         klt: int = 60) -> tuple[list[Bar], str]:
-        """分钟 K 线：仅支持的数据源返回。NotSupported 时返回 ([], "") 让上层降级。"""
+        """分钟 K 线：仅支持的数据源返回。无可用源时返回 ([], "") 让上层降级。
+
+        捕获 ProviderError 而不是 NotSupported，因为 _first 内部已经把所有 NotSupported
+        收敛为最后一次 raise ProviderError；empty_ok=True 让数据源返回空 bars 时也算成功，
+        与 fund_flow 的设计对齐。
+        """
         try:
             bars, src = await self._first(
-                "kline_min", lambda p: p.kline_min(code, market, limit, klt))
-            return bars, src
-        except NotSupported:
+                "kline_min", lambda p: p.kline_min(code, market, limit, klt),
+                empty_ok=True,
+            )
+            return bars or [], src or ""
+        except ProviderError:
             return [], ""
 
     async def fund_flow(self, code: str, market: str, days: int) -> tuple[list[FlowDay], str]:

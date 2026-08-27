@@ -127,7 +127,9 @@ class EastmoneyProvider(Provider):
     def __init__(self) -> None:
         super().__init__(
             name="eastmoney",
-            caps={"quotes", "search", "kline", "fund_flow", "margin", "hot", "boards", "industry", "news", "reports", "financials"},
+            # kline_min：分钟 K 线（5/15/30/60）；其他数据源未实现，caps 不声明
+            caps={"quotes", "search", "kline", "kline_min", "fund_flow",
+                  "margin", "hot", "boards", "industry", "news", "reports", "financials"},
         )
 
     # ------------------------------------------------------------ 实时行情
