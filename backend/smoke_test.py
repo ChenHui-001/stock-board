@@ -2133,6 +2133,37 @@ def test_watch_monitor() -> None:
     check("关键监测: 普通波动继续观察", observe["action"] == "继续观察", str(observe))
     check("关键监测: 异常行情不误报加减仓", delayed["action"] == "继续观察" and delayed["tone"] == "warn", str(delayed))
 
+    # ---- v3 扩展: 温和回调(浅跌 + 量能) / 放量上行(中涨 + 大量) ----
+    mild_pullback = service.watch_monitor({"status": "normal", "change_pct": -2.0, "volume_ratio": 1.2})
+    mild_pullback_no_vol = service.watch_monitor({"status": "normal", "change_pct": -2.0, "volume_ratio": 0.5})
+    big_up_no_vol = service.watch_monitor({"status": "normal", "change_pct": 2.0, "volume_ratio": 1.5})
+    big_up_strong_vol = service.watch_monitor({"status": "normal", "change_pct": 2.0, "volume_ratio": 2.5})
+    mid_shrink = service.watch_monitor({"status": "normal", "change_pct": 1.5, "volume_ratio": 1.8})
+    check("关键监测: 浅跌+量能 → 温和回调",
+          mild_pullback["action"] == "温和回调" and mild_pullback["tone"] == "warn", str(mild_pullback))
+    check("关键监测: 浅跌+缩量 不判温和回调",
+          mild_pullback_no_vol["action"] != "温和回调", str(mild_pullback_no_vol))
+    check("关键监测: 中涨+量不足 不判放量上行",
+          big_up_no_vol["action"] != "放量上行", str(big_up_no_vol))
+    check("关键监测: 中涨+显著量 → 放量上行",
+          big_up_strong_vol["action"] == "放量上行" and big_up_strong_vol["tone"] == "up", str(big_up_strong_vol))
+    # 边界: change=1.0 / change=3.0
+    edge_1 = service.watch_monitor({"status": "normal", "change_pct": 1.0, "volume_ratio": 2.5})
+    edge_3 = service.watch_monitor({"status": "normal", "change_pct": 3.0, "volume_ratio": 2.5})
+    check("关键监测: 边界+1.0% 仍归放量上行",
+          edge_1["action"] == "放量上行", str(edge_1))
+    check("关键监测: 边界+3.0% 应归可加仓而非放量上行",
+          edge_3["action"] == "可加仓", str(edge_3))
+    # VR 边界 vr=2.0
+    vr_low = service.watch_monitor({"status": "normal", "change_pct": 2.0, "volume_ratio": 1.99})
+    vr_hi = service.watch_monitor({"status": "normal", "change_pct": 2.0, "volume_ratio": 2.0})
+    check("关键监测: VR<2.0 不判放量上行",
+          vr_low["action"] != "放量上行", str(vr_low))
+    check("关键监测: VR>=2.0 判放量上行",
+          vr_hi["action"] == "放量上行", str(vr_hi))
+    check("关键监测: 1.5/1.8 中等情况不触发任何加仓/放量",
+          mid_shrink["action"] == "继续观察", str(mid_shrink))
+
     # ---- v2: ATR 归一化 + 量比过滤 ----
 
     # 高波动股票（ATR=2 元，股价 20 元，ATR% = 10%）：涨 3% 仅 0.3 倍 ATR，

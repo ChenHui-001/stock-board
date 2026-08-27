@@ -189,6 +189,19 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None) -> dict[str, s
             "reason": f"涨幅 {change:+.2f}% 且量比 {vr:.2f}，动能较强",
         }
 
+    # ---- 3.5. 放量上行：涨幅 1% ≤ x < 3% 且量比 ≥ 2.0
+    # 与「可加仓」(≥3% / ATR≥1.5) 错开 —— 中等涨幅配合显著量能,
+    # 属于价量齐升但还没到加仓门槛的强势阶段。给绿色 vs 默认 flat 提高辨识度。
+    if 1.0 <= change < 3.0 and has_vr and vr >= 2.0:
+        return {
+            "action": "放量上行",
+            "tone": "up",
+            "reason": (
+                f"涨幅 {change:+.2f}% 且量比 {vr:.2f}，"
+                "价量齐升，关注能否突破至加仓区间"
+            ),
+        }
+
     # ---- 4. 异动放量：量比 ≥ 3 但方向不明(|change| < 2%)
     if has_vr and vr >= 3 and abs(change) < 2:
         return {
@@ -217,6 +230,20 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None) -> dict[str, s
             "reason": (
                 f"换手率 {turnover:.1f}% 且上涨 {change:+.2f}%，"
                 "交投活跃，关注持续性"
+            ),
+        }
+
+    # ---- 5.5. 温和回调：-3% < 跌幅 ≤ -1.5% 且量比 ≥ 1.0
+    # 与「应减仓」(≤-3%) 和「谨慎持有」(量比<1.0) 错开 —— 量能未萎缩的浅回调
+    # 往往只是洗盘而非趋势走坏,给一个温和告警避免被「应减仓」一刀切。
+    # 优先级低于「异动放量」和「高换手」,后两者代表更紧迫的市场状态。
+    if -3 < change <= -1.5 and has_vr and vr >= 1.0:
+        return {
+            "action": "温和回调",
+            "tone": "warn",
+            "reason": (
+                f"跌幅 {change:+.2f}%{vr_text}，量能未萎缩，"
+                "回调尚未恶化，关注量能是否进一步放大"
             ),
         }
 
