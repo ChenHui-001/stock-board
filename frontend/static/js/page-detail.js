@@ -381,6 +381,20 @@
     }).join(' / ');
   }
 
+  function statGroup(title, items) {
+    const group = U.el('div', 'stat-group');
+    group.appendChild(U.el('div', 'stat-group-title', title));
+    const row = U.el('div', 'stat-row');
+    items.forEach(function (s) {
+      const node = U.el('div', 'stat');
+      node.appendChild(U.el('div', 'stat-label', s[0]));
+      node.appendChild(U.el('div', 'stat-value' + (s[2] ? ' ' + s[2] : ''), s[1]));
+      row.appendChild(node);
+    });
+    group.appendChild(row);
+    return group;
+  }
+
   function renderStatus(d) {
     const wrap = U.el('div');
     // 盘中背离警告条：后端 build_status 在 60 分线趋势与日线背离时
@@ -399,9 +413,6 @@
     wrap.appendChild(tags);
 
     const sr = d.support_resistance || {};
-    const stats = U.el('div', 'stat-row');
-    stats.style.marginTop = '14px';
-    stats.style.marginBottom = '0';
     // 区间位置按 50% 阈值染色：上半区偏多（绿） / 下半区偏空（红），
     // 给用户一眼的位置感；5/20/60 日涨跌与均线段重复，不重复染色，仅展示。
     const rangePosTone = U.isNum(sr.range_pos_pct)
@@ -416,26 +427,23 @@
     const vol5Tone = U.isNum(trend5)
       ? (trend5 >= 1 ? 'up' : trend5 <= -1 ? 'down' : '')
       : '';
-    [
+    // 分组呈现：区间与位置 / 趋势与波幅，避免 8 个指标无差别平铺
+    wrap.appendChild(statGroup('区间与位置', [
       ['20日区间', U.price(sr.low_20) + ' ~ ' + U.price(sr.high_20)],
       ['60日区间', U.price(sr.low_60) + ' ~ ' + U.price(sr.high_60)],
       // ATR(14)：用 0.5 倍 ATR 作为突破容差，比固定 ±0.5% 更贴合个股波动；
       // atr_breakout 用文字描述当前与区间的位置关系
       // P1-4：次要支撑/压力，让用户看到"下一个位置"
       ['次要支撑', _formatSecondaryList(sr.secondary_support), ''],
-      ['次要压力', _formatSecondaryList(sr.secondary_resistance), ''],
+      ['次要压力', _formatSecondaryList(sr.secondary_resistance), '']
+    ]));
+    // 波幅单位 ATR：把固定百分比阈值换成"相当于多少倍 ATR"，避免高波动股票永远被判震荡
+    wrap.appendChild(statGroup('趋势与波幅', [
       ['近5日涨跌', U.pct(d.status.trend.chg_5d)],
       ['近20日涨跌', U.pct(d.status.trend.chg_20d)],
       ['近60日涨跌', U.pct(d.status.trend.chg_60d)],
-      // 波幅单位 ATR：把固定百分比阈值换成"相当于多少倍 ATR"，避免高波动股票永远被判震荡
       ['近5日波幅', U.isNum(trend5) ? trend5.toFixed(2) + ' 个ATR' : U.NBSP, vol5Tone]
-    ].forEach(function (s, i) {
-      const node = U.el('div', 'stat');
-      node.appendChild(U.el('div', 'stat-label', s[0]));
-      node.appendChild(U.el('div', 'stat-value' + (s[2] ? ' ' + s[2] : ''), s[1]));
-      stats.appendChild(node);
-    });
-    wrap.appendChild(stats);
+    ]));
     return wrap;
   }
 
@@ -840,5 +848,6 @@
     tick: tick
   };
 })(window);
+
 
 

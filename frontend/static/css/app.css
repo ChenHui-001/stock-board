@@ -1186,6 +1186,42 @@ main {
 }
 
 /* ------------------------------------------------------------ 详情页 */
+/* 加载骨架屏：标题/价格/行情宫格/内容块占位 */
+.detail-skeleton {
+  display: grid;
+  gap: 14px;
+}
+.sk-block {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.sk-block::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.07), transparent);
+  animation: sk-shimmer 1.4s infinite;
+}
+@keyframes sk-shimmer {
+  100% { transform: translateX(100%); }
+}
+.sk-title { height: 30px; max-width: 260px; }
+.sk-price { height: 46px; max-width: 220px; }
+.sk-body { height: 190px; }
+.sk-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.sk-cell { height: 58px; }
+@media (max-width: 720px) {
+  .sk-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
 .detail-head {
   margin-bottom: 10px;
 }
@@ -1425,6 +1461,16 @@ main {
   font-weight: 600;
 }
 
+/* 状态区统计分组：区间与位置 / 趋势与波幅 */
+.stat-group + .stat-group { margin-top: 14px; }
+.stat-group-title {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+  letter-spacing: .2px;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -1487,7 +1533,7 @@ main {
 /* 详情页 · 关键指标条（顶部一眼可见） */
 .detail-keymetrics {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 1px;
   margin-top: 12px;
   background: var(--line-soft);
@@ -1532,9 +1578,9 @@ main {
 
 /* 详情页 · 移动端适配（≤768px） */
 @media (max-width: 768px) {
-  /* 关键指标条：6列→3列×2行 */
+  /* 关键指标条：4列→2列×2行 */
   .detail-keymetrics {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
   }
   /* stat-row：4列→2列，stat 卡片之间不挤 */
   .stat-row {
@@ -4030,6 +4076,11 @@ a.hotspot-title:hover {
   border-radius: 2px;
 }
 .card.section + .card.section { margin-top: 18px; }
+/* 锚点直达/平滑滚动时给 section 预留吸顶导航高度 */
+#view .card.section { scroll-margin-top: 132px; }
+@media (max-width: 720px) {
+  #view .card.section { scroll-margin-top: 128px; }
+}
 
 /* Phase 2: 资金与杠杆双列布局 */
 .capital-cols {
@@ -4119,7 +4170,7 @@ a.hotspot-title:hover {
   overflow-x: auto;
   scrollbar-width: thin;
   position: sticky;
-  top: 56px;
+  top: 62px;
   z-index: 10;
   box-shadow: 0 1px 3px rgba(0,0,0,.04);
 }
@@ -4144,7 +4195,7 @@ a.hotspot-title:hover {
   font-weight: 500;
 }
 @media (max-width: 720px) {
-  .detail-anchor { top: 52px; padding: 6px 10px; }
+  .detail-anchor { top: 58px; padding: 6px 10px; }
   .detail-anchor-item { padding: 4px 10px; font-size: 12px; }
 }
 
@@ -4161,3 +4212,5 @@ a.hotspot-title:hover {
     min-width: 110px;
   }
 }
+
+
