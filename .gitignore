@@ -22,3 +22,10 @@ hot.json
 .claude/
 .freebuff/
 shots/
+
+# auto-commit-watch 监听脚本产物
+auto-commit.log
+.credentials
+watcher_test.err
+watcher_test.log
+.workbuddy/
