@@ -60,12 +60,10 @@
         d.sources.stale.join('、') + ' 数据源当前不可用，已展示最近一次成功获取的数据。', ''));
     }
 
-    root.appendChild(section('基础行情', renderQuoteGrid(d), null));
-    root.appendChild(section('当前股票状态', renderStatus(d), '整合均线、资金、两融数据输出的标准化状态标签'));
-    root.appendChild(section('均线数据（MA5 / MA10 / MA20 / MA60）', renderMa(d), maSubtitle(d)));
-    root.appendChild(section('30 天资金流向', renderFlow(d), flowSubtitle(d)));
-    root.appendChild(section('30 天两融数据', renderMargin(d), marginSubtitle(d)));
-    root.appendChild(section('财报数据（季报 / 中报 / 三季报 / 年报）', renderFinancials(d), financialsSubtitle(d)));
+    root.appendChild(section('当前股票状态', renderStatus(d), '整合均线、资金、两融数据输出的标准化状态标签', 'status'));
+    root.appendChild(section('均线数据（MA5 / MA10 / MA20 / MA60）', renderMa(d), maSubtitle(d), 'ma'));
+    root.appendChild(section('资金与杠杆（30 天）', renderCapital(d), capitalSubtitle(d), 'capital'));
+    root.appendChild(section('财报数据（季报 / 中报 / 三季报 / 年报）', renderFinancials(d), financialsSubtitle(d), 'financials'));
     root.appendChild(renderSourceFooter(d));
 
     // 图表要在 DOM 挂载后再初始化
@@ -73,12 +71,12 @@
       Charts.maChart(document.getElementById('chart-ma'), d.kline, d.ma_summary.series);
       const flowRows = d.fund_flow.rows;
       if (flowRows && flowRows.length) {
-        Charts.flowChart(document.getElementById('chart-flow'), flowRows, !!d.fund_flow.summary.tiered);
+        Charts.flowChart(document.getElementById('chart-capital-flow'), flowRows, !!d.fund_flow.summary.tiered);
       }
       const marginRows = d.margin.rows;
       if (marginRows && marginRows.length) {
-        Charts.marginChart(document.getElementById('chart-margin'), marginRows);
-        Charts.marginFlowChart(document.getElementById('chart-margin-flow'), marginRows);
+        Charts.marginChart(document.getElementById('chart-capital-margin-main'), marginRows);
+        Charts.marginFlowChart(document.getElementById('chart-capital-margin-flow'), marginRows);
       }
     });
   }
@@ -87,8 +85,10 @@
     return U.el('div', 'notice' + (kind ? ' ' + kind : ''), text);
   }
 
-  function section(title, body, subtitle) {
+  function section(title, body, subtitle, anchor) {
     const card = U.el('div', 'card section');
+    if (anchor) card.id = 'section-' + anchor;
+    card.dataset.anchor = anchor || '';
     const head = U.el('div', 'card-head');
     head.appendChild(U.el('div', 'card-title', title));
     if (subtitle) head.appendChild(U.el('div', 'card-sub', subtitle));
@@ -152,6 +152,108 @@
     // 紧凑横排，减少下拉翻找。桌面 6 列、平板 3 列、手机 2 列。
     wrap.appendChild(renderKeyMetrics(d));
 
+    // ----- 数据时间戳 + 5秒刷新倒计时 -----
+    wrap.appendChild(renderDataStamp(d));
+
+    // ----- 紧凑行情 grid：原 '基础行情' section 内联到顶部，避免一次点击后还要滚动才能看到今开/成交 -----
+    wrap.appendChild(renderQuoteGrid(d));
+
+    // ----- sticky 锚点导航：长页面下快速跳转 -----
+    wrap.appendChild(renderAnchorNav());
+
+    return wrap;
+  }
+
+  // ----- 锚点导航：点击平滑跳转，滚动时高亮当前 section -----
+  let _anchorObserver = null;
+  function renderAnchorNav() {
+    const nav = U.el('div', 'detail-anchor');
+    nav.id = 'detail-anchor';
+    const items = [
+      { key: 'status', label: '状态' },
+      { key: 'ma', label: '均线' },
+      { key: 'capital', label: '资金与杠杆' },
+      { key: 'financials', label: '财报' }
+    ];
+    items.forEach(function (it) {
+      const a = U.el('a', 'detail-anchor-item', it.label);
+      a.href = '#section-' + it.key;
+      a.dataset.target = it.key;
+      a.onclick = function (e) {
+        e.preventDefault();
+        const target = document.getElementById('section-' + it.key);
+        if (target) {
+          const top = target.getBoundingClientRect().top + window.scrollY - 70;
+          window.scrollTo({ top: top, behavior: 'smooth' });
+        }
+      };
+      nav.appendChild(a);
+    });
+    // IntersectionObserver: 跳转时高亮当前 section
+    setTimeout(function () { setupAnchorObserver(items); }, 100);
+    return nav;
+  }
+
+  function setupAnchorObserver(items) {
+    if (_anchorObserver) {
+      _anchorObserver.disconnect();
+      _anchorObserver = null;
+    }
+    if (!('IntersectionObserver' in window)) return;
+    const navLinks = document.querySelectorAll('#detail-anchor .detail-anchor-item');
+    _anchorObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          const key = e.target.dataset.anchor;
+          navLinks.forEach(function (a) {
+            a.classList.toggle('active', a.dataset.target === key);
+          });
+        }
+      });
+    }, { rootMargin: '-70px 0px -60% 0px', threshold: 0 });
+    items.forEach(function (it) {
+      const sec = document.getElementById('section-' + it.key);
+      if (sec) _anchorObserver.observe(sec);
+    });
+  }
+
+  // ----- 数据时间戳：交易日期 + 服务端/客户端获取时间 + 5秒刷新倒计时 -----
+  let _detailMountedAt = 0;
+  let _detailIntervalMs = 0;
+  let _detailTimerHandle = null;
+  let _detailLastFetchAt = 0;
+  function renderDataStamp(d) {
+    const wrap = U.el('div', 'detail-stamp');
+    const sess = d.session || {};
+    _detailIntervalMs = sess.interval_ms || 0;
+    _detailMountedAt = Date.now();
+    _detailLastFetchAt = Date.now();
+    const q = d.quote || {};
+    const tradeDate = q.trade_date || '--';
+    const fetchTime = U.fmtTime(new Date());
+    const tsNode = U.el('div', 'detail-stamp-info');
+    tsNode.appendChild(U.el('span', '', '交易日期 ' + tradeDate));
+    tsNode.appendChild(U.el('span', '', '· 获取 ' + fetchTime));
+    if (sess.label) tsNode.appendChild(U.el('span', '', '· ' + sess.label));
+    wrap.appendChild(tsNode);
+    if (_detailIntervalMs > 0) {
+      const cd = U.el('div', 'detail-stamp-countdown');
+      cd.textContent = '距下次刷新 ' + (_detailIntervalMs / 1000).toFixed(0) + 's';
+      wrap.appendChild(cd);
+      if (_detailTimerHandle) clearInterval(_detailTimerHandle);
+      _detailTimerHandle = setInterval(function () {
+        const elapsed = Date.now() - _detailLastFetchAt;
+        const remain = Math.max(0, _detailIntervalMs - elapsed) / 1000;
+        cd.textContent = '距下次刷新 ' + remain.toFixed(1) + 's';
+        if (remain <= 0.1) {
+          _detailLastFetchAt = Date.now();
+          if (typeof tick === 'function') tick(true);
+        }
+      }, 200);
+    } else {
+      const cd = U.el('div', 'detail-stamp-countdown static', '盘后手动刷新');
+      wrap.appendChild(cd);
+    }
     return wrap;
   }
 
@@ -170,16 +272,17 @@
     const marginTone = ms.sentiment && ms.sentiment.indexOf('偏多') >= 0 ? 'up'
       : ms.sentiment && ms.sentiment.indexOf('偏空') >= 0 ? 'down' : '';
 
+    // 主支撑/主压力/区间位置/ATR 突破 是最关键的 4 个信息；资金/两融改放 Phase 2 合并区
     const cells = [
       {
-        label: '支撑', value: U.price(sr.support),
+        label: '主支撑', value: U.price(sr.support),
         sub: sr.support_from ? '来源 ' + sr.support_from : '',
-        tone: '', tip: '当前 0.5×ATR 容差下的有效支撑位'
+        tone: '', tip: '当前 0.5×ATR 容差下的有效支撑位；下方失位警示'
       },
       {
-        label: '压力', value: U.price(sr.resistance),
+        label: '主压力', value: U.price(sr.resistance),
         sub: sr.resistance_from ? '来源 ' + sr.resistance_from : '',
-        tone: '', tip: '当前 0.5×ATR 容差下的有效压力位'
+        tone: '', tip: '当前 0.5×ATR 容差下的有效压力位；突破是趋势确认'
       },
       {
         label: '区间位置', value: rangePos, sub: '近 20 日', tone: rangeTone,
@@ -189,17 +292,6 @@
         label: 'ATR(14)', value: U.isNum(sr.atr) ? sr.atr.toFixed(2) : U.NBSP,
         sub: sr.atr_breakout || '—', tone: atrTone,
         tip: '近 14 日平均真实波幅；突破/跌破用 0.5×ATR 容差判定'
-      },
-      {
-        label: '资金', value: fs.available ? (fs.state || '—') : '—',
-        sub: fs.trend || '暂无数据', tone: fundTone,
-        tip: '近 30 日主力资金净额状态：强/中/弱/溃，叠加趋势方向'
-      },
-      {
-        label: '两融', value: ms.available ? (ms.sentiment || '—') : '—',
-        sub: ms.last_date ? '披露 ' + ms.last_date : '无两融',
-        tone: marginTone,
-        tip: '近 30 日两融情绪（含融资余额变动方向），T+1 公布'
       }
     ];
 
@@ -294,15 +386,10 @@
       ? (trend5 >= 1 ? 'up' : trend5 <= -1 ? 'down' : '')
       : '';
     [
-      ['当前支撑位', U.price(sr.support) + (sr.support_from ? ' (' + sr.support_from + ')' : '')],
-      ['当前压力位', U.price(sr.resistance) + (sr.resistance_from ? ' (' + sr.resistance_from + ')' : '')],
       ['20日区间', U.price(sr.low_20) + ' ~ ' + U.price(sr.high_20)],
       ['60日区间', U.price(sr.low_60) + ' ~ ' + U.price(sr.high_60)],
-      ['区间位置', U.isNum(sr.range_pos_pct) ? sr.range_pos_pct.toFixed(1) + '%' : U.NBSP, rangePosTone],
       // ATR(14)：用 0.5 倍 ATR 作为突破容差，比固定 ±0.5% 更贴合个股波动；
       // atr_breakout 用文字描述当前与区间的位置关系
-      ['ATR(14)', U.isNum(sr.atr) ? sr.atr.toFixed(2) + ' 元' : U.NBSP],
-      ['ATR突破判定', (sr.atr_breakout || '—') + (U.isNum(sr.atr) ? '（容差 ' + (sr.atr / 2).toFixed(2) + ' 元）' : ''), breakTone],
       // P1-4：次要支撑/压力，让用户看到"下一个位置"
       ['次要支撑', _formatSecondaryList(sr.secondary_support), ''],
       ['次要压力', _formatSecondaryList(sr.secondary_resistance), ''],
@@ -390,6 +477,102 @@
       + (s.last_date || '--') + ' 数据；状态判定已退回近5日口径。';
   }
 
+  // ----- 资金与杠杆合并区副标题：把两边的核心状态拼成一句话 -----
+  function capitalSubtitle(d) {
+    const fs = d.fund_flow.summary || {};
+    const ms = d.margin.summary || {};
+    const parts = [];
+    if (fs.available) parts.push(fs.days + ' 个交易日 资金');
+    if (ms.available) parts.push(ms.days + ' 个交易日 两融');
+    if (fs.trend) parts.push(fs.trend);
+    if (ms.sentiment) parts.push(ms.sentiment);
+    return parts.join(' · ');
+  }
+
+  // ----- 资金与杠杆：左侧资金流向 + 右侧两融的双列布局 -----
+  function renderCapital(d) {
+    const wrap = U.el('div');
+    const hasFlow = (d.fund_flow.rows || []).length > 0;
+    const hasMargin = (d.margin.rows || []).length > 0;
+
+    // 双列容器
+    const cols = U.el('div', 'capital-cols');
+
+    // 左列：资金流向
+    const left = U.el('div', 'capital-col');
+    left.appendChild(U.el('div', 'capital-col-title', '资金流向'));
+    if (!hasFlow) {
+      left.appendChild(U.el('div', 'loading-block',
+        d.fund_flow.error ? ('资金流向暂不可用：' + d.fund_flow.error) : '暂无资金流向数据'));
+    } else {
+      const fs = d.fund_flow.summary || {};
+      const stats = U.el('div', 'stat-row');
+      const lastLabel = fs.fresh ? '当日主力' : '最近交易日主力';
+      [
+        ['30日主力净额', U.signedMoney(fs.main_total), U.tone(fs.main_total)],
+        ['近5日主力', U.signedMoney(fs.main_last5), U.tone(fs.main_last5)],
+        [lastLabel, U.signedMoney(fs.main_last), U.tone(fs.main_last)],
+        ['超大单合计', U.signedMoney(fs.xl_total), U.tone(fs.xl_total)]
+      ].forEach(function (it) {
+        const node = U.el('div', 'stat');
+        node.appendChild(U.el('div', 'stat-label', it[0]));
+        node.appendChild(U.el('div', 'stat-value ' + it[2], it[1]));
+        stats.appendChild(node);
+      });
+      left.appendChild(stats);
+      const freshNotice = flowFreshNotice(d);
+      if (freshNotice) left.appendChild(notice(freshNotice, 'warn'));
+      if (!fs.tiered) {
+        left.appendChild(notice(
+          '当前资金数据来自备用源（' + (d.fund_flow.source || '未知') + '），'
+          + '仅提供净流入与超大单口径，无四档拆分。', 'info'));
+      }
+      const flowChart = U.el('div', 'chart');
+      flowChart.id = 'chart-capital-flow';
+      flowChart.style.marginTop = '12px';
+      left.appendChild(flowChart);
+      left.appendChild(flowTable(d.fund_flow.rows, fs.tiered));
+    }
+    cols.appendChild(left);
+
+    // 右列：两融
+    const right = U.el('div', 'capital-col');
+    right.appendChild(U.el('div', 'capital-col-title', '两融数据'));
+    if (!hasMargin) {
+      right.appendChild(U.el('div', 'loading-block',
+        d.margin.error ? ('两融数据暂不可用：' + d.margin.error) : '该股不是两融标的，或暂无两融数据'));
+    } else {
+      const ms = d.margin.summary || {};
+      const stats = U.el('div', 'stat-row');
+      [
+        ['最新融资余额', U.money(ms.rzye_last), ''],
+        ['30日融资变动', U.signedMoney(ms.rz_change), U.tone(ms.rz_change)],
+        ['30日变动幅度', U.pct(ms.rz_change_pct), U.tone(ms.rz_change_pct)],
+        ['30日融资净买入', U.signedMoney(ms.rz_net_total), U.tone(ms.rz_net_total)],
+        ['最新融券余额', U.money(ms.rqye_last), ''],
+        ['融资占流通市值', U.isNum(ms.rzyezb_last) ? ms.rzyezb_last.toFixed(2) + '%' : U.NBSP, '']
+      ].forEach(function (it) {
+        const node = U.el('div', 'stat');
+        node.appendChild(U.el('div', 'stat-label', it[0]));
+        node.appendChild(U.el('div', 'stat-value ' + it[2], it[1]));
+        stats.appendChild(node);
+      });
+      right.appendChild(stats);
+      const c1 = U.el('div', 'chart chart-sm');
+      c1.id = 'chart-capital-margin-main';
+      c1.style.marginTop = '12px';
+      right.appendChild(c1);
+      const c2 = U.el('div', 'chart chart-sm');
+      c2.id = 'chart-capital-margin-flow';
+      right.appendChild(c2);
+      right.appendChild(marginTable(d.margin.rows));
+    }
+    cols.appendChild(right);
+
+    wrap.appendChild(cols);
+    return wrap;
+  }
+
   function renderFlow(d) {
     const wrap = U.el('div');
     const s = d.fund_flow.summary || {};
@@ -438,7 +621,7 @@
     wrap.appendChild(stats);
 
     const chart = U.el('div', 'chart');
-    chart.id = 'chart-flow';
+    chart.id = 'chart-capital-flow';
     wrap.appendChild(chart);
 
     wrap.appendChild(flowTable(rows, s.tiered));
@@ -521,11 +704,11 @@
     wrap.appendChild(stats);
 
     const c1 = U.el('div', 'chart chart-sm');
-    c1.id = 'chart-margin';
+    c1.id = 'chart-capital-margin-main';
     wrap.appendChild(c1);
 
     const c2 = U.el('div', 'chart chart-sm');
-    c2.id = 'chart-margin-flow';
+    c2.id = 'chart-capital-margin-flow';
     wrap.appendChild(c2);
 
     wrap.appendChild(marginTable(rows));
@@ -589,16 +772,40 @@
     if (pack.stale) {
       wrap.appendChild(U.el('div', 'search-hint', '财报源暂不可用，以下为上次成功缓存数据；报告期和同比指标可能不是最新发布值。'));
     }
+    // ----- 核心指标卡：一眼可见 4 个最关键指标 -----
+    const coreCards = U.el('div', 'fin-core');
+    const coreItems = [
+      { label: '营收同比', v: latest.revenue_yoy, fmt: financialPct, tone: U.tone(latest.revenue_yoy),
+        tip: '报告期营业收入同比变化；越高越佳' },
+      { label: '净利同比', v: latest.net_profit_yoy, fmt: financialPct, tone: U.tone(latest.net_profit_yoy),
+        tip: '归母净利润同比变化；越高越佳' },
+      { label: 'ROE', v: latest.roe, fmt: financialPct, tone: U.tone(latest.roe),
+        tip: '净资产收益率；≥10% 偏强，<0% 偏弱' },
+      { label: '负债率', v: latest.debt_ratio, fmt: financialPct, tone: '',
+        tip: '资产负债率；≥70% 需警惕财务杠杆' }
+    ];
+    coreItems.forEach(function (c) {
+      const card = U.el('div', 'fin-core-card');
+      if (c.tip) card.title = c.tip;
+      card.appendChild(U.el('div', 'fin-core-label', c.label));
+      const valueNode = U.el('div', 'fin-core-value ' + (c.tone || ''), c.fmt(c.v));
+      card.appendChild(valueNode);
+      // 额外提示：负债率高低需反向呈现
+      if (c.label === '负债率' && U.isNum(c.v)) {
+        const warn = U.el('div', 'fin-core-warn',
+          c.v >= 70 ? '高负债' : c.v <= 30 ? '低负债' : '中等负债');
+        card.appendChild(warn);
+      }
+      coreCards.appendChild(card);
+    });
+    wrap.appendChild(coreCards);
+
     const stats = U.el('div', 'stat-row');
     [
       ['最新报告期', latest.period || latest.date || '--', ''],
       ['营业收入', U.money(latest.revenue), ''],
-      ['营收同比', financialPct(latest.revenue_yoy), U.tone(latest.revenue_yoy)],
       ['归母净利润', U.money(latest.net_profit), ''],
-      ['净利润同比', financialPct(latest.net_profit_yoy), U.tone(latest.net_profit_yoy)],
-      ['扣非净利润同比', financialPct(latest.net_profit_deduct_yoy), U.tone(latest.net_profit_deduct_yoy)],
-      ['ROE', financialPct(latest.roe), U.tone(latest.roe)],
-      ['资产负债率', financialPct(latest.debt_ratio), '']
+      ['扣非净利同比', financialPct(latest.net_profit_deduct_yoy), U.tone(latest.net_profit_deduct_yoy)]
     ].forEach(function (it) {
       const node = U.el('div', 'stat');
       node.appendChild(U.el('div', 'stat-label', it[0]));
