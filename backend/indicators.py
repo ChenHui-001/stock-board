@@ -461,14 +461,20 @@ def _compute_main_dominance(rows: Sequence[FlowDay]) -> str:
 
 def _grade_flow_state(main_last: float, streak: int, streak_dir: str,
                       xl_dominance: str, fresh: bool, last5: float,
-                      main_total: float) -> tuple[str, str]:
+                      main_total: float,
+                      price_flow_note: str = "") -> tuple[str, str]:
     """5 档资金状态分级：
         主力抢筹（连入3日+且超大单主导）
         主力净流入（普通净入）
         资金观望（接近0）
         主力净流出（普通净出）
         主力出逃（连出3日+且超大单主导）
-    fresh=False 时降级为「近5日」口径，保留括号日期语义。"""
+    fresh=False 时降级为「近5日」口径，保留括号日期语义。
+
+    v4：当 price_flow_note 含明确的价量背离/共振标签，且与当前资金方向一致时，
+    用「·」连接追加到状态末尾，让一句话同时说清「主力动作 + 价量信号」。
+    叠加规则：流入方向可叠 高位诱多/低位吸筹/共振看多；流出方向可叠 高位诱多/共振看空。
+    """
     # 是否超大单主导：xl_dominance 字符串前缀匹配
     is_inst = "机构主导" in xl_dominance
     strong_in = streak >= 3 and streak_dir == "流入" and is_inst
@@ -476,19 +482,52 @@ def _grade_flow_state(main_last: float, streak: int, streak_dir: str,
 
     suffix = "" if fresh else "（近5日）"
 
+    # 先拿到基础 5 档标签，再决定是否追加价量背离标签。
+    base_label = ""
+    grade = "neutral"
     if fresh:
         if main_last > 0:
-            return ("主力抢筹（当日）" if strong_in else "主力净流入（当日）"), "inflow"
-        if main_last < 0:
-            return ("主力出逃（当日）" if strong_out else "主力净流出（当日）"), "outflow"
-        return "资金观望（当日）", "neutral"
+            base_label = "主力抢筹（当日）" if strong_in else "主力净流入（当日）"
+            grade = "inflow"
+        elif main_last < 0:
+            base_label = "主力出逃（当日）" if strong_out else "主力净流出（当日）"
+            grade = "outflow"
+        else:
+            base_label = "资金观望（当日）"
+    else:
+        # fresh=False：退回近5日/累计口径
+        if last5 > 0 and main_total > 0:
+            base_label = ("主力抢筹" + suffix) if strong_in else ("主力净流入" + suffix)
+            grade = "inflow"
+        elif last5 < 0 and main_total < 0:
+            base_label = ("主力出逃" + suffix) if strong_out else ("主力净流出" + suffix)
+            grade = "outflow"
+        else:
+            base_label = "资金观望"
 
-    # fresh=False：退回近5日/累计口径
-    if last5 > 0 and main_total > 0:
-        return ("主力抢筹" + suffix if strong_in else "主力净流入" + suffix), "inflow"
-    if last5 < 0 and main_total < 0:
-        return ("主力出逃" + suffix if strong_out else "主力净流出" + suffix), "outflow"
-    return "资金观望", "neutral"
+    # v4：叠加价量背离标签。仅当标签方向与当前资金方向一致时附加：
+    #   inflow  + 高位诱多/低位吸筹/共振看多  → 追加
+    #   outflow + 高位诱多/共振看空           → 追加
+    # 矛盾组合（如 inflow + 共振看空）不附加，避免双重标签误导。
+    pf = price_flow_note or ""
+    extra = ""
+    if grade == "inflow":
+        if "高位诱多" in pf:
+            extra = "·高位诱多"
+        elif "低位吸筹" in pf:
+            extra = "·低位吸筹"
+        elif "共振看多" in pf:
+            extra = "·共振看多"
+    elif grade == "outflow":
+        if "共振看空" in pf:
+            extra = "·共振看空"
+        elif "高位诱多" in pf:
+            extra = "·高位诱多"
+
+    if extra:
+        # 例如「主力抢筹（当日）」 + 「·高位诱多」 → 「主力抢筹（当日）·高位诱多」
+        return base_label + extra, grade
+    return base_label, grade
 
 
 # ------------------------------------------------------------------ 资金流向
@@ -570,6 +609,7 @@ def summarize_flow(rows: Sequence[FlowDay], ref_date: str | None = None) -> dict
         main_last=main_last, streak=streak, streak_dir=streak_dir,
         xl_dominance=xl_dominance, fresh=fresh,
         last5=last5, main_total=main_total,
+        price_flow_note=price_flow_note,
     )
 
     return {

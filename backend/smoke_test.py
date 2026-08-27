@@ -1590,9 +1590,11 @@ def test_indicators() -> None:
         FlowDay(date="2026-08-18", main=3.0e8, sm=0, md=0, lg=0, xl=2.9e8, close=11.3),
     ]
     f_si = summarize_flow(flow_strong_in, ref_date="2026-08-18")
-    check("资金状态: 主力抢筹(连入+超大单主导)", f_si["state"] == "主力抢筹（当日）" and f_si["state_grade"] == "inflow", f_si["state"])
+    # v4: 强共振信号时, base 标签会追加「·共振看多」后缀
+    check("资金状态: 主力抢筹(连入+超大单主导)", f_si["state"].startswith("主力抢筹（当日）") and f_si["state_grade"] == "inflow", f_si["state"])
     check("主力类型: 机构主导(超大单70%+)", "机构主导" in (f_si.get("xl_dominance") or ""), str(f_si.get("xl_dominance")))
     check("价量背离: 价格↑资金↑共振看多", "共振看多" in (f_si.get("price_flow_note") or ""), str(f_si.get("price_flow_note")))
+    check("v4: 抢筹叠加共振看多后缀", "·共振看多" in f_si["state"] or "主力抢筹（当日）" == f_si["state"], f_si["state"])
 
     # 主力出逃：连出 3 日 + 超大单主导 + 共振看空
     flow_strong_out = [
@@ -1609,8 +1611,10 @@ def test_indicators() -> None:
         FlowDay(date="2026-08-18", main=-3.0e8, sm=0, md=0, lg=0, xl=-2.9e8, close=10.2),
     ]
     f_so = summarize_flow(flow_strong_out, ref_date="2026-08-18")
-    check("资金状态: 主力出逃(连出+超大单主导)", f_so["state"] == "主力出逃（当日）" and f_so["state_grade"] == "outflow", f_so["state"])
+    # v4: 强共振信号时, base 标签会追加「·共振看空」后缀
+    check("资金状态: 主力出逃(连出+超大单主导)", f_so["state"].startswith("主力出逃（当日）") and f_so["state_grade"] == "outflow", f_so["state"])
     check("价量背离: 价格↓资金↓共振看空", "共振看空" in (f_so.get("price_flow_note") or ""), str(f_so.get("price_flow_note")))
+    check("v4: 出逃叠加共振看空后缀", "·共振看空" in f_so["state"] or "主力出逃（当日）" == f_so["state"], f_so["state"])
 
     # 普通流入（非连入/超大单主导） → 主力净流入
     flow_plain_in = [
@@ -1680,6 +1684,91 @@ def test_indicators() -> None:
     ]
     f_sh = summarize_flow(flow_short, ref_date="2026-08-18")
     check("价量背离: 样本不足返回空", not f_sh.get("price_flow_note"), str(f_sh.get("price_flow_note")))
+    # ---- v4: 价量对齐标注 / 趋势反转 / 主力类型权重 ----
+
+    # 抢筹 + 高位诱多: 后期资金均量缩水但价格续涨
+    flow_sid = [
+        FlowDay(date="2026-07-29", main=5.0e8, sm=0, md=0, lg=0, xl=4.0e8, close=10.0),
+        FlowDay(date="2026-07-30", main=4.5e8, sm=0, md=0, lg=0, xl=3.8e8, close=10.2),
+        FlowDay(date="2026-07-31", main=5.5e8, sm=0, md=0, lg=0, xl=4.5e8, close=10.4),
+        FlowDay(date="2026-08-03", main=4.8e8, sm=0, md=0, lg=0, xl=4.0e8, close=10.6),
+        FlowDay(date="2026-08-04", main=5.2e8, sm=0, md=0, lg=0, xl=4.3e8, close=10.8),
+        FlowDay(date="2026-08-11", main=1.0e8, sm=0, md=0, lg=0, xl=0.5e8, close=11.5),
+        FlowDay(date="2026-08-12", main=0.8e8, sm=0, md=0, lg=0, xl=0.4e8, close=11.8),
+        FlowDay(date="2026-08-13", main=1.2e8, sm=0, md=0, lg=0, xl=0.6e8, close=12.0),
+        FlowDay(date="2026-08-14", main=0.9e8, sm=0, md=0, lg=0, xl=0.4e8, close=12.3),
+        FlowDay(date="2026-08-17", main=1.1e8, sm=0, md=0, lg=0, xl=0.5e8, close=12.6),
+        FlowDay(date="2026-08-18", main=1.0e8, sm=0, md=0, lg=0, xl=0.5e8, close=12.9),
+    ]
+    f_sid = summarize_flow(flow_sid, ref_date="2026-08-18")
+    check("v4: 抢筹+高位诱多后缀", "高位诱多" in f_sid["state"] and f_sid["state_grade"] == "inflow", f_sid["state"])
+    check("v4: 高位诱多价量背离字符串", f_sid.get("price_flow_note") == "价格↑资金↓ 高位诱多", str(f_sid.get("price_flow_note")))
+
+    # 抢筹 + 低位吸筹: 后5日资金大额流入但价格继续下跌
+    flow_abs = [
+        FlowDay(date="2026-07-29", main=-3.0e8, sm=0, md=0, lg=0, xl=-2.5e8, close=15.0),
+        FlowDay(date="2026-07-30", main=-2.5e8, sm=0, md=0, lg=0, xl=-2.0e8, close=14.8),
+        FlowDay(date="2026-07-31", main=-3.5e8, sm=0, md=0, lg=0, xl=-3.0e8, close=14.5),
+        FlowDay(date="2026-08-03", main=-2.8e8, sm=0, md=0, lg=0, xl=-2.3e8, close=14.0),
+        FlowDay(date="2026-08-04", main=-3.2e8, sm=0, md=0, lg=0, xl=-2.7e8, close=13.5),
+        FlowDay(date="2026-08-11", main=2.5e8, sm=0, md=0, lg=0, xl=2.0e8, close=13.0),
+        FlowDay(date="2026-08-12", main=3.0e8, sm=0, md=0, lg=0, xl=2.5e8, close=12.8),
+        FlowDay(date="2026-08-13", main=2.8e8, sm=0, md=0, lg=0, xl=2.3e8, close=12.5),
+        FlowDay(date="2026-08-14", main=3.5e8, sm=0, md=0, lg=0, xl=3.0e8, close=12.2),
+        FlowDay(date="2026-08-17", main=3.2e8, sm=0, md=0, lg=0, xl=2.7e8, close=11.9),
+        FlowDay(date="2026-08-18", main=3.8e8, sm=0, md=0, lg=0, xl=3.2e8, close=11.5),
+    ]
+    f_abs = summarize_flow(flow_abs, ref_date="2026-08-18")
+    check("v4: 抢筹+低位吸筹后缀", "低位吸筹" in f_abs["state"] and f_abs["state_grade"] == "inflow", f_abs["state"])
+
+    # 出逃 + 共振看空: 价格大跌+资金大额流出
+    flow_or = [
+        FlowDay(date="2026-07-29", main=-0.5e8, sm=0, md=0, lg=0, xl=-0.4e8, close=12.0),
+        FlowDay(date="2026-07-30", main=-0.4e8, sm=0, md=0, lg=0, xl=-0.3e8, close=11.9),
+        FlowDay(date="2026-07-31", main=-0.6e8, sm=0, md=0, lg=0, xl=-0.5e8, close=11.8),
+        FlowDay(date="2026-08-03", main=-0.5e8, sm=0, md=0, lg=0, xl=-0.4e8, close=11.7),
+        FlowDay(date="2026-08-04", main=-0.4e8, sm=0, md=0, lg=0, xl=-0.3e8, close=11.6),
+        FlowDay(date="2026-08-11", main=-2.0e8, sm=0, md=0, lg=0, xl=-1.8e8, close=11.0),
+        FlowDay(date="2026-08-12", main=-3.0e8, sm=0, md=0, lg=0, xl=-2.7e8, close=10.5),
+        FlowDay(date="2026-08-13", main=-2.5e8, sm=0, md=0, lg=0, xl=-2.3e8, close=10.0),
+        FlowDay(date="2026-08-14", main=-3.5e8, sm=0, md=0, lg=0, xl=-3.2e8, close=9.5),
+        FlowDay(date="2026-08-17", main=-3.0e8, sm=0, md=0, lg=0, xl=-2.8e8, close=9.0),
+        FlowDay(date="2026-08-18", main=-4.0e8, sm=0, md=0, lg=0, xl=-3.7e8, close=8.5),
+    ]
+    f_or = summarize_flow(flow_or, ref_date="2026-08-18")
+    check("v4: 出逃+共振看空后缀", "共振看空" in f_or["state"] and f_or["state_grade"] == "outflow", f_or["state"])
+
+    # 趋势反转: 当日流出但累计/近5日均流入 → 信号不稳,不轻易报出逃
+    flow_rev = [
+        FlowDay(date="2026-08-11", main=2.0e8, sm=0, md=0, lg=0, xl=1.8e8, close=10.0),
+        FlowDay(date="2026-08-12", main=3.0e8, sm=0, md=0, lg=0, xl=2.7e8, close=10.2),
+        FlowDay(date="2026-08-13", main=2.5e8, sm=0, md=0, lg=0, xl=2.3e8, close=10.5),
+        FlowDay(date="2026-08-14", main=2.8e8, sm=0, md=0, lg=0, xl=2.5e8, close=10.7),
+        FlowDay(date="2026-08-17", main=1.5e8, sm=0, md=0, lg=0, xl=1.2e8, close=10.9),
+        FlowDay(date="2026-08-18", main=-4.0e8, sm=0, md=0, lg=0, xl=-3.5e8, close=10.6),
+    ]
+    f_rev = summarize_flow(flow_rev, ref_date="2026-08-18")
+    check("v4: 趋势反转不轻易报主力出逃",
+          "出逃" not in f_rev["state"], f_rev["state"])
+
+    # 机构主导 vs 主力分散: 同等 streak 但 xl 占比不同 → 分级不同
+    flow_inst = [
+        FlowDay(date="2026-08-15", main=1.0e8, sm=0, md=0, lg=0, xl=0.9e8, close=10.0),
+        FlowDay(date="2026-08-16", main=1.2e8, sm=0, md=0, lg=0, xl=1.1e8, close=10.2),
+        FlowDay(date="2026-08-17", main=1.1e8, sm=0, md=0, lg=0, xl=1.0e8, close=10.4),
+        FlowDay(date="2026-08-18", main=1.3e8, sm=0, md=0, lg=0, xl=1.2e8, close=10.6),
+    ]
+    flow_retail = [
+        FlowDay(date="2026-08-15", main=1.0e8, sm=0, md=0, lg=0, xl=0.2e8, close=10.0),
+        FlowDay(date="2026-08-16", main=1.2e8, sm=0, md=0, lg=0, xl=0.3e8, close=10.2),
+        FlowDay(date="2026-08-17", main=1.1e8, sm=0, md=0, lg=0, xl=0.2e8, close=10.4),
+        FlowDay(date="2026-08-18", main=1.3e8, sm=0, md=0, lg=0, xl=0.3e8, close=10.6),
+    ]
+    f_inst = summarize_flow(flow_inst, ref_date="2026-08-18")
+    f_retail = summarize_flow(flow_retail, ref_date="2026-08-18")
+    check("v4: 机构主导分级强于主力分散",
+          "抢筹" in f_inst["state"] and "抢筹" not in f_retail["state"],
+          f"inst={f_inst['state']} | retail={f_retail['state']}")
 
     # _tone_flow 染色覆盖
     from backend.indicators import _tone_flow
@@ -2523,5 +2612,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
 
