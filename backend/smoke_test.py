@@ -2055,8 +2055,10 @@ def test_watch_monitor() -> None:
     check("ATR归一化: 高波动股票小涨不触发加仓",
           high_vol["action"] == "继续观察", str(high_vol))
 
+    # 用创业板代码让 change=16% 落在合法区间(<20% 涨停线)
     high_vol_strong = service.watch_monitor(
-        {"status": "normal", "change_pct": 16.0, "volume_ratio": 2.0, "price": 20.0},
+        {"status": "normal", "change_pct": 16.0, "volume_ratio": 2.0,
+         "price": 20.0, "code": "300750", "market": "SZ"},
         atr=2.0,
     )
     check("ATR归一化: 高波动股票大涨(unit_atr>=1.5)触发加仓",
@@ -2119,6 +2121,128 @@ def test_watch_monitor() -> None:
     )
     check("量比过滤: 量比0.80刚好触发减仓",
           edge_down2["action"] == "应减仓", str(edge_down2))
+
+    # ---- v3: 涨跌停 / 异动放量 / 高换手 / 流动性低 / 谨慎持有 ----
+
+    # 主板涨停(9.8%)：明确触碰涨停线
+    main_limit_up = service.watch_monitor(
+        {"status": "normal", "change_pct": 9.8, "volume_ratio": 2.0},
+    )
+    check("涨跌停: 主板+9.8%触发涨停关注",
+          main_limit_up["action"] == "涨停关注" and main_limit_up["tone"] == "warn",
+          str(main_limit_up))
+
+    # 主板跌停(-9.8%)
+    main_limit_down = service.watch_monitor(
+        {"status": "normal", "change_pct": -9.8, "volume_ratio": 1.0},
+    )
+    check("涨跌停: 主板-9.8%触发跌停风险",
+          main_limit_down["action"] == "跌停风险" and main_limit_down["tone"] == "down",
+          str(main_limit_down))
+
+    # 临界：主板 9.4%(< 9.7 抖动容忍) → 不应触发涨停
+    just_under_limit = service.watch_monitor(
+        {"status": "normal", "change_pct": 9.4, "volume_ratio": 2.0},
+    )
+    check("涨跌停: 主板9.4%未触及涨停",
+          just_under_limit["action"] != "涨停关注", str(just_under_limit))
+
+    # 创业板：15% 落在 20% 涨停线内，不应触发涨停
+    gem_up = service.watch_monitor(
+        {"status": "normal", "change_pct": 15.0, "volume_ratio": 2.0,
+         "code": "300750", "market": "SZ"},
+    )
+    check("涨跌停: 创业板15%未触及涨停(20%线)",
+          gem_up["action"] != "涨停关注", str(gem_up))
+
+    # 创业板涨停(19.8%)
+    gem_limit_up = service.watch_monitor(
+        {"status": "normal", "change_pct": 19.8, "volume_ratio": 2.0,
+         "code": "300750", "market": "SZ"},
+    )
+    check("涨跌停: 创业板19.8%触发涨停关注",
+          gem_limit_up["action"] == "涨停关注", str(gem_limit_up))
+
+    # ST 股票：4.8% 触及 5% 涨停线
+    st_up = service.watch_monitor(
+        {"status": "normal", "change_pct": 4.8, "volume_ratio": 1.0,
+         "code": "600xxx", "name": "ST华联"},
+    )
+    check("涨跌停: ST股票+4.8%触发涨停关注",
+          st_up["action"] == "涨停关注", str(st_up))
+
+    # ST 股票：4.5% 未触及 5% 涨停线
+    st_under = service.watch_monitor(
+        {"status": "normal", "change_pct": 4.5, "volume_ratio": 1.0,
+         "name": "*ST华联"},
+    )
+    check("涨跌停: ST股票+4.5%未触及涨停",
+          st_under["action"] != "涨停关注", str(st_under))
+
+    # 异动放量：量比 3.5 但 change 仅 0.5% → 方向不明
+    surge = service.watch_monitor(
+        {"status": "normal", "change_pct": 0.5, "volume_ratio": 3.5},
+    )
+    check("异动放量: 量比3.5+change 0.5%触发异动放量",
+          surge["action"] == "异动放量" and surge["tone"] == "warn",
+          str(surge))
+
+    # 异动放量需方向不明：change 3% + 量比 3.5 → 走加仓判定而非异动放量
+    surge_with_trend = service.watch_monitor(
+        {"status": "normal", "change_pct": 3.0, "volume_ratio": 3.5},
+    )
+    check("异动放量: 大涨+巨量走加仓判定,不归类异动放量",
+          surge_with_trend["action"] != "异动放量", str(surge_with_trend))
+
+    # 高换手出货：换手 12% 且下跌
+    active_sell = service.watch_monitor(
+        {"status": "normal", "change_pct": -2.0, "volume_ratio": 1.0,
+         "turnover": 12.0},
+    )
+    check("高换手: 换手12%且下跌触发高换手出货",
+          active_sell["action"] == "高换手出货" and active_sell["tone"] == "down",
+          str(active_sell))
+
+    # 高换手活跃：换手 12% 且上涨
+    active_buy = service.watch_monitor(
+        {"status": "normal", "change_pct": 2.0, "volume_ratio": 1.0,
+         "turnover": 12.0},
+    )
+    check("高换手: 换手12%且上涨触发高换手活跃",
+          active_buy["action"] == "高换手活跃" and active_buy["tone"] == "warn",
+          str(active_buy))
+
+    # 流动性低：换手 0.2%
+    illiquid = service.watch_monitor(
+        {"status": "normal", "change_pct": 0.0, "volume_ratio": 0.5,
+         "turnover": 0.2},
+    )
+    check("流动性低: 换手0.2%触发流动性低",
+          illiquid["action"] == "流动性低" and illiquid["tone"] == "warn",
+          str(illiquid))
+
+    # 流动性低优先级低于高换手：换手 5% 不触发流动性低
+    normal_to = service.watch_monitor(
+        {"status": "normal", "change_pct": 0.0, "volume_ratio": 0.5,
+         "turnover": 5.0},
+    )
+    check("流动性低: 换手5%不触发流动性低",
+          normal_to["action"] != "流动性低", str(normal_to))
+
+    # 谨慎持有：跌幅 -2% 且量比 0.5(未触发减仓)
+    weak_hold = service.watch_monitor(
+        {"status": "normal", "change_pct": -2.0, "volume_ratio": 0.5},
+    )
+    check("谨慎持有: 跌幅-2%量比0.5触发谨慎持有",
+          weak_hold["action"] == "谨慎持有" and weak_hold["tone"] == "flat",
+          str(weak_hold))
+
+    # 谨慎持有优先级低于异动放量：量比 3.5 + 跌 -2% 走异动放量
+    weak_surge = service.watch_monitor(
+        {"status": "normal", "change_pct": -1.8, "volume_ratio": 3.5},
+    )
+    check("谨慎持有: 量比3.5+跌-2%走异动放量,不归类谨慎持有",
+          weak_surge["action"] == "异动放量", str(weak_surge))
 
     # ATR 数据异常：price=0 时归一化不生效，退回到固定门槛
     atr_no_price = service.watch_monitor(
@@ -2399,3 +2523,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+

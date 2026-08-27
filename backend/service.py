@@ -103,14 +103,20 @@ async def get_quote(code: str, market: str | None = None, force: bool = False) -
 def watch_monitor(data: dict[str, Any], atr: float | None = None) -> dict[str, str]:
     """根据实时行情生成首页关键监测提示。
 
-    只在信号足够明确时给出加减仓提示，其余情况保持观察，避免用单一涨跌幅
-    把普通波动误报成操作信号。
+    v3 多维度策略（信号优先级从高到低）：
+      1. 行情状态异常            → 继续观察(warn)
+      2. 涨跌停                  → 涨停关注 / 跌停风险
+      3. 放量下跌                → 应减仓
+      4. ATR 放量上涨            → 可加仓
+      5. 异动放量(量比 ≥ 3 方向不明) → 异动放量
+      6. 高换手 ≥ 10%            → 高换手出货 / 高换手活跃
+      7. 流动性极低(换手 < 0.3%) → 流动性低
+      8. 缩量阴跌                → 继续观察(地量阴跌)
+      9. 偏弱趋势                → 谨慎持有
+      10. 默认                   → 继续观察
 
-    判定逻辑（v2，ATR 归一化 + 量比过滤）：
-      - 「可加仓」要求涨幅相当于 ≥ 1.5 倍 ATR（不同波动股票自适应），
-        且量比 ≥ 1.5（无量拉升不算）。ATR 不可用时退回到固定 3% 门槛。
-      - 「应减仓」要求跌幅 ≤ -3% 且量比 ≥ 0.8（地量阴跌往往空头衰竭，
-        不应机械触发减仓），否则降级为「继续观察」。
+    涨跌停限制按板块差异化（ST 5% / 创业板·科创板 20% / 北交所 30% / 主板 10%），
+    容忍 ±0.3% 抖动。「可加仓」沿用 v2 的 ATR 归一化 + 量比过滤（无量拉升不算）。
     """
     status = data.get("status") or "unknown"
     if status != "normal":
@@ -121,61 +127,163 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None) -> dict[str, s
         }
 
     change = data.get("change_pct")
-    volume_ratio = data.get("volume_ratio")
     if not isinstance(change, (int, float)):
         return {"action": "继续观察", "tone": "flat", "reason": "涨跌幅暂无数据"}
 
-    has_vr = isinstance(volume_ratio, (int, float))
-    vr_text = f"，量比 {volume_ratio:.2f}" if has_vr else ""
+    vr = data.get("volume_ratio")
+    turnover = data.get("turnover")
+    has_vr = isinstance(vr, (int, float))
+    has_to = isinstance(turnover, (int, float))
+    vr_text = f"，量比 {vr:.2f}" if has_vr else ""
+    to_text = f"，换手 {turnover:.2f}%" if has_to else ""
 
-    # ---- 应减仓：跌幅 ≤ -3% 且量比 ≥ 0.8（缩量阴跌属于空头衰竭，不触发减仓）
-    if change <= -3 and (not has_vr or volume_ratio >= 0.8):
+    # ---- 1. 涨跌停：板块差异化 + ±0.3% 抖动容忍
+    limit_pct = _limit_pct(data.get("market"), data.get("code"), data.get("name"))
+    near_limit = limit_pct - 0.3
+    if change >= near_limit:
+        return {
+            "action": "涨停关注",
+            "tone": "warn",
+            "reason": (
+                f"涨幅 {change:+.2f}%，触及涨停 ±{limit_pct:.0f}%，"
+                "次日溢价/分歧需关注"
+            ),
+        }
+    if change <= -near_limit:
+        return {
+            "action": "跌停风险",
+            "tone": "down",
+            "reason": (
+                f"跌幅 {change:+.2f}%，触及跌停 ∓{limit_pct:.0f}%，"
+                "次日可能继续下挫"
+            ),
+        }
+
+    # ---- 2. 应减仓：跌幅 ≤ -3% 且量比 ≥ 0.8（缩量阴跌属空头衰竭，不触发减仓）
+    if change <= -3 and (not has_vr or vr >= 0.8):
         return {
             "action": "应减仓",
             "tone": "down",
             "reason": f"跌幅 {change:+.2f}%{vr_text}，短线风险升高",
         }
 
-    # ---- 可加仓：涨幅用 ATR 归一化，避免高波动股票永远触发
-    # unit_atr = abs(change%) / (atr% / 100)，ATR 占股价的百分比 = atr / price * 100
+    # ---- 3. 可加仓：ATR 归一化或固定 3% 兜底 + 量比 ≥ 1.5
     price = data.get("price")
     if isinstance(atr, (int, float)) and atr > 0 \
             and isinstance(price, (int, float)) and price > 0:
-        # ATR 可用时严格走归一化判定（不再走固定 3% 兜底，避免形同虚设）
-        atr_pct = atr / price * 100  # ATR 占股价的百分比
+        atr_pct = atr / price * 100
         unit_atr = abs(change) / atr_pct if atr_pct > 0 else 0
-        if change >= 1 and unit_atr >= 1.5 and has_vr and volume_ratio >= 1.5:
+        if change >= 1 and unit_atr >= 1.5 and has_vr and vr >= 1.5:
             return {
                 "action": "可加仓",
                 "tone": "up",
                 "reason": (
-                    f"涨幅 {change:+.2f}% ≈ {unit_atr:.1f} 倍 ATR，量比 {volume_ratio:.2f}，动能较强"
+                    f"涨幅 {change:+.2f}% ≈ {unit_atr:.1f} 倍 ATR，"
+                    f"量比 {vr:.2f}，动能较强"
                 ),
             }
-    elif change >= 3 and has_vr and volume_ratio >= 1.5:
-        # ATR 不可用时退回到固定 3% 门槛（向后兼容历史行为）
+    elif change >= 3 and has_vr and vr >= 1.5:
         return {
             "action": "可加仓",
             "tone": "up",
-            "reason": f"涨幅 {change:+.2f}% 且量比 {volume_ratio:.2f}，动能较强",
+            "reason": f"涨幅 {change:+.2f}% 且量比 {vr:.2f}，动能较强",
         }
 
-    # ---- 缩量阴跌（跌幅 ≤ -3% 但量比 < 0.8）显式标注，避免误判
-    if change <= -3 and has_vr and volume_ratio < 0.8:
+    # ---- 4. 异动放量：量比 ≥ 3 但方向不明(|change| < 2%)
+    if has_vr and vr >= 3 and abs(change) < 2:
+        return {
+            "action": "异动放量",
+            "tone": "warn",
+            "reason": (
+                f"量比 {vr:.2f} 但涨跌幅仅 {change:+.2f}%，"
+                "方向不明，关注后续突破/跌破"
+            ),
+        }
+
+    # ---- 5. 高换手(≥ 10%)：按方向区分出货 / 活跃
+    if has_to and turnover >= 10:
+        if change < 0:
+            return {
+                "action": "高换手出货",
+                "tone": "down",
+                "reason": (
+                    f"换手率 {turnover:.1f}% 且下跌 {change:+.2f}%，"
+                    "资金分歧出货"
+                ),
+            }
+        return {
+            "action": "高换手活跃",
+            "tone": "warn",
+            "reason": (
+                f"换手率 {turnover:.1f}% 且上涨 {change:+.2f}%，"
+                "交投活跃，关注持续性"
+            ),
+        }
+
+    # ---- 6. 流动性极低：换手 < 0.3%（数据缺失时 is_num 为 False，不会误报）
+    if has_to and turnover < 0.3:
+        return {
+            "action": "流动性低",
+            "tone": "warn",
+            "reason": (
+                f"换手率仅 {turnover:.2f}%，流动性极差，"
+                "价格易被小额单子砸动"
+            ),
+        }
+
+    # ---- 7. 缩量阴跌：跌幅 ≤ -3% 但量比 < 0.8（地量阴跌 → 关注企稳）
+    if change <= -3 and has_vr and vr < 0.8:
         return {
             "action": "继续观察",
             "tone": "flat",
             "reason": (
-                f"跌幅 {change:+.2f}% 但量比仅 {volume_ratio:.2f}，"
+                f"跌幅 {change:+.2f}% 但量比仅 {vr:.2f}，"
                 "地量阴跌，关注是否企稳"
             ),
         }
 
+    # ---- 8. 偏弱趋势：跌幅 ≤ -1.5% 且量能不足（未触发减仓）
+    if change <= -1.5 and (not has_vr or vr < 1.0):
+        return {
+            "action": "谨慎持有",
+            "tone": "flat",
+            "reason": (
+                f"跌幅 {change:+.2f}%{vr_text}，动能偏弱，"
+                "未破位前继续持有"
+            ),
+        }
+
+    # ---- 9. 默认
     return {
         "action": "继续观察",
         "tone": "flat",
-        "reason": f"涨跌幅 {change:+.2f}%{vr_text}，未形成明确信号",
+        "reason": f"涨跌幅 {change:+.2f}%{vr_text}{to_text}，未形成明确信号",
     }
+
+
+def _limit_pct(market: str | None, code: str | None, name: str | None) -> float:
+    """估算个股日涨跌幅限制(%)。
+
+    - ST/*ST: 5%
+    - 创业板(300/301): 20%
+    - 科创板(688): 20%
+    - 北交所(market=BJ 或 8/4 开头): 30%
+    - 其它主板/中小板: 10%
+    """
+    nm = name or ""
+    if "ST" in nm.upper():
+        return 5.0
+    c = code or ""
+    if c.startswith(("300", "301")):
+        return 20.0
+    if c.startswith("688"):
+        return 20.0
+    m = (market or "").upper()
+    if m in ("BJ", "BSE"):
+        return 30.0
+    if c.startswith(("83", "87", "43", "82")):
+        return 30.0
+    return 10.0
 
 
 async def watchlist_board(force: bool = False) -> dict[str, Any]:
@@ -587,3 +695,4 @@ async def hot(limit: int = 8) -> dict[str, Any]:
         "stale": pack.get("stale", False),
         "error": pack.get("error", ""),
     }
+
