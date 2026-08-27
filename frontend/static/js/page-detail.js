@@ -22,7 +22,7 @@
     state.data = null;
     state.seq += 1;
     Charts.disposeAll();
-    view().innerHTML = '<div class="card"><div class="loading-block">加载 ' + U.escapeHtml(code) + ' 详情数据…</div></div>';
+    view().innerHTML = renderSkeleton();
     await load(false);
   }
 
@@ -42,6 +42,22 @@
         + '<div class="empty-desc">' + U.escapeHtml(err.message) + '</div>'
         + '</div></div>';
     }
+  }
+
+  // 加载骨架屏：顶部标题/价格 + 行情宫格 + 两个内容块占位，减少“白屏等数据”的跳变
+  function renderSkeleton() {
+    return '<div class="detail-skeleton" aria-label="加载中">'
+      + '<div class="sk-block sk-title"></div>'
+      + '<div class="sk-block sk-price"></div>'
+      + '<div class="sk-grid">'
+      +   '<div class="sk-block sk-cell"></div>'
+      +   '<div class="sk-block sk-cell"></div>'
+      +   '<div class="sk-block sk-cell"></div>'
+      +   '<div class="sk-block sk-cell"></div>'
+      + '</div>'
+      + '<div class="sk-block sk-body"></div>'
+      + '<div class="sk-block sk-body"></div>'
+      + '</div>';
   }
 
   function render() {
@@ -108,6 +124,21 @@
     const back = U.el('button', 'btn btn-sm', '← 返回首页');
     back.onclick = function () { location.hash = '#/home'; };
     nav.appendChild(back);
+
+    const refreshBtn = U.el('button', 'btn btn-sm', '');
+    refreshBtn.title = '强制刷新本股全部数据';
+    refreshBtn.appendChild(U.el('span', 'refresh-icon', '⟳'));
+    refreshBtn.appendChild(document.createTextNode(' 刷新'));
+    refreshBtn.onclick = function () {
+      if (refreshBtn.disabled) return;
+      refreshBtn.disabled = true;
+      refreshBtn.classList.add('spinning');
+      load(true).finally(function () {
+        refreshBtn.classList.remove('spinning');
+        refreshBtn.disabled = false;
+      });
+    };
+    nav.appendChild(refreshBtn);
 
     const aiBtn = U.el('button', 'btn btn-sm btn-primary', 'AI 分析');
     aiBtn.onclick = function () { AI.open(q.code, q.name, aiBtn); };
@@ -809,3 +840,5 @@
     tick: tick
   };
 })(window);
+
+
