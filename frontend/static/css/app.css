@@ -1474,9 +1474,16 @@ main {
 /* 横向(列表)行)布局：每项一行 label: value,
    适合次要支撑/压力这种带来源说明的长值,
    不会把卡片撑高、也不会断行到下一张卡片里 */
-.stat-row.horizontal {
-  display: flex;
-  flex-direction: column;
+/* 详情页 · stat-row.horizontal：把 4 列卡片网格转成 label: value 紧凑列
+   用更高优先级 + !important 防止被基础 .stat-row 网格规则覆盖，
+   同时保证在任何媒体查询（≤768/≤420）下仍保持横向行式布局，
+   因为短值多行排列在小屏更易扫读。 */
+.stat-row.horizontal,
+.detail-section .stat-row.horizontal,
+.stat-group.horizontal .stat-row.horizontal {
+  display: flex !important;
+  flex-direction: column !important;
+  grid-template-columns: none !important;
   gap: 0;
   background: var(--bg-elev-2);
   border: 1px solid var(--line);
