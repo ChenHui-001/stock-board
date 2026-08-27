@@ -161,7 +161,10 @@
     const vhead = U.el('div', 'ai-verdict-head');
     vhead.appendChild(U.el('div', 'ai-action', adv.action || '持有观望'));
     if (U.isNum(adv.confidence)) {
-      vhead.appendChild(U.el('div', 'ai-conf', '置信度 ' + adv.confidence + '%'));
+      const confNode = U.el('div', 'ai-conf', '置信度 ' + adv.confidence + '%');
+      // 置信度说明（hover 显示）：让用户知道这个置信度是基于什么判定的
+      if (adv.confidence_reason) confNode.title = adv.confidence_reason;
+      vhead.appendChild(confNode);
     }
     if (adv.horizon) vhead.appendChild(U.el('div', 'ai-conf', '周期 ' + adv.horizon));
     verdict.appendChild(vhead);
@@ -304,6 +307,19 @@
     if (report.from_cache) metaNode.appendChild(U.el('span', '', '当日缓存结果'));
     host.appendChild(metaNode);
 
+    // LLM 与规则引擎分歧检测：只有 status='conflict' 时才显示
+    const divInfo = meta.divergence;
+    if (divInfo && divInfo.status === 'conflict') {
+      const diffBadge = U.el('span', 'meta-warn', '\u26a0 AI \u4e0e\u89c4\u5219\u5f15\u64ce\u5b58\u5728\u5206\u6b67');
+      diffBadge.title = (
+        '\u5206\u6b67\u7ef4\u5ea6\uff1a' + (divInfo.diffs || []).join('\uff1b')
+        + (divInfo.score_gap != null ? '\n\u603b\u5206\u5dee\u8ddd\uff1a' + divInfo.score_gap + ' \u5206' : '')
+        + (divInfo.conf_gap != null ? '\n\u7f6e\u4fe1\u5ea6\u5dee\u8ddd\uff1a' + divInfo.conf_gap + '%' : '')
+        + (divInfo.llm_action && divInfo.rule_action
+           ? '\nAI: ' + divInfo.llm_action + '\n\u89c4\u5219: ' + divInfo.rule_action : '')
+      );
+      metaNode.appendChild(diffBadge);
+    }
     if (meta.degraded_reason) {
       const warn = U.el('div', 'notice');
       warn.style.marginTop = '10px';
@@ -414,7 +430,8 @@
     lines.push('  支撑 ' + U.price(adv.support) + ' / 压力 ' + U.price(adv.resistance)
       + ' / 介入 ' + (adv.entry_zone || '--') + ' / 离场 ' + (adv.exit_zone || '--'));
     lines.push('  止损 ' + U.price(adv.stop_loss) + ' / 止盈 ' + U.price(adv.take_profit)
-      + ' / 置信度 ' + (adv.confidence != null ? adv.confidence + '%' : '--'));
+      + ' / 置信度 ' + (adv.confidence != null ? adv.confidence + '%' : '--')
+      + (adv.confidence_reason ? '\n  置信度依据：' + adv.confidence_reason : ''));
     const sc = adv.scores;
     if (sc && sc.tech != null) {
       lines.push('  三面评分：技术 ' + (sc.tech > 0 ? '+' : '') + sc.tech

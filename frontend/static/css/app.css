@@ -2662,6 +2662,35 @@ main {
   display: flex;
   gap: 14px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+/* LLM 与规则引擎分歧徽标：hover 显示分歧维度与总分/置信度差距 */
+.meta-warn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, .14);
+  color: #b45309;
+  font-weight: 500;
+  cursor: help;
+  border: 1px solid rgba(245, 158, 11, .35);
+  transition: background .15s ease;
+}
+.meta-warn:hover {
+  background: rgba(245, 158, 11, .22);
+}
+[data-theme='dark'] .meta-warn {
+  background: rgba(245, 158, 11, .18);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, .45);
+}
+
+/* 置信度说明 hover 提示位 - 仅在 ai-conf 上加充足大的双击预览区分 */
+.ai-conf[title] {
+  cursor: help;
+  border-bottom: 1px dashed var(--text-faint);
 }
 
 .ai-disclaimer {

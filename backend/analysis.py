@@ -39,6 +39,8 @@ SYSTEM_PROMPT = """你是一名 A 股量化分析师，擅长用均线技术形�
    注意「持有观望」指维持现有仓位不动，是明确的不操作指令，不等于模糊表态。
 4. 所有价位必须是具体数字，精确到 2 位小数，且落在合理价格区间内。
 5. 每段分析都要引用具体数值（均线值、乖离率、资金金额、融资余额变化等）作为依据。
+6. 必须额外输出 `confidence_reason` 字段，用一句话说明为何给出当前置信度
+   （如：三面同向/背离、信号样本量、关键数据缺失等），让用户能溯源。
 
 【输出 JSON 结构】
 {
@@ -76,12 +78,120 @@ SYSTEM_PROMPT = """你是一名 A 股量化分析师，擅长用均线技术形�
     "exit_zone": "15.40-15.80",
     "stop_loss": 12.10,
     "take_profit": 15.90,
-    "horizon": "建议持有周期，如：5-10 个交易日"
+    "horizon": "建议持有周期，如：5-10 个交易日",
+    "confidence_reason": "一句话说明置信度依据，如：三面同向/背离、样本量、数据缺失"
   }
 }"""
 
 
+# 精简 few-shot：1 个结构示例（无真实数据），目的不是教模型做决策，而是把 schema
+# 锚定住——减少 action 字段被改写成"建议加仓（请注意风险）"、字段错位等格式漂移。
+# 仅在零样本下偶发格式问题；该示例由量化分析师测试稳定下来后可移除。
+FEWSHOT_EXAMPLE = """
+【输出示例（仅示意结构，数值与代码无对应关系）】
+{
+ "trend": {
+   "summary": "多头排列后回踩 MA10",
+   "short": "近5日+3.2%，MA5=12.80 上行、MA10=12.65，股价站上 MA5，短线偏多",
+   "mid": "近20日+6.5%，MA20=12.45 上行，股价站上 MA20，中期趋势向好",
+   "long": "近60日+11.2%，MA60=11.90 上行，股价站上季线，中长期多头格局",
+   "pattern": "多头排列后回踩 MA10 不破，缩量企稳"
+ },
+ "capital": {
+   "summary": "主力连续 3 日净流入",
+   "main_force": "近5日主力净流入 0.85 亿，近30日累计 2.30 亿，超大单占比 62%",
+   "retail": "中单+0.10 亿、小单-0.30 亿，散户资金与主力反向",
+   "margin": "融资余额 30 日变动 +4.8%，杠杆资金做多意愿抬升"
+ },
+ "fundamental": {
+   "summary": "营收净利双增",
+   "period": "2026H1",
+   "growth": "营收同比 +18.2%、归母净利润同比 +24.5%",
+   "quality": "ROE 12.3%、毛利率 28.4%、负债率 42.1%"
+ },
+ "risk": {
+   "opportunities": [
+     "MA5/10/20 多头排列，MA20=12.45 构成有效支撑",
+     "近5日主力净流入 0.85 亿，资金面配合"
+   ],
+   "risks": [
+     "散户资金与主力反向，需警惕拉高出货",
+     "上方压力位 13.80（近期高点）突破前存在震荡消化"
+   ]
+ },
+ "advice": {
+   "action": "积极持仓/加仓",
+   "reason": "三面同向：均线多头+融资抬升+业绩双增，MA20=12.45 不破可持有",
+   "confidence": 78,
+   "confidence_reason": "三面同向共振但 30 日资金样本量有限，且散户反向，置信度略低于顶部",
+   "position": "可持有 7 成以上，回踩 MA10 不破可加仓",
+   "support": 12.45,
+   "resistance": 13.80,
+   "entry_zone": "12.60-12.90",
+   "exit_zone": "13.50-13.90",
+   "stop_loss": 12.10,
+   "take_profit": 14.10,
+   "horizon": "5-10 个交易日"
+ }
+}"""
+
+
+def _system_prompt() -> str:
+    """动态组装 SYSTEM_PROMPT：few-shot 示例集中放在尾部，避免与硬性要求混淆。"""
+    return SYSTEM_PROMPT + FEWSHOT_EXAMPLE
+
+
+
 # ------------------------------------------------------------------ 投喂数据
+
+# 资讯/研报相关性排序：让头几条就是最相关内容，提高 LLM 投喂密度。
+# 加权威媒体权重（彭博/财联社等），避免低质媒体抢位。
+_RELEVANCE_MEDIA_BONUS = {
+    "新浪财经": 1.0, "财联社": 1.2, "证券时报": 1.2, "上海证券报": 1.2,
+    "证券日报": 1.1, "中国证券报": 1.2, "21世纪经济报道": 1.1,
+    "第一财经": 1.1, "澎湃新闻": 1.0, "经济观察报": 1.1, "界面新闻": 1.0,
+    "华尔街见闻": 1.1, "36氪": 0.9, "钛媒体": 0.9, "虎嗅": 0.9,
+}
+
+def _relevance_score(item: dict, name: str, code: str) -> float:
+    """资讯/研报与该股的相关性评分：标题/摘要出现股票名或代码给高分，
+    权威媒体给权重加成；用于排序后投喂给 LLM，让头几条就是最相关的内容。
+    无股票名/代码命中的条目仍按时间倒序保留，不会被全淘汰。
+    """
+    title = item.get("title", "") or ""
+    summary = item.get("summary", "") or ""
+    text = title + " " + summary
+    score = 0.0
+    if name and name in text:
+        score += 8 + (5 if name in title else 0)
+    if code and code in text:
+        score += 6 + (4 if code in title else 0)
+    src = item.get("source", "") or ""
+    score *= _RELEVANCE_MEDIA_BONUS.get(src, 1.0)
+    return score
+
+def _sort_by_relevance(
+    items: list,
+    name: str,
+    code: str,
+    *,
+    limit: int,
+) -> list:
+    """按相关性倒序排序后截断。保留所有条目，仅在排序上让最相关的优先进入截断窗口；
+    同分按时间倒序（保持调用方预期）。
+    """
+    if not items:
+        return []
+    scored = sorted(
+        items,
+        key=lambda x: (
+            _relevance_score(x, name, code),
+            x.get("date", "") or "",
+        ),
+        reverse=True,
+    )
+    return scored[:limit]
+
 
 def build_payload(
     detail: dict[str, Any],
@@ -260,7 +370,7 @@ def build_payload(
                 "影响程度": (n.get("interpretation") or {}).get("impact", "低"),
                 "解读": (n.get("interpretation") or {}).get("summary", ""),
             }
-            for n in (news or [])[:15]
+            for n in _sort_by_relevance(news or [], q.get("name") or "", q.get("code") or "", limit=15)
         ],
         "券商观点_近30日": [
             {
@@ -273,12 +383,45 @@ def build_payload(
                 "影响程度": (r.get("interpretation") or {}).get("impact", "低"),
                 "解读": (r.get("interpretation") or {}).get("summary", ""),
             }
-            for r in (reports or [])[:10]
+            for r in _sort_by_relevance(reports or [], q.get("name") or "", q.get("code") or "", limit=10)
         ],
     }
 
 
 # ------------------------------------------------------------------ 规则引擎
+
+def _confidence_reason_text(
+    score: float,
+    aligned: bool,
+    conflict: bool,
+    news_n: int,
+    report_n: int,
+    fin_n: int,
+    fin_stale: bool,
+) -> str:
+    """根据信号一致性 + 样本量 + 数据新鲜度压缩成一句话置信度说明。"""
+    parts: list[str] = []
+    if conflict:
+        parts.append("技术/资金/消息三面背离")
+    elif aligned:
+        parts.append("三面同向共振")
+    else:
+        parts.append("三面信号方向不一")
+    sample_bits = []
+    if news_n < 3:
+        sample_bits.append("资讯偏少")
+    if report_n < 2:
+        sample_bits.append("研报偏少")
+    if fin_n == 0:
+        sample_bits.append("无财报参考")
+    elif fin_stale:
+        sample_bits.append("财报源不可用、参考上次缓存")
+    if sample_bits:
+        parts.append("、".join(sample_bits) + "拉低置信度")
+    if abs(score) >= 28:
+        parts.append("评分极端，进一步增强置信度")
+    return "，".join(parts) if parts else "样本与信号均充足"
+
 
 def _news_score(news: list[dict[str, Any]] | None) -> tuple[int, int, int]:
     """统计资讯情绪：返回 (利好数, 利空数, 中性数)。
@@ -1031,6 +1174,13 @@ def rule_based(
             "take_profit": take_profit,
             "horizon": "5-10 个交易日",
             "score": score,
+            # 置信度依据：把影响置信度的关键因素压缩成一句话，与 LLM 路径对齐
+            "confidence_reason": _confidence_reason_text(
+                score, signal_aligned, signal_conflict,
+                len(news or []), len(reports or []),
+                len((financials or {}).get("rows") or []),
+                bool(financials.get("stale")),
+            ),
             # 三维分面明细（已加权）与信号一致性（供前端展示与用户溯源）
             "scores": {
                 "tech": w_tech,
@@ -1114,6 +1264,66 @@ def _sanitize(result: dict[str, Any], fallback: dict[str, Any], price: float | N
     return out
 
 
+# ------------------------------------------------------------------ 分歧检测
+
+def _diff_divergence(
+    llm_result: dict[str, Any], rule_fallback: dict[str, Any]
+) -> dict[str, Any]:
+    """对比 LLM 路径与规则引擎结论，给出分歧标记供前端展示。
+
+    主要比较 4 个维度：
+    - action：四选一行动建议
+    - direction：tech/capital/news 三面信号方向
+    - 总分差距 |LLM.total - rule.total|
+    - 置信度差距 |LLM.confidence - rule.confidence|
+
+    仅当 LLM 与规则存在显著分歧时返回 status='conflict'，否则 status='aligned'；
+    前端可在 ⚠ 提示中展示具体分歧维度，给用户知情权。
+    """
+    llm_advice = (llm_result.get("advice") or {})
+    rule_advice = (rule_fallback.get("advice") or {})
+    llm_scores = (llm_advice.get("scores") or {})
+    rule_scores = (rule_advice.get("scores") or {})
+
+    diffs: list[str] = []
+    if llm_advice.get("action") != rule_advice.get("action"):
+        diffs.append(
+            "行动分歧：LLM=" + str(llm_advice.get("action")) + " / 规则=" + str(rule_advice.get("action"))
+        )
+
+    dir_diffs: list[str] = []
+    for dim in ("tech", "capital", "news"):
+        lv = llm_scores.get(dim)
+        rv = rule_scores.get(dim)
+        try:
+            if lv is not None and rv is not None:
+                ls = 1 if lv > 0 else (-1 if lv < 0 else 0)
+                rs = 1 if rv > 0 else (-1 if rv < 0 else 0)
+                if ls != 0 and rs != 0 and ls != rs:
+                    label = {"tech": "技术", "capital": "资金", "news": "消息"}[dim]
+                    dir_diffs.append(label)
+        except TypeError:
+            continue
+    if dir_diffs:
+        diffs.append("信号方向分歧：" + "、".join(dir_diffs))
+
+    score_gap = abs((llm_scores.get("total") or 0) - (rule_scores.get("total") or 0))
+    conf_gap = abs((llm_advice.get("confidence") or 0) - (rule_advice.get("confidence") or 0))
+    if score_gap >= 20:
+        diffs.append("总分差距 %.1f 分" % score_gap)
+    if conf_gap >= 15:
+        diffs.append("置信度差距 %d%%" % conf_gap)
+
+    return {
+        "status": "conflict" if diffs else "aligned",
+        "diffs": diffs,
+        "score_gap": round(score_gap, 1),
+        "conf_gap": conf_gap,
+        "llm_action": llm_advice.get("action"),
+        "rule_action": rule_advice.get("action"),
+    }
+
+
 # ------------------------------------------------------------------ 入口
 
 async def analyze(
@@ -1140,6 +1350,7 @@ async def analyze(
 
     if not llm.available():
         meta["degraded_reason"] = "未配置 LLM_API_KEY，使用内置规则引擎"
+        meta["divergence"] = {"status": "rule_only"}
         return {"analysis": fallback, "meta": meta, "input": build_payload(detail, news, reports)}
 
     payload = build_payload(detail, news, reports)
@@ -1152,9 +1363,16 @@ async def analyze(
     try:
         raw, llm_meta = await llm.chat_json(SYSTEM_PROMPT, user)
         analysis = _sanitize(raw, fallback, price)
-        meta.update(engine="llm", model=llm_meta.get("model"), usage=llm_meta.get("usage"))
+        meta.update(
+            engine="llm",
+            model=llm_meta.get("model"),
+            usage=llm_meta.get("usage"),
+            # LLM 路径：与规则引擎结论对比，给用户知情权
+            divergence=_diff_divergence(analysis, fallback),
+        )
         return {"analysis": analysis, "meta": meta, "input": payload}
     except llm.LLMError as exc:
         log.warning("LLM 分析失败，降级规则引擎：%s", exc)
         meta["degraded_reason"] = f"AI 服务调用失败（{exc}），已降级为内置规则引擎"
+        meta["divergence"] = {"status": "degraded"}  # LLM 失败，分歧无意义
         return {"analysis": fallback, "meta": meta, "input": payload}
