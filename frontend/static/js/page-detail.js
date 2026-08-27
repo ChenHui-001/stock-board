@@ -381,12 +381,16 @@
     }).join(' / ');
   }
 
-  function statGroup(title, items) {
-    const group = U.el('div', 'stat-group');
+  // statGroup(title, items, horizontal?)
+  //   horizontal=false (默认): 卡片网格,适合短值
+  //   horizontal=true:        每项一行 label: value 的紧凑列表,适合长值(带来源说明等)
+  function statGroup(title, items, horizontal) {
+    const h = !!horizontal;
+    const group = U.el('div', 'stat-group' + (h ? ' horizontal' : ''));
     group.appendChild(U.el('div', 'stat-group-title', title));
-    const row = U.el('div', 'stat-row');
+    const row = U.el('div', 'stat-row' + (h ? ' horizontal' : ''));
     items.forEach(function (s) {
-      const node = U.el('div', 'stat');
+      const node = U.el('div', 'stat' + (h ? ' stat-inline' : ''));
       node.appendChild(U.el('div', 'stat-label', s[0]));
       node.appendChild(U.el('div', 'stat-value' + (s[2] ? ' ' + s[2] : ''), s[1]));
       row.appendChild(node);
@@ -436,14 +440,14 @@
       // P1-4：次要支撑/压力，让用户看到"下一个位置"
       ['次要支撑', _formatSecondaryList(sr.secondary_support), ''],
       ['次要压力', _formatSecondaryList(sr.secondary_resistance), '']
-    ]));
+    ], true));
     // 波幅单位 ATR：把固定百分比阈值换成"相当于多少倍 ATR"，避免高波动股票永远被判震荡
     wrap.appendChild(statGroup('趋势与波幅', [
       ['近5日涨跌', U.pct(d.status.trend.chg_5d)],
       ['近20日涨跌', U.pct(d.status.trend.chg_20d)],
       ['近60日涨跌', U.pct(d.status.trend.chg_60d)],
       ['近5日波幅', U.isNum(trend5) ? trend5.toFixed(2) + ' 个ATR' : U.NBSP, vol5Tone]
-    ]));
+    ], true));
     return wrap;
   }
 
@@ -848,6 +852,7 @@
     tick: tick
   };
 })(window);
+
 
 
 
