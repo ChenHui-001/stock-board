@@ -54,6 +54,13 @@
   }
 
   /** 涨跌配色：正红 / 负绿 / 零灰（需求 2.2） */
+
+  /** 时分秒：HH:MM:SS，用于"获取于 HH:MM:SS"这类时间戳 */
+  function fmtTime(d) {
+    const dt = d instanceof Date ? d : new Date();
+    const pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return pad(dt.getHours()) + ':' + pad(dt.getMinutes()) + ':' + pad(dt.getSeconds());
+  }
   function tone(v) {
     if (!isNum(v) || v === 0) return 'flat';
     return v > 0 ? 'up' : 'down';
@@ -250,6 +257,7 @@
     ratio: ratio,
     turnover: turnover,
     tone: tone,
+    fmtTime: fmtTime,
     el: el,
     escapeHtml: escapeHtml,
     safeUrl: safeUrl,
@@ -259,3 +267,4 @@
     copyText: copyText
   };
 })(window);
+
