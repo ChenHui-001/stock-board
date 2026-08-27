@@ -1562,7 +1562,7 @@ def test_indicators() -> None:
     ]
     f_fresh = summarize_flow(flow_rows, ref_date="2026-08-18")
     check("资金新鲜: 当日已发布", f_fresh["fresh"] is True and f_fresh["last_date"] == "2026-08-18", str(f_fresh.get("fresh")))
-    check("资金新鲜: 当日口径判定", f_fresh["state"] == "主力净流出", f_fresh["state"])
+    check("资金新鲜: 当日口径判定", f_fresh["state"] == "主力净流出（当日）", f_fresh["state"])
     # 模拟 16 点前：最后一行是 17 日（昨日）且为流出，K线已到 18 日
     flow_y = [
         FlowDay(date="2026-08-14", main=1.8e8, sm=0, md=0, lg=0, xl=1.3e8),
@@ -1590,7 +1590,7 @@ def test_indicators() -> None:
         FlowDay(date="2026-08-18", main=3.0e8, sm=0, md=0, lg=0, xl=2.9e8, close=11.3),
     ]
     f_si = summarize_flow(flow_strong_in, ref_date="2026-08-18")
-    check("资金状态: 主力抢筹(连入+超大单主导)", f_si["state"] == "主力抢筹" and f_si["state_grade"] == "inflow", f_si["state"])
+    check("资金状态: 主力抢筹(连入+超大单主导)", f_si["state"] == "主力抢筹（当日）" and f_si["state_grade"] == "inflow", f_si["state"])
     check("主力类型: 机构主导(超大单70%+)", "机构主导" in (f_si.get("xl_dominance") or ""), str(f_si.get("xl_dominance")))
     check("价量背离: 价格↑资金↑共振看多", "共振看多" in (f_si.get("price_flow_note") or ""), str(f_si.get("price_flow_note")))
 
@@ -1609,7 +1609,7 @@ def test_indicators() -> None:
         FlowDay(date="2026-08-18", main=-3.0e8, sm=0, md=0, lg=0, xl=-2.9e8, close=10.2),
     ]
     f_so = summarize_flow(flow_strong_out, ref_date="2026-08-18")
-    check("资金状态: 主力出逃(连出+超大单主导)", f_so["state"] == "主力出逃" and f_so["state_grade"] == "outflow", f_so["state"])
+    check("资金状态: 主力出逃(连出+超大单主导)", f_so["state"] == "主力出逃（当日）" and f_so["state_grade"] == "outflow", f_so["state"])
     check("价量背离: 价格↓资金↓共振看空", "共振看空" in (f_so.get("price_flow_note") or ""), str(f_so.get("price_flow_note")))
 
     # 普通流入（非连入/超大单主导） → 主力净流入
@@ -1620,7 +1620,7 @@ def test_indicators() -> None:
         FlowDay(date="2026-08-18", main=1.2e8, sm=0, md=0, lg=0, xl=0.3e8, close=10.5),
     ]
     f_pi = summarize_flow(flow_plain_in, ref_date="2026-08-18")
-    check("资金状态: 普通流入→主力净流入", f_pi["state"] == "主力净流入" and f_pi["state_grade"] == "inflow", f_pi["state"])
+    check("资金状态: 普通流入→主力净流入", f_pi["state"] == "主力净流入（当日）" and f_pi["state_grade"] == "inflow", f_pi["state"])
     check("主力类型: 主力分散(超大单<40%)", "主力分散" in (f_pi.get("xl_dominance") or ""), str(f_pi.get("xl_dominance")))
 
     # 价量背离：价格↑ 资金↓ = 高位诱多
@@ -1671,7 +1671,7 @@ def test_indicators() -> None:
         FlowDay(date="2026-08-18", main=0.0, sm=0, md=0, lg=0, xl=0.0, close=10.1),
     ]
     f_w = summarize_flow(flow_watch, ref_date="2026-08-18")
-    check("资金状态: 资金观望(main=0)", f_w["state"] == "资金观望" and f_w["state_grade"] == "neutral", f_w["state"])
+    check("资金状态: 资金观望(main=0)", f_w["state"] == "资金观望（当日）" and f_w["state_grade"] == "neutral", f_w["state"])
 
     # 样本太少时不计算背离
     flow_short = [
