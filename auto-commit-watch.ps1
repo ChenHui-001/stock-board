@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   监听 backend/ 和 frontend/static/ 变更,自动跑 smoke_test,通过则 commit + push 到 main。
@@ -29,7 +29,7 @@ $projectRoot = $PSScriptRoot
 Set-Location $projectRoot
 
 $watchPaths = @("backend", "frontend/static")
-$exclExts = @(".pyc", ".tmp", ".swp", ".log", ".ps1")
+$exclExts = @(".pyc", ".tmp", ".swp", ".log")  # .ps1 不再排除:脚本自身改动也要提交
 $logFile = Join-Path $projectRoot "auto-commit.log"
 
 function Get-GitHubToken {
@@ -44,7 +44,7 @@ function Get-GitHubToken {
             if ($tok) { return $tok }
         }
     }
-    throw "未找到 GITHUB_TOKEN。请设置 `$env:STOCK_BOARD_GITHUB_TOKEN 或创建 .credentials 文件(已在 .gitignore 中)。"
+    throw '未找到 GITHUB_TOKEN。请设置环境变量 STOCK_BOARD_GITHUB_TOKEN,或在仓库根目录创建 .credentials 文件(已在 .gitignore 中)。'
 }
 
 $githubToken = Get-GitHubToken -RepoRoot $projectRoot
@@ -74,7 +74,7 @@ function Invoke-SmokeTest {
 }
 
 function Invoke-AutoCommit {
-    $status = git status --porcelain backend frontend
+    $status = git status --porcelain --untracked-files=no
     if (-not $status) {
         Write-Log "No staged changes, skip"
         return
@@ -83,7 +83,7 @@ function Invoke-AutoCommit {
     if ($files.Length -gt 80) { $files = $files.Substring(0, 77) + "..." }
     $msg = "auto-commit: smoke_test passed | changes: $files"
 
-    git add backend frontend 2>&1 | Out-Null
+    git add -u 2>&1 | Out-Null
     Write-Log "git commit..."
     git commit -m "$msg" 2>&1 | ForEach-Object { Write-Log "  $_" }
     if ($LASTEXITCODE -ne 0) {
@@ -115,7 +115,7 @@ while ($running) {
     Start-Sleep -Seconds $PollSeconds
 
     # 计算 git 状态指纹 (只看 backend/frontend 路径,排除临时文件)
-    $fingerprint = git status --porcelain backend frontend 2>&1 | Where-Object {
+    $fingerprint = git status --porcelain --untracked-files=no 2>&1 | Where-Object {
         $_.Trim() -ne "" -and
         ($_ -notmatch "\.pyc$") -and
         ($_ -notmatch "__pycache__") -and
@@ -142,7 +142,7 @@ while ($running) {
         $lastChangeAt = Get-Date
 
         # 先确认 fingerprint 没变化
-        $current = git status --porcelain backend frontend 2>&1 | Where-Object {
+        $current = git status --porcelain --untracked-files=no 2>&1 | Where-Object {
             $_.Trim() -ne "" -and
             ($_ -notmatch "\.pyc$") -and
             ($_ -notmatch "__pycache__") -and
@@ -163,3 +163,4 @@ while ($running) {
 }
 
 Write-Log "========== auto-commit-watch exit =========="
+
