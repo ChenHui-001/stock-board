@@ -271,6 +271,7 @@
     row.appendChild(withAlign(U.el('div', 'turnover-cell', '换手')));
     row.appendChild(withAlign(U.el('div', '', '涨跌幅')));
     row.appendChild(U.el('div', 'monitor-cell', '关键监测'));
+    row.appendChild(U.el('div', 'ai-cell', 'AI 信号'));
     row.appendChild(withAlign(U.el('div', '', '操作')));
     return row;
   }
@@ -435,6 +436,22 @@
 
     // 关键监测
     row.appendChild(renderMonitorCell(item));
+
+    // AI 信号丸
+    const aiCell = U.el('div', 'ai-cell');
+    const summary = aiSummary(item);
+    if (summary) {
+      const pill = renderAIPill(summary, false);
+      pill.onclick = function (e) {
+        e.stopPropagation();
+        state.aiExpanded = state.aiExpanded === item.code ? null : item.code;
+        render();
+      };
+      aiCell.appendChild(pill);
+    } else {
+      aiCell.appendChild(U.el('span', 'ai-pill ai-pill-none', '未分析'));
+    }
+    row.appendChild(aiCell);
 
     // 操作
     const actions = U.el('div', 'row-actions');
