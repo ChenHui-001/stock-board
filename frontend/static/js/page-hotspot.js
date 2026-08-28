@@ -123,10 +123,16 @@
   function renderSectorHeat() {
     const heat = (state.meta && state.meta.sector_heat) || [];
     const wrap = U.el('div', 'sector-heat');
+
+    // 头部：标题 + 选中时显示「清除」
     const head = U.el('div', 'sector-heat-head');
-    head.appendChild(U.el('span', 'sector-heat-title', '🔥 热点概念'));
+    const titleWrap = U.el('div', 'sector-heat-title-wrap');
+    titleWrap.appendChild(U.el('span', 'sector-heat-icon', '🔥'));
+    titleWrap.appendChild(U.el('span', 'sector-heat-title', '热点概念'));
+    titleWrap.appendChild(U.el('span', 'sector-heat-sub', heat.length ? '近 ' + state.minutes + ' 分钟提及趋势' : ''));
+    head.appendChild(titleWrap);
     if (state.sector) {
-      const clear = U.el('button', 'btn btn-xs', '清除过滤');
+      const clear = U.el('button', 'sector-heat-clear', '清除');
       clear.onclick = function () {
         state.sector = null;
         render();
@@ -141,19 +147,27 @@
     }
 
     const row = U.el('div', 'sector-heat-row');
+    // 「全部」chip，方便一键清除
+    const allChip = U.el('button', 'sector-chip' + (state.sector ? '' : ' active'));
+    allChip.appendChild(U.el('span', 'sector-chip-name', '全部'));
+    allChip.appendChild(U.el('span', 'sector-chip-count', String(state.items.length)));
+    allChip.onclick = function () {
+      state.sector = null;
+      render();
+    };
+    row.appendChild(allChip);
+
     heat.slice(0, 12).forEach(function (s) {
       const cls = 'sector-chip' + (state.sector === s.name ? ' active' : '')
         + ' sector-trend-' + (s.trend || 'flat');
       const chip = U.el('button', cls);
-      const trendIcon = { up: '↑', down: '↓', flat: '→' }[s.trend || 'flat'];
+      const trendIcon = { up: '▲', down: '▼', flat: '—' }[s.trend || 'flat'];
+      const trendLabel = { up: '发酵', down: '退潮', flat: '持平' }[s.trend || 'flat'];
+      chip.appendChild(U.el('span', 'sector-chip-trend', trendIcon));
       chip.appendChild(U.el('span', 'sector-chip-name', s.name));
       chip.appendChild(U.el('span', 'sector-chip-count', String(s.total)));
-      const sent = U.el('span', 'sector-chip-sent');
-      if (s.bull) sent.appendChild(U.el('span', 'sent-bull', '+' + s.bull));
-      if (s.bear) sent.appendChild(U.el('span', 'sent-bear', '-' + s.bear));
-      chip.appendChild(sent);
-      chip.appendChild(U.el('span', 'sector-chip-trend', trendIcon));
-      chip.title = s.name + '：' + s.total + ' 条（利好 ' + s.bull + ' / 利空 ' + s.bear + ' / 中性 ' + s.neutral + '）';
+      chip.title = s.name + '：' + s.total + ' 条，趋势' + trendLabel
+        + '（利好 ' + s.bull + ' / 利空 ' + s.bear + ' / 中性 ' + s.neutral + '）';
       chip.onclick = function () {
         state.sector = state.sector === s.name ? null : s.name;
         render();
