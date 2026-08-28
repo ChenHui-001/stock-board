@@ -381,22 +381,49 @@
     }).join(' / ');
   }
 
-  // statGroup(title, items, horizontal?)
-  //   horizontal=false (默认): 卡片网格,适合短值
-  //   horizontal=true:        每项一行 label: value 的紧凑列表,适合长值(带来源说明等)
-  function statGroup(title, items, horizontal) {
-    const h = !!horizontal;
-    const group = U.el('div', 'stat-group' + (h ? ' horizontal' : ''));
+  // statGroup(title, items, mode?)
+  //   mode='grid'    (默认): 卡片网格,适合短值(label 上 value 下)
+  //   mode='list':          每项一行 label: value 的紧凑列表,适合长值(带来源说明等)
+  //   mode='compact':       真正横向布局,所有指标排成一行,label 左 / value 右,
+  //                         value 超长时单行省略号,悬停 title 看完整内容。适合"区间与位置"、
+  //                         "趋势与波幅"这类 4~6 项、含"次要支撑/压力"等多源值的统计组。
+  //                         第 4 项 s[3] 可选,提供作为 value 完整文本的 tooltip。
+  function statGroup(title, items, mode) {
+    const m = mode || 'grid';
+    const group = U.el('div', 'stat-group mode-' + m);
     group.appendChild(U.el('div', 'stat-group-title', title));
-    const row = U.el('div', 'stat-row' + (h ? ' horizontal' : ''));
+    const row = U.el('div', 'stat-row mode-' + m);
     items.forEach(function (s) {
-      const node = U.el('div', 'stat' + (h ? ' stat-inline' : ''));
-      node.appendChild(U.el('div', 'stat-label', s[0]));
-      node.appendChild(U.el('div', 'stat-value' + (s[2] ? ' ' + s[2] : ''), s[1]));
+      let node;
+      if (m === 'compact') {
+        node = U.el('div', 'stat-compact');
+        const labelNode = U.el('span', 'stat-compact-label', s[0]);
+        const valueNode = U.el('span', 'stat-compact-value' + (s[2] ? ' ' + s[2] : ''), s[1]);
+        if (s[3]) valueNode.title = s[3];
+        node.appendChild(labelNode);
+        node.appendChild(valueNode);
+      } else {
+        node = U.el('div', 'stat' + (m === 'list' ? ' stat-inline' : ''));
+        node.appendChild(U.el('div', 'stat-label', s[0]));
+        node.appendChild(U.el('div', 'stat-value' + (s[2] ? ' ' + s[2] : ''), s[1]));
+      }
       row.appendChild(node);
     });
     group.appendChild(row);
     return group;
+  }
+
+  // 横向紧凑布局下,多源值(次要支撑/压力)只显示第一项 + 省略号,完整列表放 s[3] 给 tooltip。
+  // 返回 [text, fullText] 两元组,前者用于展示,后者用于悬停。
+  function _compactSecondary(list) {
+    if (!Array.isArray(list) || list.length === 0) return [U.NBSP, ''];
+    const parts = list.map(function (item) {
+      const p = U.price(item.price);
+      return p + (item.from ? ' (' + item.from + ')' : '');
+    });
+    const full = parts.join(' / ');
+    const show = parts.length > 1 ? parts[0] + ' …' : full;
+    return [show, full];
   }
 
   function renderStatus(d) {
@@ -432,22 +459,27 @@
       ? (trend5 >= 1 ? 'up' : trend5 <= -1 ? 'down' : '')
       : '';
     // 分组呈现：区间与位置 / 趋势与波幅，避免 8 个指标无差别平铺
+    // 横向紧凑布局：4 项一行,超长 value 单行省略 + title 看完整。
+    // 次要支撑/压力保留"主值 + 省略号",hover 看其余来源。
     wrap.appendChild(statGroup('区间与位置', [
-      ['20日区间', U.price(sr.low_20) + ' ~ ' + U.price(sr.high_20)],
-      ['60日区间', U.price(sr.low_60) + ' ~ ' + U.price(sr.high_60)],
-      // ATR(14)：用 0.5 倍 ATR 作为突破容差，比固定 ±0.5% 更贴合个股波动；
-      // atr_breakout 用文字描述当前与区间的位置关系
-      // P1-4：次要支撑/压力，让用户看到"下一个位置"
-      ['次要支撑', _formatSecondaryList(sr.secondary_support), ''],
-      ['次要压力', _formatSecondaryList(sr.secondary_resistance), '']
-    ], true));
+      ['20日区间', U.price(sr.low_20) + ' ~ ' + U.price(sr.high_20), '', ''],
+      ['60日区间', U.price(sr.low_60) + ' ~ ' + U.price(sr.high_60), '', ''],
+      (function () {
+        const sec = _compactSecondary(sr.secondary_support);
+        return ['次要支撑', sec[0], '', sec[1]];
+      })(),
+      (function () {
+        const sec = _compactSecondary(sr.secondary_resistance);
+        return ['次要压力', sec[0], '', sec[1]];
+      })()
+    ], 'compact'));
     // 波幅单位 ATR：把固定百分比阈值换成"相当于多少倍 ATR"，避免高波动股票永远被判震荡
     wrap.appendChild(statGroup('趋势与波幅', [
-      ['近5日涨跌', U.pct(d.status.trend.chg_5d)],
-      ['近20日涨跌', U.pct(d.status.trend.chg_20d)],
-      ['近60日涨跌', U.pct(d.status.trend.chg_60d)],
-      ['近5日波幅', U.isNum(trend5) ? trend5.toFixed(2) + ' 个ATR' : U.NBSP, vol5Tone]
-    ], true));
+      ['近5日涨跌', U.pct(d.status.trend.chg_5d), '', ''],
+      ['近20日涨跌', U.pct(d.status.trend.chg_20d), '', ''],
+      ['近60日涨跌', U.pct(d.status.trend.chg_60d), '', ''],
+      ['近5日波幅', U.isNum(trend5) ? trend5.toFixed(2) + ' 个ATR' : U.NBSP, vol5Tone, '']
+    ], 'compact'));
     return wrap;
   }
 

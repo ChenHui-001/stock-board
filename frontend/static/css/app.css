@@ -1463,6 +1463,57 @@ main {
 
 /* 状态区统计分组：区间与位置 / 趋势与波幅 */
 .stat-group + .stat-group { margin-top: 14px; }
+
+/* ---------------------------------------------------------------- 横向紧凑模式
+   详情页"区间与位置 / 趋势与波幅"专用。所有统计项排在一行,label 左 value 右,
+   value 超长时单行省略号,悬停 title 看完整内容。让"次要压力"等多源值不再撑高整张卡片。
+   桌面端 4~6 项一行,平板 2~3 项,手机单列。 */
+.stat-group.mode-compact { margin-top: 0; }
+.stat-row.mode-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+}
+.stat-compact {
+  flex: 1 1 auto;
+  min-width: 130px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.stat-compact-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.stat-compact-value {
+  font-size: 13px;
+  font-family: var(--mono);
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
+  cursor: help;
+}
+.stat-compact-value.up   { color: var(--up,   #ef4444); }
+.stat-compact-value.down { color: var(--down, #22c55e); }
+@media (max-width: 720px) {
+  .stat-compact { min-width: 0; flex-basis: 100%; }
+  .stat-compact-value { font-size: 12.5px; }
+}
 .stat-group-title {
   font-size: 11px;
   font-weight: 500;
