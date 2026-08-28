@@ -25,7 +25,15 @@ shots/
 
 # auto-commit-watch 监听脚本产物
 auto-commit.log
+auto-commit.log.*
 .credentials
 watcher_test.err
 watcher_test.log
+watcher_stdout.log
+watcher_stderr.log
 .workbuddy/
+
+# 本地临时运行产物
+tmp/
+uvicorn_test.log
+uvicorn_test_err.log
