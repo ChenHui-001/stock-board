@@ -433,22 +433,25 @@
     metaLine.appendChild(src);
     const origin = U.el('span', 'hotspot-origin', it.origin || '');
     metaLine.appendChild(origin);
-    // AI 分析按钮移到源行末尾（margin-left: auto 由 CSS 推到最右），与「内容出处」语义关联，
-    // 不再占据卡片底部独立行；弹窗交互保留不变。
-    const aiBtn = U.el('button', 'btn btn-sm btn-primary hotspot-ai-btn', '🤖 AI 分析');
+    body.appendChild(metaLine);
+
+    // 操作按钮：AI 分析 + 相关股，统一放在右上角
+    const actions = U.el('div', 'hotspot-actions');
+    const aiBtn = U.el('button', 'hotspot-action hotspot-action-primary', '🤖 AI 分析');
     aiBtn.title = '分析该快讯对行业的影响与关联度最高的股票';
     aiBtn.onclick = function () { openAnalysis(it); };
-    metaLine.appendChild(aiBtn);
-    const relBtn = U.el('button', 'btn btn-sm hotspot-rel-btn', '相关股');
+    actions.appendChild(aiBtn);
+    const relBtn = U.el('button', 'hotspot-action');
     const relActive = state.inline.item && state.inline.item.id === it.id;
-    if (relActive) relBtn.classList.add('active');
+    relBtn.className = 'hotspot-action' + (relActive ? ' active' : '');
+    relBtn.textContent = '相关股';
     relBtn.title = '展开/收起关联个股';
     relBtn.onclick = function (ev) {
       ev.stopPropagation();
       toggleInlineStocks(it);
     };
-    metaLine.appendChild(relBtn);
-    body.appendChild(metaLine);
+    actions.appendChild(relBtn);
+    body.appendChild(actions);
 
     // 外链地址过白名单：7x24 快讯源较杂，非 http(s) 地址退化为纯文本标题
     const href = U.safeUrl(it.url);
