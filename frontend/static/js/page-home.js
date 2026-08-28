@@ -595,6 +595,40 @@
     }
   }
 
+  // ---------------------------------------------------------- AI 摘要加载
+  async function loadAI(refresh) {
+    if (state.ai.loading) return;
+    state.ai.loading = true;
+    state.ai.error = null;
+    if (!refresh) render();
+    try {
+      const data = await API.aiWatchlist(refresh);
+      const map = {};
+      (data.items || []).forEach(function (s) { if (s.code) map[s.code] = s; });
+      state.ai.items = map;
+      state.ai.total = data.total || 0;
+      state.ai.analyzed = data.analyzed || 0;
+    } catch (err) {
+      state.ai.error = err.message || String(err);
+      U.toast('AI 摘要加载失败：' + state.ai.error, 'err');
+    } finally {
+      state.ai.loading = false;
+      render();
+    }
+  }
+
+  async function batchAIRefresh(btn) {
+    if (state.ai.loading) return;
+    btn = btn || {};
+    U.toast('开始批量分析 ' + state.items.length + ' 只自选股…', 'ok');
+    try {
+      await loadAI(true);
+      U.toast('AI 摘要已更新：' + state.ai.analyzed + ' / ' + state.ai.total, 'ok');
+    } catch (err) {
+      U.toast('批量 AI 分析失败：' + (err.message || String(err)), 'err');
+    }
+  }
+
   /** 静默刷新：只更新价格，不重建 DOM，避免打断拖拽和滚动 */
   async function tick() {
     if (state.manage) return;
@@ -667,10 +701,16 @@
       state.sortKey = null;
       state.manage = false;
       state.selected = new Set();
+      state.aiExpanded = null;
       view().innerHTML = '<div class="card"><div class="loading-block">加载自选股…</div></div>';
-      return load(false);
+      return load(false).then(function () {
+        // 自选加载完成后再加载 AI 摘要（不阻塞首屏）
+        return loadAI(false);
+      });
     },
-    refresh: function () { return load(true); },
+    refresh: function () {
+      return load(true).then(function () { return loadAI(false); });
+    },
     tick: tick,
     toggleManage: function () {
       if (!state.items.length) {
