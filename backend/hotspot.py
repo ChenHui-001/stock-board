@@ -26,6 +26,8 @@ from urllib.parse import urlencode
 
 from .cache import cache
 from .config import settings
+from .hotspot_ai import _SECTORS
+from .news import rule_interpret
 from .providers.base import ProviderError, fetch
 from .utils import TZ, now
 from . import metrics
