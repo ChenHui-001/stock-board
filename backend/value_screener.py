@@ -664,11 +664,30 @@ def _buy_score(profile: dict[str, Any], scores: dict[str, Any]) -> dict[str, Any
     if 1 <= lb <= 3: pts += 12   # 启动/发酵期最优
     elif 4 <= lb <= 5: pts += 6
     elif lb >= 6: pts -= 8       # 高位接力风险
+    # 估值时机：低估值是价值投资的最佳买点（资金面+技术面的补充维度）
+    fin_score = scores.get("finance") or {}
+    vm = fin_score.get("value_metrics") or {}
+    pe_band = vm.get("pe_band")
+    peg_band = vm.get("peg_band")
+    if pe_band in ("深度低估", "低估"):
+        pts += 12   # 估值底 + 资金/量价配合 → 黄金坑买点
+    elif pe_band == "合理":
+        pts += 4    # 估值合理即可介入
+    elif pe_band == "偏高":
+        pts -= 6    # 不再便宜,资金/量价需要非常强才考虑
+    elif pe_band == "高估":
+        pts -= 14   # 高估区,即使其它维度亮眼也要克制
+    # PEG 极低估叠加分（即便 PE 正常,但增速匹配的好估值仍可加分）
+    if peg_band == "极低估":
+        pts += 4
+    elif peg_band == "低估":
+        pts += 2
     # 风险否决
     risk = scores.get("risk", {}).get("score", 0)
     if risk > 60: pts -= 40
     pts = max(0, min(100, round(pts)))
-    return {"score": pts, "detail": f"量价+资金+板块+情绪综合"}
+    pe_note = "估值" + str(pe_band) if pe_band else "估值未知"
+    return {"score": pts, "detail": f"量价+资金+板块+情绪+{pe_note}"}
 
 
 def _composite_score(scores: dict[str, Any], weights: dict[str, float]) -> float:
