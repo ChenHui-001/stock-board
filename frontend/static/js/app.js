@@ -531,11 +531,12 @@
     //   (b) 某些浏览器扩展 / PWA 拦截 hash 跳转 → click handler 显式 setLocation
     document.querySelectorAll('.nav-item').forEach(function (node) {
       node.addEventListener('click', function (e) {
-        const route = node.getAttribute('data-route');
-        if (!route) return;
-        const target = (route === 'home') ? '#/home' : '#/' + route;
-        // 如果已经在同一路由,显式调用 route() 强制重渲(用户期望:再次点击刷新)
-        if (state.route === route || (route === 'stock' && state.route === 'stock')) {
+        // 注意:不要用 const route 命名,会遮蔽外层 route 函数。
+        const targetRoute = node.getAttribute('data-route');
+        if (!targetRoute) return;
+        const target = (targetRoute === 'home') ? '#/home' : '#/' + targetRoute;
+        // 同路由重复点击 / hash 未变:显式调用外层 route() 强制重渲。
+        if (state.route === targetRoute) {
           e.preventDefault();
           route();
         } else if (location.hash === target) {
@@ -543,7 +544,7 @@
           e.preventDefault();
           route();
         }
-        // 否则让浏览器按 href 自然跳转,hashchange 会触发 route()。
+        // 否则让浏览器按 href 自然跳转,hashchange 会触发外层 route()。
       });
     });
     document.getElementById('btn-settings').addEventListener('click', function () {
