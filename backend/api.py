@@ -228,6 +228,7 @@ async def meta() -> dict[str, Any]:
         "session": service.session_info(),
         "providers": registry().health(),
         "throttled_hosts": registry().throttled_hosts(),
+        "host_stats": registry().host_stats(),
         "ai": {
             "enabled": llm.available(),
             "engine": "llm" if llm.available() else "rule",

@@ -277,12 +277,69 @@ class Registry:
         raise ProviderError(f"{cap} 全部数据源失败 -> " + "; ".join(errors or ["无可用源"]))
 
     # ------------------------------------------------------------ 行情
+    async def _fetch_quotes(
+        self,
+        provider: Provider,
+        keys: list[tuple[str, str]],
+    ) -> tuple[str, dict[str, Quote]]:
+        """单个 provider 取一批行情，带统计打点。返回 (provider_name, {key: Quote})。"""
+        start = time.monotonic()
+        quote_time = ""
+        try:
+            part = await provider.quotes(keys)
+        except Throttled as exc:
+            log.debug("数据源 %s 行情频控：%s", provider.name, exc)
+            self._stat(provider.name).record(False, int((time.monotonic() - start) * 1000))
+            return provider.name, {}
+        except Exception as exc:  # noqa: BLE001
+            log.info("数据源 %s 行情失败：%s", provider.name, exc)
+            self._mark_fail(provider.name)
+            self._stat(provider.name).record(False, int((time.monotonic() - start) * 1000))
+            return provider.name, {}
+        latency_ms = int((time.monotonic() - start) * 1000)
+        out: dict[str, Quote] = {}
+        for key, quote in part.items():
+            if not quote:
+                continue
+            quote.source = provider.name
+            quote.latency_ms = latency_ms
+            out[key] = quote
+        if out:
+            self._mark_ok(provider.name)
+            best = max(out.values(), key=_quote_freshness, default=None)
+            if best:
+                quote_time = best.quote_time or best.trade_date
+        self._stat(provider.name).record(True, latency_ms, quote_time)
+        return provider.name, out
+
+    def _merge_quotes(
+        self,
+        part: dict[str, Quote],
+        result: dict[str, Quote],
+        stash: dict[str, Quote],
+        wanted: dict[str, Any],
+        used: list[str],
+        provider_name: str,
+    ) -> None:
+        """把单个 provider 返回的行情合并到结果集中。"""
+        got_any = False
+        for key, quote in part.items():
+            if key not in wanted or key in result:
+                continue
+            if _usable(quote):
+                result[key] = _fill_preopen(quote)
+                got_any = True
+            else:
+                stash.setdefault(key, quote)
+        if got_any and provider_name not in used:
+            used.append(provider_name)
+
     async def quotes(self, keys: list[tuple[str, str]]) -> tuple[dict[str, Quote], list[str]]:
         """返回 (行情字典, 实际生效的数据源列表)。
 
-        单只股票粒度的故障转移：某个源没给出**有效**价格（盘前返回 "-"、
-        新浪对停牌股返回 0）时，只把这几只交给下一个源补，而不是整批重来。
-        全部源都拿不到有效价的股票，用已知的残缺信息拼成带状态标注的占位行情。
+        多源并发竞速：按综合评分排序后，先 dispatch 评分最高的两个源，
+        谁先到先用谁的有效结果；缺失股票继续交给后续源补。避免单源频控
+        拖住整批行情。
         """
         wanted = {
             f"{normalize_code(c)}.{m or resolve_market(c)}": (normalize_code(c), m or resolve_market(c))
@@ -294,34 +351,53 @@ class Registry:
         if not wanted:
             return result, used
 
-        for provider in self._available("quotes"):
-            missing = [v for k, v in wanted.items() if k not in result]
+        providers = self._available("quotes")
+        if not providers:
+            raise ProviderError("没有可用的行情数据源")
+
+        missing = list(wanted.keys())
+        provider_iter = iter(providers)
+        pending: set[asyncio.Task] = set()
+
+        def dispatch_next() -> None:
+            try:
+                provider = next(provider_iter)
+            except StopIteration:
+                return
             if not missing:
+                return
+            # 当前缺失的股票交给该 provider 批量取
+            need = [wanted[k] for k in missing]
+            task = asyncio.create_task(self._fetch_quotes(provider, need))
+            pending.add(task)
+
+        # 先启动前两个源竞速
+        dispatch_next()
+        dispatch_next()
+
+        timeout_at = time.monotonic() + QUOTE_RACE_TIMEOUT
+        while pending and missing:
+            wait = max(0.0, timeout_at - time.monotonic())
+            if wait <= 0:
                 break
-            got_any = False
-            for batch in chunked(missing, QUOTE_BATCH):
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED, timeout=wait
+            )
+            for task in done:
                 try:
-                    part = await provider.quotes(batch)
-                except NotSupported:
-                    break
-                except Throttled as exc:
-                    log.debug("数据源 %s 行情频控：%s", provider.name, exc)
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    log.info("数据源 %s 行情失败：%s", provider.name, exc)
-                    self._mark_fail(provider.name)
-                    break
-                for key, quote in part.items():
-                    if key not in wanted or key in result:
-                        continue
-                    if _usable(quote):
-                        result[key] = _fill_preopen(quote)
-                        got_any = True
-                    else:
-                        stash.setdefault(key, quote)
-            if got_any:
-                self._mark_ok(provider.name)
-                used.append(provider.name)
+                    provider_name, part = await task
+                except Exception:  # noqa: BLE001
+                    continue
+                self._merge_quotes(part, result, stash, wanted, used, provider_name)
+                missing = [k for k in wanted if k not in result]
+                if missing:
+                    dispatch_next()
+
+        # 取消剩余在途任务
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.wait(pending, return_when=asyncio.ALL_COMPLETED)
 
         if not result and not stash:
             raise ProviderError("所有行情数据源均不可用")
