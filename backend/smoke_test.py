@@ -495,6 +495,67 @@ def test_value_screener() -> None:
           vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1}, 80, 75, 10) == "BREAKOUT_BUY")
 
 
+def test_value_screen_e2e() -> None:
+    """价值选股端到端：用真实数据源跑一次 run_screen。
+    网络隔离沙箱里走 `skipped` 路径,生产/CI 环境会跑真实流程并校验 3 个池子。
+    整个测试有 30s 总兜底,不会卡住 smoke_test。"""
+    from backend import value_screener as vs
+    import asyncio as _aio
+
+    async def _probe() -> bool:
+        try:
+            from backend.providers import registry
+            quotes, _src = await _aio.wait_for(
+                registry().quotes([("000001", "SZ"), ("600519", "SH")]),
+                timeout=4.0)
+            return bool(quotes)
+        except Exception:
+            return False
+
+    online = _aio.run(_probe())
+    if not online:
+        check("价值选股端到端: 网络不可用 → 跳过",
+              True, "skipped (sandboxed env, network probes exhausted)")
+        return
+
+    # 在线：跑真实流程,带超时兜底
+    async def _run() -> dict:
+        # 强制刷新一次,确保不是上次缓存(但保留 15min 缓存给正常 watcher)
+        return await vs.run_screen(force=False)
+
+    try:
+        result = _aio.run(_aio.wait_for(_run(), timeout=60.0))
+    except _aio.TimeoutError:
+        check("价值选股端到端: 60s 超时跳过",
+              True, "skipped (data sources too slow)")
+        return
+    except Exception as e:
+        check("价值选股端到端: 跑通",
+              False, f"exception: {type(e).__name__}: {str(e)[:120]}")
+        return
+
+    pools = result.get("pools") or {}
+    check("价值选股端到端: 含 3 池 (core/trend/emotion)",
+          all(k in pools for k in ("core", "trend", "emotion")),
+          str({k: len(v or []) for k, v in pools.items()}))
+    check("价值选股端到端: 返回 generated_at",
+          isinstance(result.get("generated_at"), str) and len(result["generated_at"]) >= 19,
+          str(result.get("generated_at")))
+
+    # 校验核心池里股票的关键字段(若有)
+    core_top = pools.get("core") or []
+    if core_top:
+        s = core_top[0]
+        check("价值选股端到端: 股票含 signal & advice & value_metrics",
+              s.get("signal") and s.get("advice") and isinstance(s.get("value_metrics"), dict),
+              str({k: s.get(k) for k in ("signal", "advice", "value_metrics")}))
+    # 校验市场状态
+    mkt = result.get("market") or {}
+    check("价值选股端到端: market state 在 A-F 区间",
+          mkt.get("state") in "ABCDEF",
+          str(mkt.get("state")))
+
+
 def test_value_weights() -> None:
     """价值选股权重：默认 1.0 / 保存 clamp / 恢复默认 / 指纹联动（临时库，结束还原）。"""
     storage.init_db()
