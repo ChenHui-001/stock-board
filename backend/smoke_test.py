@@ -471,6 +471,25 @@ def test_value_screener() -> None:
     check("价值选股: VALUE_BUY 在风险>30 时不触发",
           vs._signal({"pe": 8, "pb": 1, "change_pct": 1, "volume_ratio": 1,
                       "lianban": 0}, 70, 65, 40) != "VALUE_BUY")
+    # 买点评分接入估值维度
+    base = {"change_pct": 2.0, "volume_ratio": 1.0, "lianban": 0}
+    deep_pe = dict(base); deep_pe["financials"] = []
+    deep_fin = {"score": 30, "value_metrics": {"pe_band": "深度低估", "peg_band": "极低估"}}
+    over_fin = {"score": 30, "value_metrics": {"pe_band": "高估", "peg_band": "高估"}}
+    fair_fin = {"score": 30, "value_metrics": {"pe_band": "合理", "peg_band": "合理"}}
+    profile = {"change_pct": 2.0, "volume_ratio": 1.0, "lianban": 0,
+               "flow": [{"date": "d" + str(i), "main": 1e7} for i in range(5)],
+               "board": "光伏"}
+    scores_base = {"board": {"score": 3}, "risk": {"score": 10}}
+    deep_scores = dict(scores_base); deep_scores["finance"] = deep_fin
+    over_scores = dict(scores_base); over_scores["finance"] = over_fin
+    fair_scores = dict(scores_base); fair_scores["finance"] = fair_fin
+    deep_buy = vs._buy_score(profile, deep_scores)["score"]
+    over_buy = vs._buy_score(profile, over_scores)["score"]
+    fair_buy = vs._buy_score(profile, fair_scores)["score"]
+    check("买点评分: 深度低估 > 合理 > 高估",
+          deep_buy > fair_buy > over_buy,
+          f"deep={deep_buy} fair={fair_buy} over={over_buy}")
     # 既有 BREAKOUT_BUY 行为不变（PE 缺失时仍走既有逻辑）
     check("价值选股: BREAKOUT_BUY 信号（PE 缺失沿用旧逻辑）",
           vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1}, 80, 75, 10) == "BREAKOUT_BUY")
