@@ -28,17 +28,43 @@
     return document.getElementById('view');
   }
 
+  // AI 信号优先级：需要操作的股票排在前面（加仓 > 减仓 > 清仓 > 观望）
+  const AI_ACTION_RANK = {
+    '积极持仓/加仓': 3,
+    '减仓规避': 2,
+    '清仓离场': 1,
+    '持有观望': 0
+  };
+
+  function aiSummary(item) {
+    return state.ai.items[item.code] || null;
+  }
+
+  function aiSortKey(item) {
+    const s = aiSummary(item);
+    if (!s || !s.action) return -1;
+    const rank = AI_ACTION_RANK[s.action] || 0;
+    return rank * 1000 + (U.isNum(s.confidence) ? s.confidence : 0);
+  }
+
   function sortedItems() {
     if (!state.sortKey) return state.items;
     const key = state.sortKey;
     const dir = state.sortAsc ? 1 : -1;
     return state.items.slice().sort(function (a, b) {
-      let x = a[key], y = b[key];
-      if (key === 'name' || key === 'code') {
-        return String(x || '').localeCompare(String(y || ''), 'zh-CN') * dir;
+      let x, y;
+      if (key === 'ai') {
+        x = aiSortKey(a);
+        y = aiSortKey(b);
+      } else {
+        x = a[key];
+        y = b[key];
+        if (key === 'name' || key === 'code') {
+          return String(x || '').localeCompare(String(y || ''), 'zh-CN') * dir;
+        }
+        x = U.isNum(x) ? x : -Infinity;
+        y = U.isNum(y) ? y : -Infinity;
       }
-      x = U.isNum(x) ? x : -Infinity;
-      y = U.isNum(y) ? y : -Infinity;
       return (x - y) * dir;
     });
   }
@@ -51,6 +77,9 @@
       root.appendChild(renderEmpty());
       return;
     }
+
+    // AI 总览卡片（放在表格上方，一眼看清持仓操作建议分布）
+    root.appendChild(renderAIDashboard());
 
     const card = U.el('div', 'card');
     card.appendChild(renderToolbar());
