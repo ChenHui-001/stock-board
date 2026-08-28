@@ -90,6 +90,9 @@
     body.appendChild(renderHeadRow());
     sortedItems().forEach(function (item) {
       body.appendChild(renderRow(item));
+      if (state.aiExpanded === item.code) {
+        body.appendChild(renderAIInlinePanel(item));
+      }
     });
     card.appendChild(body);
     root.appendChild(card);
