@@ -58,6 +58,80 @@ if settings.ENABLE_AKSHARE:
 BREAK_AFTER = 3
 COOLDOWN = 60.0
 QUOTE_BATCH = 60
+# 多源竞速时单个 provider 的最大等待时间（秒），避免慢源拖住整体
+QUOTE_RACE_TIMEOUT = 3.0
+
+
+@dataclass
+class ProviderStats:
+    """单个数据源的运行时质量统计（滑动窗口）。"""
+
+    name: str
+    ok: int = 0
+    fail: int = 0
+    total_ms: int = 0          # 成功请求总耗时（毫秒）
+    last_ok_at: float = 0.0    # 最后一次成功时间戳
+    last_quote_time: str = ""  # 最近一次行情时间
+    _latencies: deque[int] = field(default_factory=lambda: deque(maxlen=20))
+
+    def record(self, ok: bool, latency_ms: int, quote_time: str = "") -> None:
+        if ok:
+            self.ok += 1
+            self.total_ms += latency_ms
+            self._latencies.append(latency_ms)
+            self.last_ok_at = time.monotonic()
+            if quote_time:
+                self.last_quote_time = quote_time
+        else:
+            self.fail += 1
+
+    @property
+    def requests(self) -> int:
+        return self.ok + self.fail
+
+    @property
+    def success_rate(self) -> float:
+        total = self.requests
+        return self.ok / total if total else 1.0
+
+    @property
+    def avg_latency_ms(self) -> int:
+        if not self._latencies:
+            return 0
+        return int(sum(self._latencies) / len(self._latencies))
+
+    @property
+    def score(self) -> float:
+        """综合评分：成功率 70% + 延迟 30%。范围 0~1，越高越好。"""
+        if self.requests == 0:
+            return 0.5  # 无样本时给中等分，不贸然优先
+        # 延迟分：假设 0ms=1.0，2000ms=0.0
+        latency_score = max(0.0, 1.0 - self.avg_latency_ms / 2000)
+        return round(self.success_rate * 0.7 + latency_score * 0.3, 3)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "ok": self.ok,
+            "fail": self.fail,
+            "success_rate": round(self.success_rate, 2),
+            "avg_latency_ms": self.avg_latency_ms,
+            "score": self.score,
+            "last_ok_at": self.last_ok_at,
+            "last_quote_time": self.last_quote_time,
+        }
+
+
+def _quote_freshness(q: Quote) -> int:
+    """行情新鲜度打分：有最新价 > 有昨收 > 无。用于多源结果合并时择优。"""
+    score = 0
+    if q.price and q.price > 0:
+        score += 100
+    if q.prev_close and q.prev_close > 0:
+        score += 10
+    if q.quote_time:
+        score += 1
+    return score
 
 
 def _usable(q: Quote) -> bool:
@@ -85,16 +159,21 @@ class Registry:
         self.providers: list[Provider] = []
         self._fail: dict[str, int] = {}
         self._blocked_until: dict[str, float] = {}
+        self._stats: dict[str, ProviderStats] = {}
         for name in settings.PROVIDER_ORDER:
             factory = _FACTORIES.get(name)
             if not factory:
                 continue
             try:
                 self.providers.append(factory())
+                self._stats[name] = ProviderStats(name=name)
             except Exception as exc:  # noqa: BLE001
                 log.warning("数据源 %s 初始化失败：%s", name, exc)
         if not self.providers:
             raise RuntimeError("没有任何可用数据源，请检查 PROVIDER_ORDER 配置")
+
+    def _stat(self, name: str) -> ProviderStats:
+        return self._stats.setdefault(name, ProviderStats(name=name))
 
     # ------------------------------------------------------------ 健康度
     def _available(self, cap: str) -> list[Provider]:
