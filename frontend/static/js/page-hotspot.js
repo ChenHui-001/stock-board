@@ -416,6 +416,23 @@
       body.appendChild(sum);
     }
 
+    // 概念标签：点击后过滤同概念资讯
+    const tags = it.tags || [];
+    if (tags.length) {
+      const tagWrap = U.el('div', 'hotspot-tags');
+      tags.forEach(function (t) {
+        const chip = U.el('button', 'hotspot-tag ' + (HS_SENT_CLASS[t.sentiment] || 'sent-flat'),
+          t.name);
+        chip.onclick = function (ev) {
+          ev.stopPropagation();
+          state.sector = state.sector === t.name ? null : t.name;
+          render();
+        };
+        tagWrap.appendChild(chip);
+      });
+      body.appendChild(tagWrap);
+    }
+
     row.appendChild(body);
     return row;
   }
