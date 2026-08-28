@@ -780,14 +780,14 @@ main {
 
 .wl-row {
   display: grid;
-  grid-template-columns: 34px minmax(150px, 1.5fr) minmax(90px, 1fr) 88px 96px 70px 84px 100px 120px 230px;
+  grid-template-columns: 34px minmax(150px, 1.5fr) minmax(90px, 1fr) 88px 96px 70px 84px 100px 120px 90px 200px;
   align-items: center;
   gap: 10px;
   padding: 11px 16px;
   border-bottom: 1px solid var(--line-soft);
   transition: background .12s;
   /* 全部字段始终展示：窄屏下表格内部横向滚动，不隐藏任何列 */
-  min-width: 1210px;
+  min-width: 1300px;
 }
 
 .wl-row:last-child {
