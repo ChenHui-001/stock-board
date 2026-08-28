@@ -567,6 +567,14 @@ def test_value_screener() -> None:
           abs((pos_low.get("position_pct") or 0) - 15.8) < 1.0, str(pos_low))
     check("价值选股: K线不足给中性分",
           vs._position_score({"price": 10, "kline": []})["score"] == 3)
+    # 回归：K线最后一根不含当日时（数据源延迟/频控回落），现价会冲出 20 日区间。
+    # 涨停股常见，早期实现会算出 >100% 的非法位置，需由现价扩展区间并夹到 0~100。
+    pos_breakout = vs._position_score({"price": 25.0, "kline": kline})
+    check("价值选股: 现价突破20日高点时位置夹到 100%",
+          pos_breakout.get("position_pct") == 100.0, str(pos_breakout))
+    pos_breakdown = vs._position_score({"price": 5.0, "kline": kline})
+    check("价值选股: 现价跌破20日低点时位置夹到 0%",
+          pos_breakdown.get("position_pct") == 0.0, str(pos_breakdown))
 
     # ---- v3: 买点评分接入价格位置与相对强度 ----
     p2 = {"change_pct": 2.0, "volume_ratio": 1.0, "lianban": 0,
