@@ -20,7 +20,9 @@
       meta: null,
       loading: false,
       error: null
-    }
+    },
+    // 行内相关股面板
+    inline: { item: null, loading: false, data: null, error: null }
   };
 
   function view() { return document.getElementById('view'); }
@@ -415,6 +417,15 @@
     aiBtn.title = '分析该快讯对行业的影响与关联度最高的股票';
     aiBtn.onclick = function () { openAnalysis(it); };
     metaLine.appendChild(aiBtn);
+    const relBtn = U.el('button', 'btn btn-sm hotspot-rel-btn', '相关股');
+    const relActive = state.inline.item && state.inline.item.id === it.id;
+    if (relActive) relBtn.classList.add('active');
+    relBtn.title = '展开/收起关联个股';
+    relBtn.onclick = function (ev) {
+      ev.stopPropagation();
+      toggleInlineStocks(it);
+    };
+    metaLine.appendChild(relBtn);
     body.appendChild(metaLine);
 
     // 外链地址过白名单：7x24 快讯源较杂，非 http(s) 地址退化为纯文本标题
@@ -450,6 +461,11 @@
         tagWrap.appendChild(chip);
       });
       body.appendChild(tagWrap);
+    }
+
+    // 行内关联股面板（展开时渲染）
+    if (state.inline.item && state.inline.item.id === it.id) {
+      body.appendChild(renderInlineStocks());
     }
 
     row.appendChild(body);
