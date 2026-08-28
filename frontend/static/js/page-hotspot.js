@@ -11,7 +11,6 @@
     loading: false,
     error: null,
     lastAuto: 0,
-    view: 'feed',       // feed=快讯列表 / value=价值投资选股
     // 服务端关键词检索（真搜索，不是过滤当前页）
     search: {
       q: '',            // 已发起检索的关键词，用于丢弃过期响应
@@ -20,12 +19,7 @@
       meta: null,
       loading: false,
       error: null
-    },
-    value: null,        // 价值选股结果
-    valueLoading: false,
-    valueError: null,
-    weights: null,      // 价值选股各维度权重
-    weightsOpen: false  // 权重配置表单是否展开
+    }
   };
 
   function view() { return document.getElementById('view'); }
@@ -61,34 +55,12 @@
     root.innerHTML = '';
     const card = U.el('div', 'card');
     card.appendChild(renderHead());
-    if (state.view === 'value') {
-      card.appendChild(renderValuePanel());
-    } else {
-      card.appendChild(renderFilters());
-      const listHost = U.el('div', 'hotspot-list');
-      listHost.id = 'hotspot-list';
-      card.appendChild(listHost);
-      renderListInto(listHost);
-    }
+    card.appendChild(renderFilters());
+    const listHost = U.el('div', 'hotspot-list');
+    listHost.id = 'hotspot-list';
+    card.appendChild(listHost);
+    renderListInto(listHost);
     root.appendChild(card);
-  }
-
-  // ---------------------------------------------------------- 价值投资选股
-  // 右侧「价值投资」菜单：A股快速轮动量化选股（市场环境 + 板块强度 + 多维评分 + 分级池）
-  function renderHeadTabs() {
-    const tabs = U.el('div', 'hotspot-tabs');
-    [
-      { key: 'feed', label: '快讯' },
-      { key: 'value', label: '💎 价值投资' }
-    ].forEach(function (t) {
-      const btn = U.el('button', 'tab' + (state.view === t.key ? ' active' : ''), t.label);
-      btn.onclick = function () {
-        state.view = t.key;
-        render();
-      };
-      tabs.appendChild(btn);
-    });
-    return tabs;
   }
 
   async function loadValue(force) {
