@@ -231,6 +231,7 @@
     const sorters = U.el('div', 'sorters');
     [
       { key: null, label: '默认顺序' },
+      { key: 'ai', label: 'AI 信号' },
       { key: 'change_pct', label: '涨跌幅' },
       { key: 'price', label: '现价' },
       { key: 'name', label: '名称' },
@@ -248,6 +249,8 @@
         } else {
           state.sortKey = opt.key;
           state.sortAsc = opt.key === 'name' || opt.key === 'code';
+          // AI 信号默认倒序：需要操作的股票排在前面
+          if (opt.key === 'ai') state.sortAsc = false;
         }
         render();
       };
