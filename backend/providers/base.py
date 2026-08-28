@@ -104,14 +104,29 @@ class Throttled(ProviderError):
 
 
 class HostLimiter:
-    """主机级节流。计时统一用 `time.monotonic()`：与 Registry 的熔断计时同源，
-    且不依赖事件循环，`status()` 在任意上下文都能安全调用。"""
+    """主机级节流 + 自适应间隔。计时统一用 `time.monotonic()`：与 Registry 的熔断计时同源，
+    且不依赖事件循环，`status()` 在任意上下文都能安全调用。
+
+    自适应逻辑：主机最近 20 次请求的成功率决定最小请求间隔。
+      - 成功率 ≥ 90%：按基准值 * 0.8（更激进，充分利用快源）
+      - 成功率 50-90%：保持基准值
+      - 成功率 < 50%：基准值 * 2（更保守，降低被频控概率）
+      - 触发过一次频控惩罚后未恢复：基准值 * 3
+    该设计让稳定源跑更快、易触发频控的源自动减速。
+    """
+
+    # 滑动窗口大小
+    _WINDOW = 20
+    # 自适应倍数边界
+    _MULT_MIN = 0.6
+    _MULT_MAX = 3.0
 
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
         self._last: dict[str, float] = {}
         self._cooldown_until: dict[str, float] = {}
         self._cooldown_len: dict[str, float] = {}
+        self._results: dict[str, list[bool]] = {}  # 最近请求结果：True=成功 False=失败/频控
         self._guard = asyncio.Lock()
 
     async def _lock(self, host: str) -> asyncio.Lock:
@@ -120,13 +135,39 @@ class HostLimiter:
                 self._locks[host] = asyncio.Lock()
             return self._locks[host]
 
+    def _base_interval(self, host: str) -> float:
+        return _HOST_MIN_INTERVAL.get(host, DEFAULT_MIN_INTERVAL)
+
+    def _adaptive_multiplier(self, host: str) -> float:
+        """根据最近成功率返回间隔倍数。"""
+        history = self._results.get(host, [])
+        if len(history) < 5:
+            return 1.0
+        ok_rate = sum(history) / len(history)
+        if ok_rate >= 0.9:
+            return 0.8
+        if ok_rate >= 0.7:
+            return 1.0
+        if ok_rate >= 0.5:
+            return 1.5
+        # 低于 50% 成功率，或被惩罚后尚未恢复
+        if self._cooldown_len.get(host):
+            return self._MULT_MAX
+        return 2.0
+
+    def _record(self, host: str, ok: bool) -> None:
+        hist = self._results.setdefault(host, [])
+        hist.append(ok)
+        if len(hist) > self._WINDOW:
+            hist.pop(0)
+
     async def acquire(self, host: str) -> None:
         until = self._cooldown_until.get(host, 0.0)
         now = time.monotonic()
         if until > now:
             raise Throttled(f"{host} 频控冷却中，剩余 {until - now:.0f}s")
 
-        interval = _HOST_MIN_INTERVAL.get(host, DEFAULT_MIN_INTERVAL)
+        interval = self._base_interval(host) * self._adaptive_multiplier(host)
         lock = await self._lock(host)
         async with lock:
             wait = self._last.get(host, 0.0) + interval - time.monotonic()
@@ -138,6 +179,7 @@ class HostLimiter:
         length = min(COOLDOWN_MAX, (self._cooldown_len.get(host) or COOLDOWN_START / 2) * 2)
         self._cooldown_len[host] = length
         self._cooldown_until[host] = time.monotonic() + length
+        self._record(host, False)
         log.warning("主机 %s 触发频控，冷却 %.0fs（期间自动切换其他数据源）", host, length)
 
     def relax(self, host: str) -> None:
@@ -147,6 +189,7 @@ class HostLimiter:
             self._cooldown_len[host] = current / 2
         else:
             self._cooldown_len.pop(host, None)
+        self._record(host, True)
 
     def status(self) -> dict[str, float]:
         now = time.monotonic()
@@ -155,6 +198,24 @@ class HostLimiter:
             for host, until in self._cooldown_until.items()
             if until > now
         }
+
+    def host_stats(self) -> dict[str, dict[str, Any]]:
+        """返回各主机的自适应统计（供 /api/meta 展示）。"""
+        now = time.monotonic()
+        out: dict[str, dict[str, Any]] = {}
+        all_hosts = set(self._results.keys()) | set(self._cooldown_until.keys()) | set(self._last.keys())
+        for host in all_hosts:
+            hist = self._results.get(host, [])
+            cooling = max(0.0, self._cooldown_until.get(host, 0.0) - now)
+            out[host] = {
+                "interval_base": self._base_interval(host),
+                "interval_actual": round(self._base_interval(host) * self._adaptive_multiplier(host), 3),
+                "multiplier": round(self._adaptive_multiplier(host), 2),
+                "ok_rate": round(sum(hist) / len(hist), 2) if hist else None,
+                "samples": len(hist),
+                "cooling": round(cooling, 1),
+            }
+        return out
 
 
 limiter = HostLimiter()
