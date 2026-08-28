@@ -664,3 +664,113 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
 
     # 每股票单飞：并发点击同一只股票只打一次 LLM/取数，其余请求等待复用
     return await _with_ai_lock(code, _work)
+
+
+def _ai_summary_from_report(report: dict[str, Any]) -> dict[str, Any]:
+    """从完整/轻量 AI 报告中提取首页所需的轻量摘要。"""
+    adv = (report.get("analysis") or {}).get("advice") or {}
+    meta = report.get("meta") or {}
+    return {
+        "code": report.get("code"),
+        "name": report.get("name"),
+        "board": report.get("board"),
+        "price": report.get("price"),
+        "change_pct": report.get("change_pct"),
+        "action": adv.get("action"),
+        "confidence": adv.get("confidence"),
+        "reason": adv.get("reason"),
+        "confidence_reason": adv.get("confidence_reason"),
+        "position": adv.get("position"),
+        "support": adv.get("support"),
+        "resistance": adv.get("resistance"),
+        "entry_zone": adv.get("entry_zone"),
+        "exit_zone": adv.get("exit_zone"),
+        "stop_loss": adv.get("stop_loss"),
+        "take_profit": adv.get("take_profit"),
+        "horizon": adv.get("horizon"),
+        "signal": adv.get("signal"),
+        "signal_note": adv.get("signal_note"),
+        "scores": adv.get("scores"),
+        "engine": meta.get("engine") or "rule",
+        "model": meta.get("model"),
+        "cached_at": report.get("cached_at") or meta.get("generated_at"),
+        "is_brief": report.get("is_brief") or meta.get("is_brief") or False,
+    }
+
+
+async def _generate_rule_summary(code: str) -> dict[str, Any]:
+    """用规则引擎快速生成单股轻量快照（不调用 LLM），用于首页批量刷新。"""
+    detail = await service.stock_detail(code, resolve_market(code), force=False)
+    result = analysis.rule_based(detail)
+    quote = detail["quote"]
+    report: dict[str, Any] = {
+        "code": code,
+        "name": quote.get("name"),
+        "board": quote.get("board"),
+        "price": quote.get("price"),
+        "change_pct": quote.get("change_pct"),
+        "analysis": result["analysis"],
+        "meta": {
+            **result["meta"],
+            "fingerprint": llmcfg.fingerprint(),
+            "score_fp": scorecfg.fingerprint(),
+            "schema_version": REPORT_SCHEMA_VERSION,
+            "is_brief": True,
+        },
+        "status_tags": detail["status"]["tags"],
+        "report_sentiment": {"bull": 0, "bear": 0, "neutral": 0, "score": 0},
+        "rating_dist": {},
+        "reports_preview": [],
+        "from_cache": False,
+        "is_brief": True,
+    }
+    storage.save_report(code, report)
+    return report
+
+
+@router.get("/ai/watchlist")
+@router.post("/ai/watchlist")
+async def ai_watchlist(refresh: bool = Query(False)) -> dict[str, Any]:
+    """自选股批量 AI 摘要：优先读缓存，refresh=1 时用规则引擎快速重算并写入缓存。
+
+    返回轻量摘要列表（action/confidence/reason/支撑压力/周期/引擎），供首页
+    行内信号丸与总览卡片使用。规则引擎快照标记 is_brief，不会替代单股的
+    完整 LLM 分析。
+    """
+    codes = storage.watchlist_codes()
+    if not codes:
+        return {"items": [], "total": 0, "analyzed": 0, "refresh": refresh}
+
+    summaries: list[dict[str, Any]] = []
+    missing: list[str] = []
+
+    # 先尽量读缓存，保证 GET 响应快
+    for code in codes:
+        cached = _cached_brief_report(code) if refresh else _cached_brief_report(code)
+        if cached:
+            summaries.append(_ai_summary_from_report(cached))
+        else:
+            missing.append(code)
+
+    if refresh and missing:
+        sem = asyncio.Semaphore(3)
+
+        async def _one(code: str) -> dict[str, Any] | None:
+            async with sem:
+                try:
+                    return await _generate_rule_summary(code)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("批量 AI 分析 %s 失败：%s", code, describe_exc(exc))
+                    return None
+
+        results = await asyncio.gather(*[_one(c) for c in missing], return_exceptions=True)
+        for res in results:
+            if isinstance(res, dict):
+                summaries.append(_ai_summary_from_report(res))
+
+    return {
+        "items": summaries,
+        "total": len(codes),
+        "analyzed": len(summaries),
+        "refresh": refresh,
+    }
