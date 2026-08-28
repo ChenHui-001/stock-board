@@ -163,8 +163,13 @@
   };
 
   function providerHealth(p) {
-    // 返回 'ok' / 'warn' / 'err'：有冷却或连续失败即降级
+    // 返回 'ok' / 'warn' / 'err'：优先用综合评分，兼容旧字段
     if (p.cooling > 0) return 'err';
+    if (typeof p.score === 'number') {
+      if (p.score >= 0.7) return 'ok';
+      if (p.score >= 0.4) return 'warn';
+      return 'err';
+    }
     if (p.fails > 0) return 'warn';
     return 'ok';
   }
