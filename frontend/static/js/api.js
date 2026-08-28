@@ -123,6 +123,14 @@
         timeout: 300000
       });
     },
+    aiWatchlist: function (refresh) {
+      // 自选股批量 AI 摘要：优先读缓存，refresh=1 时用规则引擎快速重算。
+      // 响应快（读缓存时无外部调用），用于首页行内信号丸与 AI 总览卡片。
+      return request('/api/ai/watchlist' + (refresh ? '?refresh=1' : ''), {
+        method: refresh ? 'POST' : 'GET',
+        timeout: refresh ? 180000 : 30000
+      });
+    },
     news: function (code, refresh, days) {
       var q = [];
       if (refresh) q.push('refresh=1');
