@@ -2,7 +2,13 @@
 (function (global) {
   'use strict';
 
-  const state = { route: null, param: null, timer: null, session: null, meta: null };
+  const state = {
+    route: null, param: null,
+    // 上一个非 stock 路由,用于详情页「← 返回」导航到来源页面。
+    // 只有在进入 stock 时才会更新;fallback 是 home。
+    fromRoute: null, fromParam: null,
+    timer: null, session: null, meta: null
+  };
 
   function parseHash() {
     const hash = (location.hash || '#/home').replace(/^#\/?/, '');
@@ -11,6 +17,7 @@
     if (parts[0] === 'stock' && parts[1]) return { route: 'stock', param: parts[1] };
     if (parts[0] === 'search') return { route: 'search', param: null };
     if (parts[0] === 'hotspot') return { route: 'hotspot', param: null };
+    if (parts[0] === 'value') return { route: 'value', param: null };
     return { route: 'home', param: null };
   }
 
@@ -18,6 +25,7 @@
     if (state.route === 'search') return PageSearch;
     if (state.route === 'stock') return PageDetail;
     if (state.route === 'hotspot') return PageHotspot;
+    if (state.route === 'value') return PageValue;
     return PageHome;
   }
 
@@ -28,10 +36,28 @@
         || (r === state.route);
       node.classList.toggle('active', on);
     });
+    // 额外高亮来源 nav:从 value/hotspot 进入详情页时,顶部对应入口也高亮,
+    // 让用户一眼看到当前详情页的来源页面。
+    const sourceRoute = state.route === 'stock' ? state.fromRoute : state.route;
+    if (sourceRoute && sourceRoute !== state.route) {
+      document.querySelectorAll('.nav-item').forEach(function (node) {
+        if (node.getAttribute('data-route') === sourceRoute) {
+          node.classList.add('active');
+        }
+      });
+    }
   }
 
   async function route() {
     const next = parseHash();
+    // 记录「上一页」用于详情页返回:仅在进入 stock 时记录(从非 stock 跳入),
+    // 这样 home→详情→返回→home→详情→返回 时 fromRoute 始终是 home;
+    // 而 value→详情→返回 也能正确回到 value。
+    // 已被记录后从 stock 跳 stock 不更新 fromRoute 也满足用户预期。
+    if (next.route === 'stock' && state.route !== 'stock') {
+      state.fromRoute = state.route;
+      state.fromParam = state.param;
+    }
     state.route = next.route;
     state.param = next.param;
     setNavActive();
@@ -46,6 +72,8 @@
       await PageDetail.mount(state.param);
     } else if (state.route === 'hotspot') {
       PageHotspot.mount();
+    } else if (state.route === 'value') {
+      PageValue.mount();
     } else {
       await PageHome.mount();
     }
@@ -55,6 +83,24 @@
     view.classList.remove('page-enter');
     void view.offsetWidth;
     view.classList.add('page-enter');
+  }
+
+  // 详情页「← 返回」使用:跳回 fromRoute(通常是 home / value / hotspot / search),
+  // 若 fromRoute 缺失或为 stock(理论上不应发生),fallback 到 home。
+  function goBack() {
+    const r = (state.fromRoute && state.fromRoute !== 'stock') ? state.fromRoute : 'home';
+    const p = state.fromParam;
+    const hash = (r === 'stock') ? '#/home' : (p ? '#/' + r + '/' + p : '#/' + r);
+    location.hash = hash;
+  }
+
+  // 给详情页返回按钮用的标签:从哪儿来回哪儿去,无来源时显示「首页」。
+  const ROUTE_BACK_LABEL = {
+    home: '首页', value: '价值投资', hotspot: '热点追踪', search: '查询',
+  };
+  function backLabel() {
+    const r = (state.fromRoute && state.fromRoute !== 'stock') ? state.fromRoute : 'home';
+    return '← 返回' + (ROUTE_BACK_LABEL[r] || '首页');
   }
 
   function setSession(session) {
