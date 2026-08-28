@@ -746,7 +746,7 @@ async def ai_watchlist(refresh: bool = Query(False)) -> dict[str, Any]:
 
     # 先尽量读缓存，保证 GET 响应快
     for code in codes:
-        cached = _cached_brief_report(code) if refresh else _cached_brief_report(code)
+        cached = _cached_brief_report(code)
         if cached:
             summaries.append(_ai_summary_from_report(cached))
         else:
