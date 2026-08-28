@@ -12,7 +12,16 @@
     dragCode: null,
     // 轮询在途标记：盘中 5s 心跳可能快于响应（数据源被频控时尤甚），
     // 无保护会堆叠并发请求，且先发后到的旧响应会把新价格覆盖回去
-    ticking: false
+    ticking: false,
+    // 首页 AI 摘要：code -> summary
+    ai: {
+      items: {},
+      loading: false,
+      error: null,
+      total: 0,
+      analyzed: 0
+    },
+    aiExpanded: null   // 当前行内展开 AI 面板的股票 code
   };
 
   function view() {
