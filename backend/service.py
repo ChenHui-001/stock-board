@@ -489,6 +489,34 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
         bars = kp.get("bars") or []
         atr_by_key[key] = indicators.decorate_bars_with_atr(bars)
 
+    # v4：并行预拉资金流,用于 watch_monitor 资金流信号(主力抢筹/出货/护盘/持续流入等)。
+    # 复用详情页 flow 缓存(_flow 内部已有 history_ttl 缓存),失败回退 None
+    # 让 watch_monitor 跳过资金流信号分支,不影响向后兼容。
+    flow_by_key: dict[str, dict[str, Any] | None] = {}
+    flow_results = await asyncio.gather(
+        *(_flow(r["code"], r["market"], False) for r in rows),
+        return_exceptions=True,
+    )
+    # 以 K 线最新交易日作为「资金流 fresh」参照,避免把昨日数据当今日
+    ref_date_by_key: dict[str, str] = {
+        full_code(r["code"], r["market"]): (kp.get("last_date") or "")
+        for r, kp in zip(rows, kline_results)
+        if not isinstance(kp, BaseException) and kp
+    }
+    for r, fp in zip(rows, flow_results):
+        key = full_code(r["code"], r["market"])
+        if isinstance(fp, BaseException) or not fp:
+            flow_by_key[key] = None
+            continue
+        try:
+            flow_by_key[key] = indicators.summarize_flow(
+                fp.get("rows") or [],
+                ref_date=ref_date_by_key.get(key) or None,
+            )
+        except Exception as exc:
+            log.warning("watchlist 资金流汇总失败 %s: %s", key, exc)
+            flow_by_key[key] = None
+
     # 板块兜底：腾讯/新浪行情不带行业字段，eastmoney 被限流时就会出现空板块。
     # 对缺失板块的股票用批量接口一次补齐（1 次请求覆盖多只，逐股 1 小时缓存），
     # 成功即回写数据库，之后即使 eastmoney 持续不可用也能稳定展示。
@@ -525,7 +553,9 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
         if board and board != row.get("board"):
             storage.update_meta(row["code"], None, board)
         data["board"] = board
-        data["monitor"] = watch_monitor(data, atr=atr_by_key.get(key))
+        data["monitor"] = watch_monitor(
+            data, atr=atr_by_key.get(key), flow=flow_by_key.get(key),
+        )
         data["sort_no"] = row["sort_no"]
         items.append(data)
 
