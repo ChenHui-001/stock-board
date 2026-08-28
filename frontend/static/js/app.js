@@ -525,6 +525,27 @@
     document.getElementById('btn-manage').addEventListener('click', function () {
       PageHome.toggleManage();
     });
+    // 显式绑定 nav 点击:既依赖浏览器跳转 href,又在同 hash 点击时强制刷新。
+    // 解决两个常见「点击无反应」:
+    //   (a) 用户在某个路由重复点同 nav,浏览器不会触发 hashchange → handler 兜底刷新
+    //   (b) 某些浏览器扩展 / PWA 拦截 hash 跳转 → click handler 显式 setLocation
+    document.querySelectorAll('.nav-item').forEach(function (node) {
+      node.addEventListener('click', function (e) {
+        const route = node.getAttribute('data-route');
+        if (!route) return;
+        const target = (route === 'home') ? '#/home' : '#/' + route;
+        // 如果已经在同一路由,显式调用 route() 强制重渲(用户期望:再次点击刷新)
+        if (state.route === route || (route === 'stock' && state.route === 'stock')) {
+          e.preventDefault();
+          route();
+        } else if (location.hash === target) {
+          // hash 已匹配但浏览器没触发 hashchange(罕见):直接调一次
+          e.preventDefault();
+          route();
+        }
+        // 否则让浏览器按 href 自然跳转,hashchange 会触发 route()。
+      });
+    });
     document.getElementById('btn-settings').addEventListener('click', function () {
       Settings.open();
     });
