@@ -27,6 +27,7 @@ shots/
 auto-commit.log
 auto-commit.log.*
 .credentials
+.commit-msg
 watcher_test.err
 watcher_test.log
 watcher_stdout.log

@@ -31,6 +31,41 @@ Set-Location $projectRoot
 $watchPaths = @("backend", "frontend/static")
 $exclExts = @(".pyc", ".tmp", ".swp", ".log")  # .ps1 不再排除:脚本自身改动也要提交
 $logFile = Join-Path $projectRoot "auto-commit.log"
+$commitMsgFile = Join-Path $projectRoot ".commit-msg"
+$maxLogBytes = 2MB
+$maxLogArchives = 7
+
+function Rotate-LogFile {
+    param([string]$Path, [int]$MaxBytes, [int]$Keep)
+    if (-not (Test-Path $Path)) { return }
+    $info = Get-Item $Path -ErrorAction SilentlyContinue
+    if (-not $info -or $info.Length -le $MaxBytes) { return }
+
+    $suffix = Get-Date -Format "yyyy-MM-dd-HHmmss"
+    $archive = "${Path}.${suffix}"
+    Move-Item -Path $Path -Destination $archive -Force
+
+    Get-ChildItem -Path "${Path}.*" -File |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -Skip $Keep |
+        Remove-Item -Force
+}
+
+function Get-CommitMessage {
+    param([string]$Files)
+    # 若仓库根目录存在 .commit-msg，则以其第一行非空内容作为中文语义摘要。
+    # 格式：首行=中文摘要；空行；默认 auto-commit 信息作为详细变更说明。
+    if (Test-Path $commitMsgFile) {
+        $custom = Get-Content $commitMsgFile -ErrorAction SilentlyContinue |
+            Where-Object { $_.Trim() -ne "" } |
+            Select-Object -First 1
+        if ($custom) {
+            Remove-Item $commitMsgFile -Force -ErrorAction SilentlyContinue
+            return "$custom`n`nauto-commit: smoke_test passed | changes: $Files"
+        }
+    }
+    return "auto-commit: smoke_test passed | changes: $Files"
+}
 
 function Get-GitHubToken {
     param([string]$RepoRoot)
@@ -49,6 +84,9 @@ function Get-GitHubToken {
 
 $githubToken = Get-GitHubToken -RepoRoot $projectRoot
 $remoteUrl = "https://x-access-token:$githubToken@github.com/ChenHui-001/stock-board.git"
+
+# 启动时先轮转日志，避免单文件无限增长
+Rotate-LogFile -Path $logFile -MaxBytes $maxLogBytes -Keep $maxLogArchives
 
 function Write-Log {
     param([string]$Msg, [string]$Level = "INFO")
@@ -81,7 +119,7 @@ function Invoke-AutoCommit {
     }
     $files = ($status | ForEach-Object { ($_ -split "\s+", 2)[1] }) -join ", "
     if ($files.Length -gt 80) { $files = $files.Substring(0, 77) + "..." }
-    $msg = "auto-commit: smoke_test passed | changes: $files"
+    $msg = Get-CommitMessage -Files $files
 
     git add -u 2>&1 | Out-Null
     Write-Log "git commit..."
