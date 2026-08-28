@@ -2801,6 +2801,7 @@ def main() -> int:
     test_model_filter()
     test_value_screener()
     test_value_weights()
+    test_value_screen_e2e()
     test_news_interpret()
     test_hotspot()
     test_hotspot_ai()
