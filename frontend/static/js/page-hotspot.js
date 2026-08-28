@@ -180,6 +180,9 @@
 
   function renderFilters() {
     const bar = U.el('div', 'hotspot-filters');
+
+    // 来源筛选
+    const srcWrap = U.el('div', 'hotspot-filter-group hotspot-source-group');
     const counts = originCounts();
     const opts = [{ key: 'all', label: '全部 ' + state.items.length }].concat(
       Object.keys(counts).map(function (k) {
@@ -196,8 +199,12 @@
         });
         repaintList();
       };
-      bar.appendChild(chip);
+      srcWrap.appendChild(chip);
     });
+    bar.appendChild(srcWrap);
+
+    // 右侧：时间窗 + 搜索
+    const right = U.el('div', 'hotspot-filter-group hotspot-filter-right');
 
     // 时间窗：后端支持 5~120 分钟，改动即按新窗口重取
     const range = U.el('div', 'hotspot-range');
@@ -211,7 +218,7 @@
       };
       range.appendChild(b);
     });
-    bar.appendChild(range);
+    right.appendChild(range);
 
     // 关键词检索：打服务端（不是过滤当前页），只重建列表不打断页面滚动
     const search = U.el('input', 'hotspot-search');
@@ -229,7 +236,8 @@
       if (e.key === 'Enter') { state.q = search.value; doSearch(search.value); }
       if (e.key === 'Escape' && search.value) { clearSearch(); }
     };
-    bar.appendChild(search);
+    right.appendChild(search);
+    bar.appendChild(right);
     return bar;
   }
 
