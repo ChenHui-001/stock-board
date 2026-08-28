@@ -29,7 +29,7 @@ def _decode(raw: bytes) -> str:
 
 class SinaProvider(Provider):
     def __init__(self) -> None:
-        super().__init__(name="sina", caps={"quotes", "kline", "fund_flow", "hot", "news"})
+        super().__init__(name="sina", caps={"quotes", "search", "kline", "fund_flow", "hot", "news"})
 
     async def quotes(self, keys: list[tuple[str, str]]) -> dict[str, Quote]:
         if not keys:
