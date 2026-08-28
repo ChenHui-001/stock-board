@@ -289,6 +289,82 @@
     return cell;
   }
 
+  // AI 信号丸：action + confidence%，点击展开/收起行内 mini 面板
+  const AI_PILL_CLASS = {
+    '积极持仓/加仓': 'add',
+    '持有观望': 'hold',
+    '减仓规避': 'reduce',
+    '清仓离场': 'sell'
+  };
+
+  function renderAIPill(summary, small) {
+    const cls = AI_PILL_CLASS[summary.action] || 'hold';
+    const pill = U.el('button', 'ai-pill ai-pill-' + cls + (small ? ' ai-pill-sm' : ''));
+    const actionText = summary.action ? summary.action.replace('/加仓', '').replace('规避', '').replace('离场', '') : '未分析';
+    pill.appendChild(document.createTextNode(actionText));
+    if (U.isNum(summary.confidence)) {
+      pill.appendChild(U.el('span', 'ai-pill-conf', summary.confidence + '%'));
+    }
+    pill.title = summary.reason || '点击展开 AI 摘要';
+    return pill;
+  }
+
+  function renderAIInlinePanel(item) {
+    const s = aiSummary(item);
+    const panel = U.el('div', 'wl-row ai-inline-panel');
+    if (!s) {
+      panel.appendChild(U.el('div', 'ai-inline-empty', '暂无 AI 摘要'));
+      return panel;
+    }
+
+    const wrap = U.el('div', 'ai-inline-wrap');
+    const head = U.el('div', 'ai-inline-head');
+    head.appendChild(U.el('span', 'ai-inline-action ai-pill ai-pill-' + (AI_PILL_CLASS[s.action] || 'hold'),
+      s.action || '持有观望'));
+    if (s.reason) head.appendChild(U.el('span', 'ai-inline-reason', s.reason));
+    wrap.appendChild(head);
+
+    const grids = U.el('div', 'ai-inline-grids');
+    function kv(label, val) {
+      const node = U.el('div', 'ai-inline-kv');
+      node.appendChild(U.el('span', 'ai-inline-k', label));
+      node.appendChild(U.el('span', 'ai-inline-v', val || '--'));
+      return node;
+    }
+    grids.appendChild(kv('支撑', U.price(s.support)));
+    grids.appendChild(kv('压力', U.price(s.resistance)));
+    grids.appendChild(kv('介入', s.entry_zone));
+    grids.appendChild(kv('离场', s.exit_zone));
+    grids.appendChild(kv('止损', U.price(s.stop_loss)));
+    grids.appendChild(kv('止盈', U.price(s.take_profit)));
+    grids.appendChild(kv('周期', s.horizon));
+    grids.appendChild(kv('引擎', s.engine === 'llm' ? 'AI 大模型' : '规则引擎'));
+    wrap.appendChild(grids);
+
+    if (s.confidence_reason) {
+      wrap.appendChild(U.el('div', 'ai-inline-conf', '置信度依据：' + s.confidence_reason));
+    }
+
+    const foot = U.el('div', 'ai-inline-foot');
+    const fullBtn = U.el('button', 'btn btn-sm btn-primary', '查看完整 AI 分析');
+    fullBtn.onclick = function (e) {
+      e.stopPropagation();
+      AI.open(item.code, item.name, fullBtn);
+    };
+    foot.appendChild(fullBtn);
+    const closeBtn = U.el('button', 'btn btn-sm', '收起');
+    closeBtn.onclick = function (e) {
+      e.stopPropagation();
+      state.aiExpanded = null;
+      render();
+    };
+    foot.appendChild(closeBtn);
+    wrap.appendChild(foot);
+
+    panel.appendChild(wrap);
+    return panel;
+  }
+
   function renderRow(item) {
     const row = U.el('div', 'wl-row');
     row.dataset.code = item.code;
