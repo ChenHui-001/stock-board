@@ -5,7 +5,6 @@
 
 作为 PROVIDER_ORDER 末尾的兜底源，当东财/腾讯/新浪均不可用时提供基础行情与 K线。
 """
-"""
 from __future__ import annotations
 
 import csv
