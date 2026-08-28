@@ -244,10 +244,141 @@
         refresh.disabled = false;
       }
     };
+    // 权重调节按钮：折叠面板，展开 5 个维度滑块
+    const weightsBtn = U.el('button', 'btn btn-sm', '⚙ 权重');
+    weightsBtn.title = '调整基本面/板块/资金/量价/情绪 5 维度的相对权重';
+    weightsBtn.onclick = function () {
+      const panel = document.getElementById('val-weights-panel');
+      if (!panel) return;
+      const hidden = panel.style.display === 'none';
+      panel.style.display = hidden ? '' : 'none';
+      weightsBtn.textContent = hidden ? '⚙ 权重 ▲' : '⚙ 权重 ▼';
+    };
+    right.appendChild(weightsBtn);
+
     right.appendChild(refresh);
     head.appendChild(right);
     root.appendChild(head);
+
+    // 权重面板（默认隐藏，异步加载当前权重）
+    const weightsPanel = U.el('div', 'val-weights-panel', '');
+    weightsPanel.id = 'val-weights-panel';
+    weightsPanel.style.display = 'none';
+    weightsPanel.appendChild(U.el('div', 'val-weights-title',
+      '各维度权重（0.2 弱 — 1.0 平衡 — 3.0 强；保存后立即对候选池重新排序）'));
+    const sliders = U.el('div', 'val-weights-sliders');
+    weightsPanel.appendChild(sliders);
+    const actions = U.el('div', 'val-weights-actions');
+    const saveBtn = U.el('button', 'btn btn-sm btn-primary', '保存权重');
+    const resetBtn = U.el('button', 'btn btn-sm', '恢复默认');
+    const status = U.el('span', 'val-weights-status');
+    actions.appendChild(saveBtn); actions.appendChild(resetBtn); actions.appendChild(status);
+    weightsPanel.appendChild(actions);
+    root.appendChild(weightsPanel);
+    state._weightsUI = { sliders: sliders, saveBtn: saveBtn, resetBtn: resetBtn, status: status };
+
     viewEl.appendChild(root);
+
+    // 异步加载当前权重（填充滑块初值）
+    loadWeights();
+  }
+
+  const WEIGHT_FIELDS = [
+    { key: 'finance', label: '基本面', desc: '成长 + 质量 + 估值 + 现金流 + 行业（共 50 分）' },
+    { key: 'board',   label: '板块',   desc: '候选所属板块的涨停数与平均涨幅' },
+    { key: 'flow',    label: '资金',   desc: '近 5/30 日主力资金方向与拐点' },
+    { key: 'volume',  label: '量价',   desc: '量比、换手、涨跌幅、相对强度' },
+    { key: 'emotion', label: '情绪',   desc: '连板梯队与高换手活跃度' }
+  ];
+
+  async function loadWeights() {
+    if (!state._weightsUI) return;
+    try {
+      const cfg = await API.valueWeights();
+      const sliders = state._weightsUI.sliders;
+      sliders.innerHTML = '';
+      const inputs = {};
+      WEIGHT_FIELDS.forEach(function (f) {
+        const wrap = U.el('div', 'val-weight');
+        wrap.appendChild(U.el('div', 'val-weight-label', f.label));
+        wrap.appendChild(U.el('div', 'val-weight-desc', f.desc));
+        const row = U.el('div', 'val-weight-row');
+        const slider = U.el('input', 'val-weight-slider');
+        slider.type = 'range';
+        slider.min = (cfg.range && cfg.range[0]) || 0.2;
+        slider.max = (cfg.range && cfg.range[1]) || 3.0;
+        slider.step = 0.1;
+        slider.value = (cfg[f.key] != null) ? cfg[f.key] : 1.0;
+        const num = U.el('input', 'val-weight-num');
+        num.type = 'number';
+        num.min = slider.min; num.max = slider.max; num.step = 0.1;
+        num.value = slider.value;
+        // 联动：拖动 / 输入同步两份
+        slider.oninput = function () { num.value = slider.value; };
+        num.oninput = function () {
+          const v = Math.max(parseFloat(slider.min), Math.min(parseFloat(slider.max), parseFloat(num.value) || 1.0));
+          slider.value = v;
+        };
+        inputs[f.key] = { slider: slider, num: num };
+        row.appendChild(slider); row.appendChild(num);
+        wrap.appendChild(row);
+        sliders.appendChild(wrap);
+      });
+      state._weightsUI.inputs = inputs;
+      // 暴露基线权重（用于基准提示）
+      state._weightsUI.baseTotal = cfg.base_total || 92;
+    } catch (e) {
+      // 静默失败：滑块用默认值 1.0 即可
+    }
+
+    const saveBtn = state._weightsUI.saveBtn;
+    const resetBtn = state._weightsUI.resetBtn;
+    saveBtn.onclick = async function () {
+      const inputs = state._weightsUI.inputs || {};
+      const body = {};
+      Object.keys(inputs).forEach(function (k) {
+        body[k] = parseFloat(inputs[k].slider.value) || 1.0;
+      });
+      saveBtn.disabled = true;
+      resetBtn.disabled = true;
+      state._weightsUI.status.textContent = '保存中…';
+      try {
+        await API.valueWeightsSave(body);
+        state._weightsUI.status.textContent = '✓ 已保存';
+        // 权重改了 → 缓存指纹变了,30s 后再拉一次
+        setTimeout(function () {
+          state._weightsUI.status.textContent = '';
+        }, 4000);
+      } catch (e) {
+        state._weightsUI.status.textContent = '✗ ' + (e.message || '保存失败');
+      } finally {
+        saveBtn.disabled = false;
+        resetBtn.disabled = false;
+      }
+    };
+    resetBtn.onclick = async function () {
+      saveBtn.disabled = true;
+      resetBtn.disabled = true;
+      state._weightsUI.status.textContent = '恢复中…';
+      try {
+        const cfg = await API.valueWeightsReset();
+        // 用后端返回的实际值重置滑块
+        const inputs = state._weightsUI.inputs || {};
+        Object.keys(inputs).forEach(function (k) {
+          if (cfg[k] != null) {
+            inputs[k].slider.value = cfg[k];
+            inputs[k].num.value = cfg[k];
+          }
+        });
+        state._weightsUI.status.textContent = '✓ 已恢复默认';
+        setTimeout(function () { state._weightsUI.status.textContent = ''; }, 4000);
+      } catch (e) {
+        state._weightsUI.status.textContent = '✗ ' + (e.message || '重置失败');
+      } finally {
+        saveBtn.disabled = false;
+        resetBtn.disabled = false;
+      }
+    };
   }
 
   function renderData(data) {
