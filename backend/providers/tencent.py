@@ -1,10 +1,13 @@
 """腾讯自选股数据源（辅）：实时行情 + 代码联想搜索。返回 GBK 文本。"""
 from __future__ import annotations
 
+import json
 import re
 
-from ..utils import normalize_code, resolve_market, tencent_code, to_float
-from .base import Provider, ProviderError, Quote, SearchItem, fetch
+from datetime import datetime, timedelta
+
+from ..utils import TZ, normalize_code, resolve_market, tencent_code, to_float
+from .base import Bar, Provider, ProviderError, Quote, SearchItem, fetch
 
 QUOTE_URL = "https://qt.gtimg.cn/q="
 SUGGEST_URL = "https://smartbox.gtimg.cn/s3/"
@@ -31,7 +34,7 @@ def _decode(raw: bytes) -> str:
 
 class TencentProvider(Provider):
     def __init__(self) -> None:
-        super().__init__(name="tencent", caps={"quotes", "search"})
+        super().__init__(name="tencent", caps={"quotes", "search", "kline", "kline_min"})
 
     async def quotes(self, keys: list[tuple[str, str]]) -> dict[str, Quote]:
         if not keys:
@@ -103,3 +106,69 @@ class TencentProvider(Provider):
             if len(items) >= limit:
                 break
         return items
+
+    # ------------------------------------------------------------ K 线
+    async def kline(self, code: str, market: str, limit: int) -> list[Bar]:
+        """腾讯日线（前复权），作为东财/同花顺不可用时的兜底。"""
+        symbol = tencent_code(code, market)
+        end = datetime.now(TZ)
+        start = end - timedelta(days=int(limit * 1.5) + 60)
+        url = (
+            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+            f"?param={symbol},day,{start.strftime('%Y-%m-%d')},{end.strftime('%Y-%m-%d')},{limit},qfq"
+        )
+        resp = await fetch(url, headers=HEADERS)
+        payload = json.loads(resp.text or "{}")
+        data = payload.get("data", {}).get(symbol, {})
+        rows = data.get("day") or []
+        if not rows:
+            raise ProviderError("腾讯K线返回为空")
+        bars: list[Bar] = []
+        for row in rows:
+            if len(row) < 5:
+                continue
+            bars.append(
+                Bar(
+                    date=str(row[0]),
+                    open=to_float(row[1], 0.0) or 0.0,
+                    close=to_float(row[2], 0.0) or 0.0,
+                    high=to_float(row[3], 0.0) or 0.0,
+                    low=to_float(row[4], 0.0) or 0.0,
+                    volume=to_float(row[5], 0.0) or 0.0 if len(row) > 5 else 0.0,
+                )
+            )
+        if not bars:
+            raise ProviderError("腾讯K线解析为空")
+        # 补涨跌幅
+        for i in range(1, len(bars)):
+            prev = bars[i - 1].close
+            if prev:
+                bars[i].change_pct = round((bars[i].close - prev) / prev * 100, 2)
+        return bars[-limit:]
+
+    async def kline_min(self, code: str, market: str, limit: int, klt: int = 60) -> list[Bar]:
+        """腾讯分钟 K 线（m1/m5/m15/m30/m60），默认 60 分钟。"""
+        symbol = tencent_code(code, market)
+        period = f"m{klt}"
+        url = f"https://ifzq.gtimg.cn/appstock/app/kline/mkline?param={symbol},{period},,{limit}"
+        resp = await fetch(url, headers=HEADERS)
+        payload = json.loads(resp.text or "{}")
+        data = payload.get("data", {}).get(symbol, {})
+        rows = data.get(period) or []
+        if not rows:
+            raise ProviderError("腾讯分钟K线返回为空")
+        bars: list[Bar] = []
+        for row in rows:
+            if len(row) < 5:
+                continue
+            bars.append(
+                Bar(
+                    date=str(row[0]),
+                    open=to_float(row[1], 0.0) or 0.0,
+                    close=to_float(row[2], 0.0) or 0.0,
+                    high=to_float(row[3], 0.0) or 0.0,
+                    low=to_float(row[4], 0.0) or 0.0,
+                    volume=to_float(row[5], 0.0) or 0.0 if len(row) > 5 else 0.0,
+                )
+            )
+        return bars[-limit:]

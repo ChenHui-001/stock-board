@@ -77,6 +77,41 @@ class SinaProvider(Provider):
             raise ProviderError("新浪行情返回为空")
         return out
 
+    # ------------------------------------------------------------ 代码搜索
+    async def search(self, keyword: str, limit: int = 15) -> list[SearchItem]:
+        """新浪搜索联想（suggest3）：按名称/拼音/代码返回 A 股列表。"""
+        if not keyword:
+            return []
+        resp = await fetch(
+            "https://suggest3.sinajs.cn/suggest/type=11,12&key=" + keyword,
+            headers=HEADERS,
+        )
+        text = _decode(resp.content)
+        # 返回形如：suggestvalue="..."
+        if "=" not in text:
+            return []
+        body = text.split("=", 1)[1].strip().strip('";')
+        items: list[SearchItem] = []
+        for chunk in body.split(";"):
+            parts = chunk.split(",")
+            # 格式：name, py, code, market?, ... 实际新浪 suggest 字段较固定
+            if len(parts) < 4:
+                continue
+            # parts[0]=name, parts[1]=py, parts[2]=code, parts[3]=market_type
+            name, code, mtype = parts[0], normalize_code(parts[2]), parts[3]
+            if len(code) != 6 or not code.isdigit():
+                continue
+            if mtype in ("11",):
+                market = "SH"
+            elif mtype in ("12",):
+                market = "SZ"
+            else:
+                market = resolve_market(code)
+            items.append(SearchItem(code=code, market=market, name=name, type="A股"))
+            if len(items) >= limit:
+                break
+        return items
+
     # ------------------------------------------------------------ 日线 K 线
     async def kline(self, code: str, market: str, limit: int) -> list[Bar]:
         """新浪日线（含当日，收盘后即有），作为东财 K 线不可用时的兜底。
