@@ -120,7 +120,8 @@ class TencentProvider(Provider):
         resp = await fetch(url, headers=HEADERS)
         payload = json.loads(resp.text or "{}")
         data = payload.get("data", {}).get(symbol, {})
-        rows = data.get("day") or []
+        # qfq（前复权）模式下返回键是 qfqday；不复权才是 day
+        rows = data.get("qfqday") or data.get("day") or []
         if not rows:
             raise ProviderError("腾讯K线返回为空")
         bars: list[Bar] = []

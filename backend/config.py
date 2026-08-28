@@ -57,9 +57,8 @@ class Settings:
     # 同花顺(ths)排在腾讯/新浪之前：它的 K 线来自同花顺行情网页加载的真实数据文件
     # （d.10jqka.com.cn/v6/line/.../last.js，含最新交易日），东财 K 线不可用时
     # 优先回退到网页数据文件而非腾讯/新浪接口，保证详情页数据真实性。
-    # 网易财经(netease)作为末尾兜底源，提供基础行情与 K线。
     PROVIDER_ORDER = _list(
-        "PROVIDER_ORDER", ["eastmoney", "ths", "tencent", "sina", "netease", "akshare"]
+        "PROVIDER_ORDER", ["eastmoney", "ths", "tencent", "sina", "akshare"]
     )
     ENABLE_AKSHARE = _bool("ENABLE_AKSHARE", False)
     HTTP_TIMEOUT = _float("HTTP_TIMEOUT", 6.0)
