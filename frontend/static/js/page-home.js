@@ -115,6 +115,83 @@
     return wrap;
   }
 
+  // ---------------------------------------------------------- AI 总览卡片
+  function renderAIDashboard() {
+    const card = U.el('div', 'card ai-dashboard');
+    const head = U.el('div', 'ai-dashboard-head');
+    head.appendChild(U.el('div', 'ai-dashboard-title', '🤖 AI 持仓总览'));
+
+    const refresh = U.el('button', 'btn btn-sm ai-batch-btn' + (state.ai.loading ? ' loading' : ''), state.ai.loading ? '分析中…' : '批量刷新 AI');
+    refresh.disabled = state.ai.loading;
+    refresh.onclick = function () { batchAIRefresh(refresh); };
+    head.appendChild(refresh);
+    card.appendChild(head);
+
+    if (state.ai.error) {
+      card.appendChild(U.el('div', 'notice', 'AI 摘要加载失败：' + state.ai.error));
+      return card;
+    }
+
+    const summaries = Object.values(state.ai.items);
+    const counts = { add: 0, hold: 0, reduce: 0, sell: 0, unknown: 0 };
+    summaries.forEach(function (s) {
+      if (s.action === '积极持仓/加仓') counts.add++;
+      else if (s.action === '持有观望') counts.hold++;
+      else if (s.action === '减仓规避') counts.reduce++;
+      else if (s.action === '清仓离场') counts.sell++;
+      else counts.unknown++;
+    });
+
+    const statRow = U.el('div', 'ai-dashboard-stats');
+    function stat(cls, n, label) {
+      const node = U.el('div', 'ai-stat ' + cls);
+      node.appendChild(U.el('b', '', String(n)));
+      node.appendChild(document.createTextNode(label));
+      return node;
+    }
+    statRow.appendChild(stat('add', counts.add, '加仓'));
+    statRow.appendChild(stat('hold', counts.hold, '观望'));
+    statRow.appendChild(stat('reduce', counts.reduce, '减仓'));
+    statRow.appendChild(stat('sell', counts.sell, '清仓'));
+    statRow.appendChild(stat('unknown', state.items.length - summaries.length, '未分析'));
+    card.appendChild(statRow);
+
+    // Top3 需关注：按优先级 + 置信度排序
+    const top = summaries.slice().sort(function (a, b) {
+      const ra = AI_ACTION_RANK[a.action] || 0;
+      const rb = AI_ACTION_RANK[b.action] || 0;
+      if (ra !== rb) return rb - ra;
+      return (b.confidence || 0) - (a.confidence || 0);
+    }).slice(0, 3);
+
+    if (top.length) {
+      const topWrap = U.el('div', 'ai-dashboard-top');
+      topWrap.appendChild(U.el('div', 'ai-dashboard-sub', 'Top 关注'));
+      top.forEach(function (s) {
+        const row = U.el('div', 'ai-top-row');
+        const name = U.el('span', 'ai-top-name', s.name || s.code);
+        name.onclick = function () { location.hash = '#/stock/' + s.code; };
+        row.appendChild(name);
+        row.appendChild(U.el('span', 'ai-top-code', s.code));
+        const pill = renderAIPill(s, true);
+        row.appendChild(pill);
+        if (s.reason) {
+          const reason = U.el('span', 'ai-top-reason', s.reason);
+          reason.title = s.reason;
+          row.appendChild(reason);
+        }
+        topWrap.appendChild(row);
+      });
+      card.appendChild(topWrap);
+    }
+
+    if (!summaries.length && !state.ai.loading) {
+      card.appendChild(U.el('div', 'ai-dashboard-empty', '暂无 AI 摘要，点击「批量刷新 AI」生成全自选股的持仓建议。'));
+    }
+
+    return card;
+  }
+
   function renderToolbar() {
     const bar = U.el('div', 'wl-toolbar');
 
