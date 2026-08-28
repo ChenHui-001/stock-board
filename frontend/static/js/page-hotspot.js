@@ -6,6 +6,7 @@
     items: [],
     meta: null,
     filter: 'all',
+    sector: null,       // 当前选中的概念过滤
     q: '',
     minutes: 30,        // 快讯时间窗（分钟），可切 15/30/60
     loading: false,
@@ -42,6 +43,10 @@
     const q = (state.q || '').toLowerCase();
     return state.items.filter(function (it) {
       if (state.filter !== 'all' && it.origin !== state.filter) return false;
+      if (state.sector) {
+        const tags = it.tags || [];
+        if (!tags.some(function (t) { return t.name === state.sector; })) return false;
+      }
       if (!q) return true;
       return (it.title || '').toLowerCase().indexOf(q) >= 0
         || (it.summary || '').toLowerCase().indexOf(q) >= 0
@@ -55,6 +60,7 @@
     root.innerHTML = '';
     const card = U.el('div', 'card');
     card.appendChild(renderHead());
+    card.appendChild(renderSectorHeat());
     card.appendChild(renderFilters());
     const listHost = U.el('div', 'hotspot-list');
     listHost.id = 'hotspot-list';
