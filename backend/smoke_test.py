@@ -719,6 +719,88 @@ def test_model_filter() -> None:
           f"keep误杀={bad_keep} drop漏网={bad_drop}")
 
 
+# ------------------------------------------------------------------ 行情多源竞速
+# 回归背景：竞速首版把 3s 当成总预算，前两源慢时直接取消一切并误报
+# 「所有行情数据源均不可用」——后面的源根本没机会上场。修复后为错峰派发 +
+# 全部源试完才放弃。此测试用假源固化该行为。
+def test_quote_racing() -> None:
+    from backend.providers import Registry
+    from backend.providers import base as pbase
+    import backend.providers as pmod
+
+    class FakeProvider(pbase.Provider):
+        def __init__(self, name, delay, codes=None, fail=False):
+            super().__init__(name=name, caps={"quotes"})
+            self.delay = delay
+            self.codes = codes
+            self.fail = fail
+
+        async def quotes(self, keys):
+            await asyncio.sleep(self.delay)
+            if self.fail:
+                raise pbase.ProviderError(f"{self.name} 挂了")
+            out = {}
+            for code, market in keys:
+                if self.codes and code not in self.codes:
+                    continue
+                out[f"{code}.{market}"] = pbase.Quote(
+                    code=code, market=market, name=self.name, price=10.0,
+                    prev_close=9.5, source=self.name)
+            return out
+
+    reg = Registry.__new__(Registry)  # 跳过 __init__ 的真实源装配
+    reg.providers = []
+    reg._fail = {}
+    reg._blocked_until = {}
+    reg._stats = {}
+
+    orig_stagger = pmod.QUOTE_RACE_STAGGER
+    pmod.QUOTE_RACE_STAGGER = 0.2
+    try:
+        # 场景1：两个慢源（30s）+ 一个快源 → 错峰派发后快源胜出，绝不因超时放弃
+        reg.providers = [
+            FakeProvider("slow1", 30.0),
+            FakeProvider("slow2", 30.0),
+            FakeProvider("fast", 0.0),
+        ]
+        t0 = time.time()
+        quotes, used = asyncio.run(reg.quotes([("600000", "SH")]))
+        dt = time.time() - t0
+        q = quotes.get("600000.SH")
+        check("行情竞速: 慢源不拖垮整体（快源错峰胜出）",
+              q is not None and q.source == "fast", f"used={used}")
+        check("行情竞速: 胜出耗时远小于慢源延迟", dt < 5.0, f"dt={dt:.1f}s")
+
+        # 场景2：全部源失败 → 才报「所有行情数据源均不可用」
+        reg.providers = [FakeProvider("bad1", 0.0, fail=True),
+                         FakeProvider("bad2", 0.0, fail=True)]
+        try:
+            asyncio.run(reg.quotes([("600000", "SH")]))
+            check("行情竞速: 全败应抛错", False, "未抛错")
+        except Exception as exc:  # noqa: BLE001
+            check("行情竞速: 全败报所有源不可用", "均不可用" in str(exc), str(exc))
+
+        # 场景3：部分补齐 —— A 只有 600000，B 补齐 000001
+        reg.providers = [
+            FakeProvider("half", 0.0, codes=["600000"]),
+            FakeProvider("full", 0.05),
+        ]
+        quotes, used = asyncio.run(reg.quotes([("600000", "SH"), ("000001", "SZ")]))
+        check("行情竞速: 部分补齐",
+              quotes.get("600000.SH") is not None and quotes.get("000001.SZ") is not None,
+              f"keys={sorted(quotes.keys())} used={used}")
+
+        # 场景4：首个源频控快速失败 → 立即派下一个源接管（东财频控切腾讯的路径）
+        reg.providers = [FakeProvider("throttled", 0.0, fail=True),
+                         FakeProvider("backup", 0.0)]
+        quotes, used = asyncio.run(reg.quotes([("600000", "SH")]))
+        q = quotes.get("600000.SH")
+        check("行情竞速: 首源失败次源接管",
+              q is not None and q.source == "backup", f"used={used}")
+    finally:
+        pmod.QUOTE_RACE_STAGGER = orig_stagger
+
+
 # ------------------------------------------------------------------ 资讯解读
 def test_news_interpret() -> None:
     # 规则解读关键词情绪
@@ -3054,6 +3136,7 @@ def main() -> int:
     test_value_screener()
     test_value_weights()
     test_value_screen_e2e()
+    test_quote_racing()
     test_news_interpret()
     test_hotspot()
     test_hotspot_ai()
