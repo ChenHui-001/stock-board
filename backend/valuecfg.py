@@ -8,7 +8,8 @@
 相对排序而非单方向加分。总分恒在 0~BASE_TOTAL，不因权重放大截断失真。
 
 维度满分（策略口径）：finance=基本面 50、board=板块 10、flow=资金 12、
-volume=量价筹码 8、emotion=情绪妖股 12，BASE_TOTAL=92。
+volume=量价筹码 8、emotion=情绪妖股 12、relative=相对板块强度 8、
+position=20日价格位置 6，BASE_TOTAL=106。
 """
 from __future__ import annotations
 

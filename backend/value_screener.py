@@ -642,6 +642,80 @@ def _emotion_score(profile: dict[str, Any]) -> dict[str, Any]:
     return {"score": pts, "detail": f"连板{lb} 换手{to}%", "completeness": 1}
 
 
+def _relative_score(profile: dict[str, Any]) -> dict[str, Any]:
+    """个股相对板块强度（满分 8）：个股涨幅 − 所属板块平均涨幅。
+
+    兑现策略文档中「个股强于板块」的承诺：同一热门板块里，跑赢板块均值的
+    才是资金真正主攻的标的；跑输的往往是跟风补涨。
+    """
+    chg = profile.get("change_pct")
+    board_avg = profile.get("board_avg_chg")
+    board = profile.get("board") or ""
+    if chg is None or board_avg is None:
+        return {"score": 4, "detail": "板块强度数据缺失", "completeness": 0}
+    diff = chg - board_avg
+    if diff >= 5:
+        pts = 8
+    elif diff >= 3:
+        pts = 7
+    elif diff >= 1.5:
+        pts = 6
+    elif diff >= 0.5:
+        pts = 5
+    elif diff >= -1:
+        pts = 4
+    elif diff >= -3:
+        pts = 2
+    elif diff >= -6:
+        pts = 1
+    else:
+        pts = 0
+    return {
+        "score": pts,
+        "detail": f"相对板块 {diff:+.2f}%（个股 {chg:+.2f}% / 板块 {board_avg:+.2f}%）",
+        "completeness": 1,
+        "relative_chg": round(diff, 2),
+    }
+
+
+def _position_score(profile: dict[str, Any]) -> dict[str, Any]:
+    """20 日价格位置（满分 6）：当前价在近 20 日高低区间中的百分位。
+
+    位置低（0-30%）= 回踩充分、上行空间大 → 高分；
+    位置高（80-100%）= 接近阶段高点、追高风险 → 低分。
+    中间位置给中性分，配合量价与资金维度共同决定买点。
+    """
+    kline = profile.get("kline") or []
+    if len(kline) < 5:
+        return {"score": 3, "detail": "K线数据不足", "completeness": 0}
+    window = kline[-20:]
+    highs = [b.get("high") or b.get("close") for b in window if b.get("high") or b.get("close")]
+    lows = [b.get("low") or b.get("close") for b in window if b.get("low") or b.get("close")]
+    price = profile.get("price")
+    if not highs or not lows or not price:
+        return {"score": 3, "detail": "价格/区间缺失", "completeness": 0}
+    hi, lo = max(highs), min(lows)
+    if hi <= lo:
+        return {"score": 3, "detail": "区间过窄", "completeness": 0}
+    pos = (price - lo) / (hi - lo) * 100  # 0=最低 100=最高
+    if pos <= 20:
+        pts = 6
+    elif pos <= 40:
+        pts = 5
+    elif pos <= 60:
+        pts = 4
+    elif pos <= 80:
+        pts = 2
+    else:
+        pts = 1
+    return {
+        "score": pts,
+        "detail": f"20日位置 {pos:.0f}%（{lo:.2f}~{hi:.2f}）",
+        "completeness": 1,
+        "position_pct": round(pos, 1),
+    }
+
+
 def _risk_score(profile: dict[str, Any], fin_score: dict[str, Any]) -> dict[str, Any]:
     """风险评分（0-100，>60 禁入核心池）与风险扣分。"""
     fin = profile.get("financials") or []
