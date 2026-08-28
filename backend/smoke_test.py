@@ -367,6 +367,114 @@ def test_value_screener() -> None:
     sc_risk = dict(sc); sc_risk["risk"] = _sc(80)
     check("价值选股: 高风险扣分", vs._composite_score(sc_risk, w1) < vs._composite_score(sc, w1))
 
+    # ---- v2: 估值维度 + 信号升级 ----
+
+    # 估值区间：PE 8（深度低估）应明显高于 PE 100（高估）
+    good_fin = [
+        {"revenue_yoy": 15, "net_profit_yoy": 20, "roe": 12, "gross_margin": 30, "debt_ratio": 35},
+    ]
+    deep_value = vs._financial_score({"pe": 8, "pb": 1.0}, good_fin)
+    fair_value = vs._financial_score({"pe": 30, "pb": 2.5}, good_fin)
+    over_value = vs._financial_score({"pe": 100, "pb": 8}, good_fin)
+    check("价值选股: 深度低估（PE<15）估值分高于合理估值",
+          deep_value["score"] > fair_value["score"],
+          f"deep={deep_value['score']} fair={fair_value['score']}")
+    check("价值选股: 高估（PE>80）估值分低于合理估值",
+          over_value["score"] < fair_value["score"],
+          f"over={over_value['score']} fair={fair_value['score']}")
+
+    # PEG < 1 应得额外加分
+    peg_low = vs._financial_score({"pe": 15, "pb": 2},
+                                  [{"net_profit_yoy": 30}])  # PEG=0.5
+    peg_high = vs._financial_score({"pe": 60, "pb": 2},
+                                   [{"net_profit_yoy": 5}])  # PEG=12
+    check("价值选股: PEG<0.5 应计入估值评分",
+          peg_low["score"] > peg_high["score"],
+          f"peg_low={peg_low['score']} peg_high={peg_high['score']}")
+
+    # value_metrics 字段应包含 band 字段
+    metrics = deep_value.get("value_metrics", {})
+    check("价值选股: value_metrics 含 pe_band（深度低估）",
+          metrics.get("pe_band") == "深度低估", str(metrics))
+    check("价值选股: value_metrics 含 pb_band（深度低估）",
+          metrics.get("pb_band") == "深度低估", str(metrics))
+
+    # 估值数据缺失时完整性为 0，价值分也得算（其它子项还能得分）
+    no_valuation = vs._financial_score({"pe": None, "pb": None},
+                                       [{"net_profit_yoy": 15, "roe": 15,
+                                         "gross_margin": 35, "debt_ratio": 30}])
+    check("价值选股: 估值数据缺失不报错",
+          no_valuation["score"] > 0, f"score={no_valuation['score']}")
+    check("价值选股: 估值数据缺失 completeness=0",
+          no_valuation["completeness"] == 0)
+
+    # OCF 现金流数据
+    ocf_good = [{"revenue_yoy": 20, "net_profit_yoy": 20, "roe": 15,
+                 "gross_margin": 35, "debt_ratio": 30, "ocf_to_netprofit": 1.2}]
+    ocf_bad = [{"revenue_yoy": 20, "net_profit_yoy": 20, "roe": 15,
+                "gross_margin": 35, "debt_ratio": 30, "ocf_to_netprofit": -0.5}]
+    s_good = vs._financial_score({"pe": 20, "pb": 2}, ocf_good)
+    s_bad = vs._financial_score({"pe": 20, "pb": 2}, ocf_bad)
+    check("价值选股: OCF 健康加分 ≥ OCF 恶化",
+          s_good["score"] > s_bad["score"],
+          f"good={s_good['score']} bad={s_bad['score']}")
+
+    # 行业景气度
+    bs = {"光伏": 0.9, "白酒": 0.5, "地产": 0.1}
+    hot = vs._financial_score({"pe": 20, "pb": 2, "board": "光伏"},
+                              good_fin, board_strength=bs)
+    cold = vs._financial_score({"pe": 20, "pb": 2, "board": "地产"},
+                               good_fin, board_strength=bs)
+    non = vs._financial_score({"pe": 20, "pb": 2, "board": "未知"},
+                              good_fin, board_strength=bs)
+    check("价值选股: 热门板块行业分 > 冷门板块",
+          hot["score"] > cold["score"], f"hot={hot['score']} cold={cold['score']}")
+    check("价值选股: 未知板块行业分 = 0",
+          cold["score"] > non["score"], f"cold={cold['score']} none={non['score']}")
+
+    # 风险层：估值与 OCF 风险
+    risk_pe = vs._risk_score(
+        {"name": "高估", "financials": [{"net_profit_yoy": 30, "debt_ratio": 30}],
+         "pe": 250, "pb": 12, "lianban": 0},
+        {})
+    check("价值选股: PE>=200 严重高估 + PB>10 偏高",
+          risk_pe["score"] >= 23 and "严重高估" in " ".join(risk_pe["notes"]),
+          str(risk_pe))
+    risk_pe2 = vs._risk_score(
+        {"name": "高估", "financials": [{"net_profit_yoy": 30, "debt_ratio": 30}],
+         "pe": 120, "pb": 8, "lianban": 0},
+        {})
+    check("价值选股: 100<PE<200 标注高估（非'严重高估'）",
+          risk_pe2["score"] >= 10 and "高估" in " ".join(risk_pe2["notes"])
+          and "严重高估" not in " ".join(risk_pe2["notes"]),
+          str(risk_pe2))
+    risk_ocf = vs._risk_score(
+        {"name": "OCF恶化", "financials": [
+            {"net_profit_yoy": 10, "debt_ratio": 30, "ocf_to_netprofit": -1},
+            {"net_profit_yoy": 10, "debt_ratio": 30, "ocf_to_netprofit": -1},
+        ], "pe": 20, "lianban": 0},
+        {})
+    check("价值选股: OCF 连续恶化触发风险",
+          risk_ocf["score"] >= 10 and "OCF" in " ".join(risk_ocf["notes"]),
+          str(risk_ocf))
+
+    # 新信号
+    check("价值选股: VALUE_BUY 信号（PE<15 + 基本面好 + 风险低）",
+          vs._signal({"pe": 10, "pb": 1.5, "change_pct": 1, "volume_ratio": 1,
+                      "lianban": 0}, 70, 65, 10) == "VALUE_BUY")
+    check("价值选股: QUALITY_HOLD 信号（总分80+ + PE<=30）",
+          vs._signal({"pe": 25, "pb": 3, "change_pct": 0, "volume_ratio": 1,
+                      "lianban": 0}, 85, 70, 10) == "QUALITY_HOLD")
+    check("价值选股: EXIT 信号（PE>100 + 风险中等）",
+          vs._signal({"pe": 150, "pb": 5, "change_pct": 1, "volume_ratio": 1,
+                      "lianban": 0}, 60, 60, 30) == "EXIT")
+    check("价值选股: VALUE_BUY 在风险>30 时不触发",
+          vs._signal({"pe": 8, "pb": 1, "change_pct": 1, "volume_ratio": 1,
+                      "lianban": 0}, 70, 65, 40) != "VALUE_BUY")
+    # 既有 BREAKOUT_BUY 行为不变（PE 缺失时仍走既有逻辑）
+    check("价值选股: BREAKOUT_BUY 信号（PE 缺失沿用旧逻辑）",
+          vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1}, 80, 75, 10) == "BREAKOUT_BUY")
+
 
 def test_value_weights() -> None:
     """价值选股权重：默认 1.0 / 保存 clamp / 恢复默认 / 指纹联动（临时库，结束还原）。"""

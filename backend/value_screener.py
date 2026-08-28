@@ -420,7 +420,7 @@ def _financial_score(
 
     pb = profile.get("pb")
     if pb is not None and pb > 0:
-        if pb < 1:
+        if pb <= 1:
             metrics["pb_band"] = "深度低估"
             value_pts += 4
         elif pb < 1.5:
@@ -598,7 +598,7 @@ def _risk_score(profile: dict[str, Any], fin_score: dict[str, Any]) -> dict[str,
     # 估值风险：PE / PB / PEG 异常
     pe = profile.get("pe")
     if pe is not None:
-        if pe > 150:
+        if pe >= 200:
             risk += 15
             notes.append(f"PE {pe:.0f} 严重高估")
         elif pe > 100:
@@ -707,13 +707,13 @@ def _signal(profile: dict[str, Any], total: float, buy: int, risk: int) -> str:
     pe = profile.get("pe")
     if risk > 60:
         return "AVOID"
-    # 新增 EXIT:估值严重高估 + 风险中等以上 → 建议清仓
-    if pe is not None and pe > 100 and risk > 25:
+    # 价值投资维度（独立分支,不依赖 total>=75）：PE 深度低估 + 基本面及格 + 风险低
+    if pe is not None and 0 < pe < 15 and total >= 60 and risk < 30:
+        return "VALUE_BUY"
+    # EXIT：估值严重高估 + 风险中等 → 建议清仓
+    if pe is not None and pe >= 100 and risk > 25:
         return "EXIT"
     if total >= 75 and buy >= 70:
-        # 价值投资维度（核心）：PE 深度低估 + 基本面稳健
-        if pe is not None and 0 < pe < 15 and total >= 60 and risk < 30:
-            return "VALUE_BUY"
         # 长期持有：总分优秀 + 估值明确合理（PE 缺失时不走 QUALITY_HOLD,保持既有信号）
         if total >= 80 and pe is not None and 0 < pe <= 30:
             return "QUALITY_HOLD"
