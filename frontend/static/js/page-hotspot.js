@@ -371,8 +371,27 @@
       return;
     }
 
+    // 按时间分组渲染：刚刚 / 5 分钟内 / 更早
+    const now = Date.now() / 1000;
+    const groups = [
+      { key: 'just', label: '刚刚', test: function (ts) { return ts >= now - 120; } },
+      { key: '5min', label: '5 分钟内', test: function (ts) { return ts >= now - 300; } },
+      { key: 'older', label: '更早', test: function () { return true; } }
+    ];
+    const buckets = { just: [], '5min': [], older: [] };
     items.forEach(function (it) {
-      host.appendChild(renderItem(it));
+      for (let i = 0; i < groups.length; i++) {
+        if (groups[i].test(it.ts)) {
+          buckets[groups[i].key].push(it);
+          break;
+        }
+      }
+    });
+    groups.forEach(function (g) {
+      const list = buckets[g.key];
+      if (!list.length) return;
+      host.appendChild(U.el('div', 'hotspot-group-label', g.label + ' · ' + list.length + ' 条'));
+      list.forEach(function (it) { host.appendChild(renderItem(it)); });
     });
   }
 
