@@ -596,6 +596,81 @@ def _merge(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return ordered[:HOTSPOT_LIMIT]
 
 
+def _extract_item_tags(title: str, summary: str) -> list[dict[str, str]]:
+    """为单条快讯打概念标签：从现有行业词典匹配，并继承整体情绪。"""
+    text = f"{title} {summary}"
+    sentiment = rule_interpret({"title": title, "summary": summary}).get("sentiment", "中性")
+    seen: set[str] = set()
+    tags: list[dict[str, str]] = []
+    for industry, kws in _SECTORS:
+        if industry in seen:
+            continue
+        if any(kw in text for kw in kws):
+            tags.append({"name": industry, "sentiment": sentiment})
+            seen.add(industry)
+    return tags
+
+
+def _compute_sector_heat(
+    items: list[dict[str, Any]], minutes: int, now_ts: int
+) -> list[dict[str, Any]]:
+    """统计近 N 分钟概念热度与趋势。
+
+    趋势逻辑：把窗口平分为「前半窗」与「后半窗」，比较同一概念在两半窗的提及次数：
+    - 后半窗 >= 前半窗 * 1.2 → 发酵 ↑
+    - 后半窗 <= 前半窗 * 0.8 → 退潮 ↓
+    - 否则 → 持平 →
+    """
+    half = minutes * 60 // 2
+    recent_ts = now_ts - half
+    older_ts = now_ts - minutes * 60
+
+    counts: dict[str, dict[str, int]] = {}
+    for it in items:
+        for tag in (it.get("tags") or []):
+            name = tag["name"]
+            sentiment = tag.get("sentiment", "中性")
+            bucket = counts.setdefault(name, {"total": 0, "bull": 0, "bear": 0, "neutral": 0,
+                                              "recent": 0, "older": 0})
+            bucket["total"] += 1
+            if sentiment == "利好":
+                bucket["bull"] += 1
+            elif sentiment == "利空":
+                bucket["bear"] += 1
+            else:
+                bucket["neutral"] += 1
+            if it["ts"] >= recent_ts:
+                bucket["recent"] += 1
+            elif it["ts"] >= older_ts:
+                bucket["older"] += 1
+
+    out: list[dict[str, Any]] = []
+    for name, b in counts.items():
+        recent, older = b["recent"], b["older"]
+        if older == 0:
+            trend = "up" if recent > 0 else "flat"
+        else:
+            ratio = recent / older
+            if ratio >= 1.2:
+                trend = "up"
+            elif ratio <= 0.8:
+                trend = "down"
+            else:
+                trend = "flat"
+        out.append({
+            "name": name,
+            "total": b["total"],
+            "bull": b["bull"],
+            "bear": b["bear"],
+            "neutral": b["neutral"],
+            "trend": trend,
+            "recent": recent,
+            "older": older,
+        })
+    out.sort(key=lambda x: (x["total"], x["bull"]), reverse=True)
+    return out
+
+
 # ------------------------------------------------------------------ 组装入口
 
 async def get_hotspot(minutes: int = HOTSPOT_MINUTES, force: bool = False) -> dict[str, Any]:
@@ -622,10 +697,13 @@ async def get_hotspot(minutes: int = HOTSPOT_MINUTES, force: bool = False) -> di
 async def _load(minutes: int) -> dict[str, Any]:
     items, sources = await _fetch_all(minutes)
     merged = _merge(items)
-    # 统一输出字段：时间字符串（前端展示 HH:MM）+ 重点媒体标记
+    now_ts = int(now().timestamp())
+    # 统一输出字段：时间字符串（前端展示 HH:MM）+ 重点媒体标记 + 概念标签
     for it in merged:
         it["time"] = datetime.fromtimestamp(it["ts"], TZ).strftime("%Y-%m-%d %H:%M:%S")
         it["media_badge"] = is_hot_media(it["source"])
+        it["tags"] = _extract_item_tags(it["title"], it.get("summary", ""))
+    sector_heat = _compute_sector_heat(merged, minutes, now_ts)
     return {
         "items": merged,
         "meta": {
@@ -634,5 +712,6 @@ async def _load(minutes: int) -> dict[str, Any]:
             "fetched_at": now().strftime("%Y-%m-%d %H:%M:%S"),
             "since": (now() - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S"),
             "sources": sources,
+            "sector_heat": sector_heat,
         },
     }
