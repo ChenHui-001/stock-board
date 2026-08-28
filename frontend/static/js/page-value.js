@@ -23,6 +23,35 @@
     EXIT: 'down'
   };
 
+  // 信号 → 详细解释（鼠标悬停的 tooltip 文案）
+  const SIGNAL_DESC = {
+    VALUE_BUY: 'PE<15 深度低估 + 基本面稳健 + 风险低 → 「黄金坑」买点，慢富长持之选。',
+    QUALITY_HOLD: '综合 80+ 且 PE≤30 → 「长期持有」白马,基本面与估值双正。',
+    BUY: '综合分达标、量价/资金/板块配合到位 → 「建议买入」持仓跟入。',
+    BREAKOUT_BUY: '放量启动 + 连板异动 → 「突破买入」短线情绪博弈,严设止损。',
+    PULLBACK_BUY: '分歧/低吸期 → 「回调低吸」右侧入场点。',
+    WATCH: '总分 60-74,信号未确认 → 观察池。等待资金/估值标签改善。',
+    REDUCE: '短线急跌 -4%+,暂时止损出场,避免深套。',
+    AVOID: '风险>60 或总分不及格 → 「不参与」,等下次窗口。',
+    EXIT: 'PE≥100 + 风险>25 → 「建议清仓」估值严重高估,即使其它维度亮眼也要离场。'
+  };
+
+  // 估值带 → 解释
+  const BAND_DESC = {
+    '深度低估': 'PE<15 或 PB≤1 → 深度估值底,价值投资者重点关注。',
+    '低估': 'PE 15-25 或 PB 1-1.5 → 低估区间,基本面好可介入。',
+    '合理': 'PE 25-40 → 估值公允,看成长性是否匹配。',
+    '偏高': 'PE 40-80 或 PB 3-6 → 估值略贵,需要其它维度补偿。',
+    '高估': 'PE>80 或 PB>6 → 估值高位,谨慎介入或考虑减仓。',
+    '亏损': 'PE≤0,公司当前亏损,估值法失效,看基本面的拐点信号。',
+    '增速缺失': '净利润同比≤0,PEG 不可计算 → 看趋势是否反转。',
+    '极低估': 'PEG<0.5 → 增速远高于估值,「黄金坑」窗口。',
+    '优秀': 'OCF/净利润 ≥ 1.0 → 盈利质量好,账面盈利是真金白银。',
+    '健康': 'OCF/净利润 0.5-1.0 → 经营现金流覆盖利润。',
+    '偏弱': 'OCF/净利润 0-0.5 → 现金流偏紧,要观察是否恶化。',
+    '恶化': 'OCF/净利润 < 0 → 账面盈利但现金流失,警惕。'
+  };
+
   // 估值带的颜色（深度低估=绿/低估=浅绿/合理=灰/偏高=橙/高估=红）
   function bandTone(band) {
     if (band === '深度低估' || band === '极低估') return 'up';
@@ -42,7 +71,11 @@
   // ---- DOM helpers ----
   function bandTag(band) {
     if (!band) return U.el('span', 'val-band val-flat', U.NBSP);
-    return U.el('span', peBandClass(band), band);
+    const tag = U.el('span', peBandClass(band), band);
+    // 给估值带加 tooltip:鼠标悬停解释含义（移动端长按可见）
+    const desc = BAND_DESC[band];
+    if (desc) tag.title = band + '\n' + desc;
+    return tag;
   }
 
   function signalTag(signal, advice) {
