@@ -2561,6 +2561,143 @@ def test_watch_monitor() -> None:
           atr_no_price["action"] == "可加仓" and "ATR" not in atr_no_price["reason"],
           str(atr_no_price))
 
+    # ---- v4: 资金流信号(摘要为 indicators.summarize_flow 的输出结构) ----
+
+    def _flow(state, main_last, streak=0, streak_dir="", grade="", main_last5=0.0, fresh=True):
+        return {
+            "available": True,
+            "state": state,
+            "state_grade": grade or ("inflow" if main_last > 0 else ("outflow" if main_last < 0 else "neutral")),
+            "main_last": main_last,
+            "streak": streak,
+            "streak_dir": streak_dir,
+            "main_last5": main_last5,
+            "fresh": fresh,
+            "last_date": "2026-08-28",
+        }
+
+    # 量价背离1: 价↑ 但主力净流出 > 50 万
+    div_up = service.watch_monitor(
+        {"status": "normal", "change_pct": 1.5, "volume_ratio": 1.0},
+        flow=_flow("主力净流出（当日）", -8e6),
+    )
+    check("资金流: 价↑资金出逃触发量价背离",
+          div_up["action"] == "量价背离" and div_up["tone"] == "warn", str(div_up))
+
+    # 量价背离2: 价↓ 0.5%(< 1%)但主力净流入 > 50 万。
+    # 注:价跌幅必须 < 1%,否则会被「主力护盘」(change ≤ -1% + 资金净流入)抢先命中。
+    div_down = service.watch_monitor(
+        {"status": "normal", "change_pct": -0.5, "volume_ratio": 1.0},
+        flow=_flow("主力净流入（当日）", 8e6),
+    )
+    check("资金流: 价↓资金流入触发量价背离(洗盘)",
+          div_down["action"] == "量价背离" and "洗盘" in div_down["reason"], str(div_down))
+
+    # 量价背离死区: 价微涨 0.3% 但资金流出 → 不触发背离
+    no_div = service.watch_monitor(
+        {"status": "normal", "change_pct": 0.3, "volume_ratio": 1.0},
+        flow=_flow("主力净流出（当日）", -1e7),
+    )
+    check("资金流: 0.3% 价波动死区内不触发量价背离",
+          no_div["action"] != "量价背离", str(no_div))
+
+    # 主力抢筹 + 价涨 → 主力抢筹
+    rally_up = service.watch_monitor(
+        {"status": "normal", "change_pct": 1.0, "volume_ratio": 1.0},
+        flow=_flow("主力抢筹（当日）", 5e6, streak=3, streak_dir="流入"),
+    )
+    check("资金流: 主力抢筹 + 价涨 → 主力抢筹",
+          rally_up["action"] == "主力抢筹" and rally_up["tone"] == "up", str(rally_up))
+
+    # 主力抢筹 + 价跌 → 仍报主力抢筹(强调资金意图,提示后续可能反弹)
+    rally_down = service.watch_monitor(
+        {"status": "normal", "change_pct": -2.0, "volume_ratio": 1.0},
+        flow=_flow("主力抢筹（当日）", 5e6, streak=3, streak_dir="流入"),
+    )
+    check("资金流: 主力抢筹 + 价跌 → 仍标主力抢筹",
+          rally_down["action"] == "主力抢筹" and "承压" in rally_down["reason"], str(rally_down))
+
+    # 主力出逃 + 价跌 → 主力出货
+    dump_down = service.watch_monitor(
+        {"status": "normal", "change_pct": -1.0, "volume_ratio": 1.0},
+        flow=_flow("主力出逃（当日）", -5e6, streak=3, streak_dir="流出"),
+    )
+    check("资金流: 主力出逃 + 价跌 → 主力出货",
+          dump_down["action"] == "主力出货" and dump_down["tone"] == "down", str(dump_down))
+
+    # 主力出逃 + 价涨 → 警惕诱多
+    dump_up = service.watch_monitor(
+        {"status": "normal", "change_pct": 2.0, "volume_ratio": 1.0},
+        flow=_flow("主力出逃（当日）", -5e6, streak=3, streak_dir="流出"),
+    )
+    check("资金流: 主力出逃 + 价涨 → 主力出货+诱多警告",
+          dump_up["action"] == "主力出货" and "诱多" in dump_up["reason"], str(dump_up))
+
+    # 主力护盘: 价跌 ≥ 1% 但当日资金净流入
+    support = service.watch_monitor(
+        {"status": "normal", "change_pct": -1.5, "volume_ratio": 1.0},
+        flow=_flow("主力净流入（当日）", 3e6),
+    )
+    check("资金流: 价跌1.5%+主力净流入 → 主力护盘",
+          support["action"] == "主力护盘" and support["tone"] == "up", str(support))
+
+    # 持续流入: 连 3 日「主力净流入」(非抢筹/出逃中间档)
+    persist_in = service.watch_monitor(
+        {"status": "normal", "change_pct": 0.5, "volume_ratio": 0.8},
+        flow=_flow("主力净流入（当日）", 1e6, streak=5, streak_dir="流入",
+                   grade="inflow", main_last5=8e6),
+    )
+    check("资金流: 连5日主力净流入 → 持续流入",
+          persist_in["action"] == "持续流入" and persist_in["tone"] == "up", str(persist_in))
+
+    # 持续流出: 连 3 日「主力净流出」
+    persist_out = service.watch_monitor(
+        {"status": "normal", "change_pct": -0.5, "volume_ratio": 0.8},
+        flow=_flow("主力净流出（当日）", -1e6, streak=4, streak_dir="流出",
+                   grade="outflow", main_last5=-6e6),
+    )
+    check("资金流: 连4日主力净流出 → 持续流出",
+          persist_out["action"] == "持续流出" and persist_out["tone"] == "down", str(persist_out))
+
+    # 资金流信号优先级高于量比: change=3% + 主力抢筹 → 应走资金流分支(主力抢筹)而非可加仓
+    priority = service.watch_monitor(
+        {"status": "normal", "change_pct": 3.0, "volume_ratio": 2.0},
+        flow=_flow("主力抢筹（当日）", 5e6, streak=3, streak_dir="流入"),
+    )
+    check("资金流: 资金流信号优先于量比加仓判定",
+          priority["action"] == "主力抢筹", str(priority))
+
+    # 涨跌停优先于资金流: 涨停 + 主力出货 → 涨停关注(硬规则)
+    limit_priority = service.watch_monitor(
+        {"status": "normal", "change_pct": 9.8, "volume_ratio": 2.0},
+        flow=_flow("主力出货（当日）", -5e6, streak=3, streak_dir="流出"),
+    )
+    check("资金流: 涨跌停硬规则优先于资金流信号",
+          limit_priority["action"] == "涨停关注", str(limit_priority))
+
+    # 资金流不可用: flow=None → 走原逻辑(向后兼容)
+    no_flow = service.watch_monitor(
+        {"status": "normal", "change_pct": 3.0, "volume_ratio": 1.8},
+    )
+    check("资金流: flow=None 走原量比加仓逻辑",
+          no_flow["action"] == "可加仓", str(no_flow))
+
+    # 资金流不可用2: available=False → 同样跳过资金流
+    no_avail = service.watch_monitor(
+        {"status": "normal", "change_pct": 3.0, "volume_ratio": 1.8},
+        flow={"available": False},
+    )
+    check("资金流: available=False 跳过资金流分支",
+          no_avail["action"] == "可加仓", str(no_avail))
+
+    # 资金流非当日: fresh=False → reason 标注(近5日)
+    stale = service.watch_monitor(
+        {"status": "normal", "change_pct": 1.5, "volume_ratio": 1.0},
+        flow=_flow("主力抢筹", 5e6, streak=3, streak_dir="流入", fresh=False),
+    )
+    check("资金流: 非当日数据 reason 标注近5日",
+          stale["action"] == "主力抢筹" and "近5日" in stale["reason"], str(stale))
+
     old_trading, old_session = service.is_trading_now, service.session_state
     try:
         service.is_trading_now = lambda: True

@@ -126,29 +126,7 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
     has_main = isinstance(main_last, (int, float))
     main_wan = f"{main_last / 1e4:+.0f}万" if has_main else ""
 
-    # ---- 量价背离: 价↑但资金出逃 OR 价↓但资金抢筹 ----
-    # 用 0.5% 死区过滤极弱波动,避免把横盘误判成背离。
-    if has_main and abs(change) >= 0.5:
-        if change > 0 and main_last < -5e5:   # 价↑资金净流出 > 50 万
-            return {
-                "action": "量价背离",
-                "tone": "warn",
-                "reason": (
-                    f"涨 {change:+.2f}% 但主力净流出 {main_wan}{date_tag}，"
-                    "拉高出货风险"
-                ),
-            }
-        if change < 0 and main_last > 5e5:    # 价↓资金净流入 > 50 万
-            return {
-                "action": "量价背离",
-                "tone": "warn",
-                "reason": (
-                    f"跌 {change:+.2f}% 但主力净流入 {main_wan}{date_tag}，"
-                    "可能为洗盘"
-                ),
-            }
-
-    # ---- 主力抢筹 / 主力出货 ----
+    # ---- 主力抢筹 / 主力出货(信号最强,最先判断) ----
     # state="主力抢筹" = 主力连续 3 日流入 + 超大单主导(来自 _grade_flow_state)
     # 与"价"弱关联即可触发,因为资金动作本身就是强信号。
     if state.startswith("主力抢筹"):
@@ -191,6 +169,7 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
         }
 
     # ---- 主力护盘: 价跌 ≥ 1% 但当日资金净流入(单日级别,不要求连续) ----
+    # 优先于下面的「量价背离(洗盘)」——同样的条件,「护盘」是更积极正面描述。
     if has_main and change <= -1.0 and main_last > 0:
         return {
             "action": "主力护盘",
@@ -200,6 +179,30 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
                 "下方承接明显"
             ),
         }
+
+    # ---- 量价背离: 价↑但资金出逃 OR 价↓但资金抢筹 ----
+    # 用 0.5% 死区过滤极弱波动,避免把横盘误判成背离。
+    # 必须放在 主力抢筹/出货/护盘 之后,否则价跌+资金流入/价涨+资金流出会被
+    # 上面的强信号抢先命中(逻辑虽对但提示优先级不对)。
+    if has_main and abs(change) >= 0.5:
+        if change > 0 and main_last < -5e5:   # 价↑资金净流出 > 50 万
+            return {
+                "action": "量价背离",
+                "tone": "warn",
+                "reason": (
+                    f"涨 {change:+.2f}% 但主力净流出 {main_wan}{date_tag}，"
+                    "拉高出货风险"
+                ),
+            }
+        if change < 0 and main_last > 5e5:    # 价↓资金净流入 > 50 万
+            return {
+                "action": "量价背离",
+                "tone": "warn",
+                "reason": (
+                    f"跌 {change:+.2f}% 但主力净流入 {main_wan}{date_tag}，"
+                    "可能为洗盘"
+                ),
+            }
 
     # ---- 持续流入 / 持续流出: 连 3 日同向(已经包含在抢筹/出逃里则不重复) ----
     # 仅对 state_grade 为 inflow/outflow 但 state 不是「抢筹/出逃」的中间档触发,
