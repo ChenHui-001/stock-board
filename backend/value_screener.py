@@ -595,11 +595,36 @@ def _risk_score(profile: dict[str, Any], fin_score: dict[str, Any]) -> dict[str,
         if latest.get("net_profit") is not None and latest["net_profit"] < 0:
             risk += 15
             notes.append("亏损")
-    # 估值风险：PE 过高
+    # 估值风险：PE / PB / PEG 异常
     pe = profile.get("pe")
-    if pe is not None and pe > 120:
-        risk += 10
-        notes.append(f"PE {pe:.0f}")
+    if pe is not None:
+        if pe > 150:
+            risk += 15
+            notes.append(f"PE {pe:.0f} 严重高估")
+        elif pe > 100:
+            risk += 10
+            notes.append(f"PE {pe:.0f} 高估")
+        elif pe > 80:
+            risk += 5
+            notes.append(f"PE {pe:.0f} 偏高")
+        elif pe < 0:
+            risk += 5
+            notes.append("PE 亏损")
+    pb = profile.get("pb")
+    if pb is not None and pb > 10:
+        risk += 8
+        notes.append(f"PB {pb:.1f} 偏高")
+    # OCF 持续恶化（若数据可得）
+    fin = profile.get("financials") or []
+    if len(fin) >= 2:
+        ocf_curr = fin[0].get("ocf_to_netprofit")
+        ocf_prev = fin[1].get("ocf_to_netprofit")
+        if ocf_curr is not None and ocf_curr < 0:
+            risk += 5
+            notes.append("OCF 转负")
+        if ocf_curr is not None and ocf_prev is not None and ocf_curr < -0.5 and ocf_prev < -0.5:
+            risk += 5
+            notes.append("OCF 连续恶化")
     # 涨幅过大追高风险
     chg = profile.get("change_pct")
     if chg is not None and chg > 9.5:
@@ -665,13 +690,33 @@ def _composite_score(scores: dict[str, Any], weights: dict[str, float]) -> float
 
 
 def _signal(profile: dict[str, Any], total: float, buy: int, risk: int) -> str:
-    """买卖信号：BREAKOUT_BUY / PULLBACK_BUY / BUY / WATCH / REDUCE / AVOID。"""
+    """买卖信号：覆盖价值投资与情绪博弈两套语义：
+        EXIT          高估 + 风险 → 建议清仓
+        AVOID         风险 > 60    → 不参与
+        VALUE_BUY     PE<15 且基本面稳健 + 风险低 → 价值低估买入
+        QUALITY_HOLD  总分 80+ 且估值合理 → 长期持有
+        BREAKOUT_BUY  趋势突破 + 量价齐升
+        PULLBACK_BUY  启动期/分歧期低吸
+        BUY           综合达标
+        WATCH         60~74 尚需确认
+        REDUCE        短线急跌 -4%+
+    """
     chg = profile.get("change_pct") or 0
     vr = profile.get("volume_ratio") or 0
     lb = profile.get("lianban") or 0
+    pe = profile.get("pe")
     if risk > 60:
         return "AVOID"
+    # 新增 EXIT:估值严重高估 + 风险中等以上 → 建议清仓
+    if pe is not None and pe > 100 and risk > 25:
+        return "EXIT"
     if total >= 75 and buy >= 70:
+        # 价值投资维度（核心）：PE 深度低估 + 基本面稳健
+        if pe is not None and 0 < pe < 15 and total >= 60 and risk < 30:
+            return "VALUE_BUY"
+        # 长期持有：总分优秀 + 估值明确合理（PE 缺失时不走 QUALITY_HOLD,保持既有信号）
+        if total >= 80 and pe is not None and 0 < pe <= 30:
+            return "QUALITY_HOLD"
         if chg > 5 and vr >= 1.5 and lb >= 1:
             return "BREAKOUT_BUY"
         if 0 < chg <= 5 and vr < 1.2 and lb >= 1:
@@ -724,6 +769,19 @@ async def _analyze_one(
     trade = round(total * 0.7 + buy["score"] * 0.3, 1)
     grade, grade_name = _grade(total)
     completeness = _completeness(profile)
+    signal = _signal(profile, total, buy["score"], risk["score"])
+    # 投资建议 = 信号的中文含义,前端直接展示
+    advice_map = {
+        "EXIT": "建议清仓",
+        "AVOID": "不参与",
+        "VALUE_BUY": "价值低估买入",
+        "QUALITY_HOLD": "建议长期持有",
+        "BREAKOUT_BUY": "突破买入",
+        "PULLBACK_BUY": "分歧低吸",
+        "BUY": "建议买入",
+        "WATCH": "观察确认",
+        "REDUCE": "建议减仓",
+    }
     return {
         "code": profile["code"], "market": profile["market"],
         "name": profile["name"], "board": profile["board"],
@@ -734,10 +792,11 @@ async def _analyze_one(
         "financials_count": len(profile.get("financials") or []),
         "scores": {k: v["score"] for k, v in scores.items()},
         "score_details": {k: v.get("detail", "") for k, v in scores.items()},
+        "value_metrics": fin_score.get("value_metrics", {}),
         "risk_notes": risk.get("notes", []),
         "total_score": total, "buy_score": buy["score"], "trade_score": trade,
         "grade": grade, "grade_name": grade_name,
-        "signal": _signal(profile, total, buy["score"], risk["score"]),
+        "signal": signal, "advice": advice_map.get(signal, "—"),
         "completeness": completeness,
     }
 
