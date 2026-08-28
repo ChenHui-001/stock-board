@@ -195,35 +195,88 @@ def _merge_candidates(zt: dict[str, Any], hot: list[dict[str, Any]]) -> list[dic
 
 # ------------------------------------------------------------------ 单股数据
 
-async def _tencent_extra(code: str, market: str) -> dict[str, Any]:
-    """腾讯行情补充字段：PE / PB / 总市值 / 量比 / 换手 / 振幅（qt.gtimg.cn）。"""
-    prefix = "sh" if market == "SH" else "sz"
-    try:
-        resp = await fetch(
-            f"https://qt.gtimg.cn/q={prefix}{code}",
-            headers={"Referer": "https://gu.qq.com/"},
-        )
-        line = resp.text.strip().split("~")
-        if len(line) < 50:
-            return {}
-        def _f(i: int):
-            try:
-                v = float(line[i])
-                return v if v == v else None  # NaN -> None
-            except (ValueError, IndexError):
-                return None
-        return {
-            "pe": _f(39),
-            "pb": _f(49),
-            "total_mv": _f(45),       # 总市值（亿）
-            "turnover": _f(38),
-            "volume_ratio": _f(43),
-            "amplitude": _f(43),      # 振幅
-            "amount": _f(37) * 10000 if _f(37) else None,  # 成交额（万 -> 元）
-        }
-    except Exception as exc:  # noqa: BLE001
-        log.debug("腾讯补充行情 %s 失败：%s", code, exc)
+# 腾讯 qt.gtimg.cn 原始字段索引（实测核对，勿凭记忆改）：
+#   f[30]=行情时间(YYYYMMDDHHMMSS) f[37]=成交额(万) f[38]=换手率%
+#   f[39]=PE(TTM)                  f[43]=振幅%      f[45]=总市值(亿)
+#   f[46]=PB                       f[49]=量比
+# 历史坑：曾把 pb 取到 f[49](量比)、volume_ratio 取到 f[43](振幅)，
+# 导致估值分与量价分系统性失真（PE/PB 档位、量比信号全部错值）。
+_T_PE, _T_PB, _T_MV, _T_TO, _T_VR, _T_AMP = 39, 46, 45, 38, 49, 43
+
+
+def _parse_tencent_extra(fields: list[str]) -> dict[str, Any]:
+    """从腾讯行情原始字段数组解析补充指标。"""
+    if len(fields) < 50:
         return {}
+
+    def _f(i: int) -> float | None:
+        try:
+            v = float(fields[i])
+            return v if v == v else None  # NaN -> None
+        except (ValueError, IndexError):
+            return None
+
+    raw_time = fields[30] if len(fields) > 30 else ""
+    quote_time = ""
+    if len(raw_time) >= 14:
+        quote_time = f"{raw_time[8:10]}:{raw_time[10:12]}:{raw_time[12:14]}"
+    return {
+        "pe": _f(_T_PE),
+        "pb": _f(_T_PB),          # ← 修正：PB 在 46（原错取 49=量比）
+        "total_mv": _f(_T_MV),    # 总市值（亿）
+        "turnover": _f(_T_TO),
+        "volume_ratio": _f(_T_VR),  # ← 修正：量比在 49（原错取 43=振幅）
+        "amplitude": _f(_T_AMP),    # 振幅%
+        "amount": _f(37) * 10000 if _f(37) else None,  # 成交额（万 -> 元）
+        "quote_time": quote_time,
+    }
+
+
+async def _tencent_extra_batch(
+    cands: list[dict[str, Any]], batch_size: int = 50
+) -> dict[str, dict[str, Any]]:
+    """批量拉取腾讯补充字段，返回 {code.market: 指标dict}。
+
+    qt.gtimg.cn 支持一次请求多只（逗号分隔）。候选 40 只时由 40 次请求
+    降到 1 次，选股耗时与触发频控的概率都显著下降。
+    """
+    out: dict[str, dict[str, Any]] = {}
+    if not cands:
+        return out
+    for i in range(0, len(cands), batch_size):
+        batch = cands[i:i + batch_size]
+        symbols = ",".join(
+            ("sh" if c["market"] == "SH" else "sz") + c["code"] for c in batch
+        )
+        try:
+            resp = await fetch(
+                f"https://qt.gtimg.cn/q={symbols}",
+                headers={"Referer": "https://gu.qq.com/"},
+            )
+            text = resp.text or ""
+        except Exception as exc:  # noqa: BLE001
+            log.debug("腾讯批量补充行情失败：%s", exc)
+            continue
+        for line in text.split(";"):
+            line = line.strip()
+            if "=" not in line:
+                continue
+            body = line.split("=", 1)[1].strip().strip('"')
+            f = body.split("~")
+            if len(f) < 50:
+                continue
+            code = str(f[2] or "")
+            if len(code) != 6:
+                continue
+            market = "SH" if code.startswith(("6", "9", "5")) else "SZ"
+            out[f"{code}.{market}"] = _parse_tencent_extra(f)
+    return out
+
+
+async def _tencent_extra(code: str, market: str) -> dict[str, Any]:
+    """单只腾讯补充字段（保留兼容入口，内部走批量实现）。"""
+    got = await _tencent_extra_batch([{"code": code, "market": market}])
+    return got.get(f"{code}.{market}") or {}
 
 
 async def _stock_profile(cand: dict[str, Any]) -> dict[str, Any]:
