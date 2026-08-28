@@ -117,6 +117,51 @@
     return badge;
   }
 
+  // 热点概念榜单：从 meta.sector_heat 渲染可点击的概念 chips，点击后过滤当前快讯流。
+  function renderSectorHeat() {
+    const heat = (state.meta && state.meta.sector_heat) || [];
+    const wrap = U.el('div', 'sector-heat');
+    const head = U.el('div', 'sector-heat-head');
+    head.appendChild(U.el('span', 'sector-heat-title', '🔥 热点概念'));
+    if (state.sector) {
+      const clear = U.el('button', 'btn btn-xs', '清除过滤');
+      clear.onclick = function () {
+        state.sector = null;
+        render();
+      };
+      head.appendChild(clear);
+    }
+    wrap.appendChild(head);
+
+    if (!heat.length) {
+      wrap.appendChild(U.el('div', 'sector-heat-empty', '暂无概念标签'));
+      return wrap;
+    }
+
+    const row = U.el('div', 'sector-heat-row');
+    heat.slice(0, 12).forEach(function (s) {
+      const cls = 'sector-chip' + (state.sector === s.name ? ' active' : '')
+        + ' sector-trend-' + (s.trend || 'flat');
+      const chip = U.el('button', cls);
+      const trendIcon = { up: '↑', down: '↓', flat: '→' }[s.trend || 'flat'];
+      chip.appendChild(U.el('span', 'sector-chip-name', s.name));
+      chip.appendChild(U.el('span', 'sector-chip-count', String(s.total)));
+      const sent = U.el('span', 'sector-chip-sent');
+      if (s.bull) sent.appendChild(U.el('span', 'sent-bull', '+' + s.bull));
+      if (s.bear) sent.appendChild(U.el('span', 'sent-bear', '-' + s.bear));
+      chip.appendChild(sent);
+      chip.appendChild(U.el('span', 'sector-chip-trend', trendIcon));
+      chip.title = s.name + '：' + s.total + ' 条（利好 ' + s.bull + ' / 利空 ' + s.bear + ' / 中性 ' + s.neutral + '）';
+      chip.onclick = function () {
+        state.sector = state.sector === s.name ? null : s.name;
+        render();
+      };
+      row.appendChild(chip);
+    });
+    wrap.appendChild(row);
+    return wrap;
+  }
+
   function renderFilters() {
     const bar = U.el('div', 'hotspot-filters');
     const counts = originCounts();
@@ -622,6 +667,13 @@
       // 当前筛选来源已无条目时回退到「全部」，避免空列表误导
       if (state.filter !== 'all' && !state.items.some(function (it) { return it.origin === state.filter; })) {
         state.filter = 'all';
+      }
+      // 当前选中概念在新窗口里不存在时，清除概念过滤
+      if (state.sector) {
+        const heat = (state.meta && state.meta.sector_heat) || [];
+        if (!heat.some(function (s) { return s.name === state.sector; })) {
+          state.sector = null;
+        }
       }
     } catch (err) {
       state.error = err.message || String(err);
