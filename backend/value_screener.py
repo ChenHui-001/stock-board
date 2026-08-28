@@ -282,66 +282,206 @@ async def _stock_profile(cand: dict[str, Any]) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ 评分引擎
 
-def _financial_score(fin: list[dict[str, Any]]) -> dict[str, Any]:
-    """基本面评分（满分 50）：成长 13 + 质量 12 + 价值 8 + 行业 10 的可用子集。"""
+def _financial_score(
+    profile_or_fin: "dict[str, Any] | list[dict[str, Any]]",
+    fin: "list[dict[str, Any]] | None" = None,
+    board_strength: "dict[str, float] | None" = None,
+) -> dict[str, Any]:
+    """基本面评分（满分 50）：成长 12 + 质量 10 + 估值 18 + 现金流 4 + 行业 6。
+
+    新签名支持估值(PE+PB+PEG)与行业景气评估。旧调用方式
+    `_financial_score(fin_list)` 兼容：把 list 当作 fin、profile 视作空。
+    """
+    # 向后兼容:第一个位置参数可以是 list（旧 API）或 dict（新 API）
+    if isinstance(profile_or_fin, list):
+        fin = profile_or_fin
+        profile: dict[str, Any] = {}
+    else:
+        profile = profile_or_fin
+        if fin is None:
+            fin = profile.get("financials") or []
+    board_strength = board_strength or {}
+
     if not fin:
-        return {"score": 0, "detail": "财务数据缺失", "completeness": 0}
+        return {
+            "score": 0,
+            "detail": "财务数据缺失",
+            "completeness": 0,
+            "value_metrics": {"pe_band": None, "pb_band": None,
+                              "peg_band": None, "ocf_band": None,
+                              "industry_band": None},
+        }
     latest = fin[0]
-    prev = fin[1] if len(fin) > 1 else {}
-    # 成长（营收/净利同比，最近 4 期趋势）
+    has_valuation = profile.get("pe") is not None or profile.get("pb") is not None
+
+    # -------- 成长 12:净利润/营收同比 + 加速趋势
     growth_pts = 0
-    rev_yoys = [f.get("revenue_yoy") for f in fin[:4] if f.get("revenue_yoy") is not None]
     np_yoys = [f.get("net_profit_yoy") for f in fin[:4] if f.get("net_profit_yoy") is not None]
+    rev_yoys = [f.get("revenue_yoy") for f in fin[:4] if f.get("revenue_yoy") is not None]
     if np_yoys:
         latest_np = np_yoys[0]
-        if latest_np > 30: growth_pts += 6
-        elif latest_np > 10: growth_pts += 4
-        elif latest_np > 0: growth_pts += 2
-        elif latest_np > -10: growth_pts -= 1
-        else: growth_pts -= 3
+        if latest_np > 30:
+            growth_pts += 6
+        elif latest_np > 10:
+            growth_pts += 4
+        elif latest_np > 0:
+            growth_pts += 2
+        elif latest_np > -10:
+            growth_pts -= 1
+        else:
+            growth_pts -= 3
         if len(np_yoys) >= 2 and np_yoys[0] > np_yoys[1]:
             growth_pts += 3  # 加速
     if rev_yoys:
         latest_rev = rev_yoys[0]
-        if latest_rev > 20: growth_pts += 4
-        elif latest_rev > 5: growth_pts += 2
-        elif latest_rev > 0: growth_pts += 1
-        else: growth_pts -= 2
-    growth_pts = max(0, min(13, growth_pts))
+        if latest_rev > 20:
+            growth_pts += 3
+        elif latest_rev > 5:
+            growth_pts += 2
+        elif latest_rev > 0:
+            growth_pts += 1
+        else:
+            growth_pts -= 2
+    growth_pts = max(0, min(12, growth_pts))
 
-    # 质量（ROE / 毛利率 / 负债率）
+    # -------- 质量 10:ROE / 毛利率 / 负债率
     quality_pts = 0
     roe = latest.get("roe")
     if roe is not None:
-        if roe > 15: quality_pts += 5
-        elif roe > 8: quality_pts += 3
-        elif roe > 0: quality_pts += 1
-        else: quality_pts -= 2
+        if roe > 15:
+            quality_pts += 4
+        elif roe > 8:
+            quality_pts += 2
+        elif roe > 0:
+            quality_pts += 1
+        else:
+            quality_pts -= 1
     gm = latest.get("gross_margin")
     if gm is not None:
-        if gm > 40: quality_pts += 4
-        elif gm > 20: quality_pts += 2
-        elif gm > 0: quality_pts += 1
+        if gm > 40:
+            quality_pts += 3
+        elif gm > 20:
+            quality_pts += 2
+        elif gm > 0:
+            quality_pts += 1
     dr = latest.get("debt_ratio")
     if dr is not None:
-        if dr < 40: quality_pts += 3
-        elif dr < 60: quality_pts += 1
-        elif dr > 75: quality_pts -= 2
-    quality_pts = max(0, min(12, quality_pts))
+        if dr < 40:
+            quality_pts += 3
+        elif dr < 60:
+            quality_pts += 1
+        elif dr > 75:
+            quality_pts -= 2
+    quality_pts = max(0, min(10, quality_pts))
 
-    # 价值（仅在有 PE 时加分，估值过低/亏损扣分由风险层处理）
+    # -------- 估值 18:价值投资核心维度（PE + PB + PEG）
     value_pts = 0
-    np_trend = [f.get("net_profit_yoy") for f in fin[:3] if f.get("net_profit_yoy") is not None]
-    if np_trend and all(x > 0 for x in np_trend):
-        value_pts += 5  # 连续正增长 = 基本面扎实
-    if len(np_trend) >= 2 and np_trend[0] > np_trend[1] > 0:
-        value_pts += 3
-    value_pts = max(0, min(8, value_pts))
+    metrics: dict[str, Any] = {}
+    pe = profile.get("pe")
+    if pe is not None and pe > 0:
+        if pe < 15:
+            metrics["pe_band"] = "深度低估"
+            value_pts += 10
+        elif pe < 25:
+            metrics["pe_band"] = "低估"
+            value_pts += 8
+        elif pe < 40:
+            metrics["pe_band"] = "合理"
+            value_pts += 5
+        elif pe < 80:
+            metrics["pe_band"] = "偏高"
+            value_pts += 2
+        else:
+            metrics["pe_band"] = "高估"
+        # PEG = PE / 净利同比。增速<=0 或 PE<=0 时无意义
+        np_yoy_latest = latest.get("net_profit_yoy")
+        if np_yoy_latest is not None and np_yoy_latest > 0:
+            peg = pe / np_yoy_latest
+            if peg < 0.5:
+                value_pts += 4
+                metrics["peg_band"] = "极低估"
+            elif peg < 1:
+                value_pts += 3
+                metrics["peg_band"] = "低估"
+            elif peg < 2:
+                value_pts += 2
+                metrics["peg_band"] = "合理"
+            elif peg < 3:
+                value_pts += 1
+                metrics["peg_band"] = "偏高"
+            else:
+                metrics["peg_band"] = "高估"
+        else:
+            metrics["peg_band"] = "增速缺失"
+    elif pe is not None and pe <= 0:
+        metrics["pe_band"] = "亏损"
+    else:
+        metrics["pe_band"] = None
 
-    # 子项满分 13+12+8=33，换算到基本面 0-50 全带（与策略口径一致）
-    total = (growth_pts + quality_pts + value_pts) * 50 / 33
-    detail = f"成长{growth_pts}/13 质量{quality_pts}/12 价值{value_pts}/8"
-    return {"score": round(min(50, total), 1), "detail": detail, "completeness": 1}
+    pb = profile.get("pb")
+    if pb is not None and pb > 0:
+        if pb < 1:
+            metrics["pb_band"] = "深度低估"
+            value_pts += 4
+        elif pb < 1.5:
+            metrics["pb_band"] = "低估"
+            value_pts += 3
+        elif pb < 3:
+            metrics["pb_band"] = "合理"
+            value_pts += 2
+        elif pb < 6:
+            metrics["pb_band"] = "偏高"
+            value_pts += 1
+        else:
+            metrics["pb_band"] = "高估"
+    else:
+        metrics["pb_band"] = None
+
+    # 连续正增长 + 估值合理/低估：再给点奖励（基本面+价值双正向）
+    np_trend = [f.get("net_profit_yoy") for f in fin[:3] if f.get("net_profit_yoy") is not None]
+    if np_trend and all(x > 0 for x in np_trend) and metrics.get("pe_band") in ("深度低估", "低估", "合理"):
+        value_pts += 1
+    value_pts = max(0, min(18, value_pts))
+
+    # -------- 现金流 4:OCF/净利润（数据缺失时记 0,不扣分）
+    ocf_pts = 0
+    ocf_to_np = latest.get("ocf_to_netprofit")
+    if ocf_to_np is not None:
+        if ocf_to_np >= 1.0:
+            ocf_pts = 4
+            metrics["ocf_band"] = "优秀"
+        elif ocf_to_np >= 0.5:
+            ocf_pts = 3
+            metrics["ocf_band"] = "健康"
+        elif ocf_to_np >= 0:
+            ocf_pts = 2
+            metrics["ocf_band"] = "偏弱"
+        else:
+            metrics["ocf_band"] = "恶化"
+    else:
+        metrics["ocf_band"] = None
+
+    # -------- 行业 6:板块强度
+    industry_pts = 0
+    b = profile.get("board") or ""
+    strength = board_strength.get(b) if b else None
+    if strength is not None:
+        industry_pts = max(0, min(6, round(strength * 6)))
+        metrics["industry_band"] = f"{strength:.2f}"
+    else:
+        metrics["industry_band"] = None
+
+    total = growth_pts + quality_pts + value_pts + ocf_pts + industry_pts
+    total = round(min(50, total), 1)
+    detail = (f"成长{growth_pts}/12 质量{quality_pts}/10 估值{value_pts}/18 "
+              f"现金流{ocf_pts}/4 行业{industry_pts}/6")
+    completeness = 1 if (fin and has_valuation) else 0
+    return {
+        "score": total,
+        "detail": detail,
+        "completeness": completeness,
+        "value_metrics": metrics,
+    }
 
 
 def _board_score(profile: dict[str, Any], board_strength: dict[str, float]) -> dict[str, Any]:
@@ -569,7 +709,7 @@ async def _analyze_one(
     profile = await _stock_profile(cand)
     if profile.get("price") is None and not profile.get("financials"):
         return None  # 核心数据全缺，跳过
-    fin_score = _financial_score(profile.get("financials") or [])
+    fin_score = _financial_score(profile, board_strength=board_strength)
     board = _board_score(profile, board_strength)
     flow = _flow_score(profile)
     volume = _volume_score(profile)
