@@ -398,16 +398,65 @@
     if (boards) root.appendChild(boards);
 
     const pools = data.pools || {};
+    const titleMap = { core: '核心机会池', trend: '趋势池', emotion: '情绪妖股池' };
+    const totalStocks = Object.keys(pools).reduce(function (acc, k) {
+      return acc + ((pools[k] || []).length);
+    }, 0);
+
     Object.keys(pools).forEach(function (k) {
-      const titleMap = { core: '核心机会池', trend: '趋势池', emotion: '情绪妖股池' };
       const poolEl = renderPool(titleMap[k] || k, POOL_DESC[k], pools[k] || []);
       root.appendChild(poolEl);
     });
+
+    // 没有候选时的空状态卡（接口正常但市场弱势 / 时段等）
+    if (totalStocks === 0) {
+      root.appendChild(renderEmpty(data));
+    }
 
     // 风险提示（市场本身的状态）
     if (data.market && data.market.tip) {
       root.appendChild(U.el('div', 'val-market-tip', data.market.tip));
     }
+  }
+
+  function renderEmpty(data) {
+    const mkt = data.market || {};
+    const wrap = U.el('div', 'val-empty-card');
+    wrap.appendChild(U.el('div', 'val-empty-icon', '📭'));
+    const head = U.el('div', 'val-empty-title', '当前市场状态下暂无符合条件的候选');
+    wrap.appendChild(head);
+
+    // 给出明确"为什么是空"的可读解释
+    const reasons = [];
+    if (typeof mkt.zt_count === 'number' && mkt.zt_count <= 0) {
+      reasons.push('当前交易日涨停数为 0（无涨停池 → 无候选）');
+    }
+    if (mkt.state === 'F' || mkt.state === 'E') {
+      reasons.push('市场状态判定为 ' + (mkt.name || mkt.state) + '（退潮）');
+    } else if (mkt.state === 'D') {
+      reasons.push('市场状态判定为 ' + (mkt.name || mkt.state) + '（震荡存量）');
+    }
+    if (typeof mkt.candidate_count === 'number' && mkt.candidate_count === 0) {
+      reasons.push('初始候选池即为 0（已剔除 ETF / 北交所 / 非 A 股代码）');
+    }
+    if (reasons.length === 0) {
+      reasons.push('暂未发现基本合格 + 风险可控的 A 股标的');
+    }
+    const list = U.el('ul', 'val-empty-reasons');
+    reasons.forEach(function (r) { list.appendChild(U.el('li', '', r)); });
+    wrap.appendChild(list);
+
+    const tips = U.el('div', 'val-empty-tips');
+    tips.appendChild(U.el('div', 'val-empty-tip-title', '建议'));
+    tips.appendChild(U.el('div', '', '① 开盘 9:30~10:30 期间再来（候选池会更活跃）'));
+    tips.appendChild(U.el('div', '', '② 降低对资金/情绪维度的权重，单纯看估值（点 ⚙ 权重调整）'));
+    tips.appendChild(U.el('div', '', '③ 或点击右上「刷新数据」重算候选'));
+    wrap.appendChild(tips);
+
+    if (data.generated_at) {
+      wrap.appendChild(U.el('div', 'val-empty-time', '生成于 ' + data.generated_at));
+    }
+    return wrap;
   }
 
   async function load() {
