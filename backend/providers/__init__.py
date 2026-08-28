@@ -210,19 +210,29 @@ class Registry:
 
     def health(self) -> list[dict[str, Any]]:
         now = time.monotonic()
-        return [
-            {
+        result: list[dict[str, Any]] = []
+        for p in self.providers:
+            stat = self._stat(p.name)
+            result.append({
                 "name": p.name,
                 "caps": sorted(p.caps),
                 "fails": self._fail.get(p.name, 0),
                 "cooling": max(0, round(self._blocked_until.get(p.name, 0) - now)),
-            }
-            for p in self.providers
-        ]
+                "ok": stat.ok,
+                "fail": stat.fail,
+                "success_rate": round(stat.success_rate, 2),
+                "avg_latency_ms": stat.avg_latency_ms,
+                "score": stat.score,
+                "last_quote_time": stat.last_quote_time,
+            })
+        return result
 
     @staticmethod
     def throttled_hosts() -> dict[str, float]:
         return limiter.status()
+
+    def host_stats(self) -> dict[str, dict[str, Any]]:
+        return limiter.host_stats()
 
     # ------------------------------------------------------------ 通用调度
     async def _first(
