@@ -504,6 +504,11 @@
     setSession: setSession,
     getSession: function () { return state.session; },
     refreshMeta: loadMeta,
+    // 详情页「← 返回」导航到来源页面(从哪儿来回哪儿去)。
+    goBack: goBack,
+    backLabel: backLabel,
+    // 一般不需要——从 stock 跳 stock 不更新 fromRoute 是预期行为。
+    resetFromRoute: function () { state.fromRoute = null; state.fromParam = null; },
     start: async function () {
       bind();
       await loadMeta();
