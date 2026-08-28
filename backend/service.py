@@ -98,25 +98,167 @@ async def get_quote(code: str, market: str | None = None, force: bool = False) -
     return quote
 
 
+def _watch_monitor_flow(data: dict[str, Any], change: float,
+                        flow: dict[str, Any] | None) -> dict[str, str] | None:
+    """资金流驱动的监测信号(优先级高于量比信号)。
+
+    flow 来自 indicators.summarize_flow 的输出,可用键:
+      - available: bool    —— False 时本函数直接返回 None,让上层走量比逻辑
+      - state: str         —— "主力抢筹" / "主力净流入" / "资金观望" / "主力净流出" / "主力出逃"
+      - state_grade: str   —— "inflow" / "outflow" / "neutral"
+      - main_last: float   —— 当日(或近5日回退)主力净额
+      - streak: int        —— 连续同向天数
+      - streak_dir: str    —— "流入" / "流出" / "持平"
+      - fresh: bool        —— 是否当日数据(否则 reason 标注「近5日」)
+
+    返回 dict[str, str] 给上层直接 return;返回 None 表示不触发资金流信号。
+    """
+    if not flow or not flow.get("available"):
+        return None
+    main_last = flow.get("main_last")
+    state = flow.get("state") or ""
+    state_grade = flow.get("state_grade") or ""
+    streak = flow.get("streak") or 0
+    streak_dir = flow.get("streak_dir") or ""
+    fresh = bool(flow.get("fresh"))
+    date_tag = "" if fresh else "（近5日）"
+
+    has_main = isinstance(main_last, (int, float))
+    main_wan = f"{main_last / 1e4:+.0f}万" if has_main else ""
+
+    # ---- 量价背离: 价↑但资金出逃 OR 价↓但资金抢筹 ----
+    # 用 0.5% 死区过滤极弱波动,避免把横盘误判成背离。
+    if has_main and abs(change) >= 0.5:
+        if change > 0 and main_last < -5e5:   # 价↑资金净流出 > 50 万
+            return {
+                "action": "量价背离",
+                "tone": "warn",
+                "reason": (
+                    f"涨 {change:+.2f}% 但主力净流出 {main_wan}{date_tag}，"
+                    "拉高出货风险"
+                ),
+            }
+        if change < 0 and main_last > 5e5:    # 价↓资金净流入 > 50 万
+            return {
+                "action": "量价背离",
+                "tone": "warn",
+                "reason": (
+                    f"跌 {change:+.2f}% 但主力净流入 {main_wan}{date_tag}，"
+                    "可能为洗盘"
+                ),
+            }
+
+    # ---- 主力抢筹 / 主力出货 ----
+    # state="主力抢筹" = 主力连续 3 日流入 + 超大单主导(来自 _grade_flow_state)
+    # 与"价"弱关联即可触发,因为资金动作本身就是强信号。
+    if state.startswith("主力抢筹"):
+        if change >= 0:
+            return {
+                "action": "主力抢筹",
+                "tone": "up",
+                "reason": (
+                    f"{state}{date_tag}，主力资金持续入场"
+                    + (f"，价 {change:+.2f}%" if change else "")
+                ),
+            }
+        # 抢筹中但价格仍跌,标记"主力抢筹"提醒用户后续可能反转
+        return {
+            "action": "主力抢筹",
+            "tone": "up",
+            "reason": (
+                f"{state}{date_tag}，价 {change:+.2f}% 暂时承压，"
+                "关注能否企稳反弹"
+            ),
+        }
+
+    if state.startswith("主力出逃"):
+        if change <= 0:
+            return {
+                "action": "主力出货",
+                "tone": "down",
+                "reason": (
+                    f"{state}{date_tag}，主力资金连续离场"
+                    + (f"，价 {change:+.2f}%" if change else "")
+                ),
+            }
+        return {
+            "action": "主力出货",
+            "tone": "down",
+            "reason": (
+                f"{state}{date_tag}，价 {change:+.2f}% 仍上行，"
+                "警惕诱多风险"
+            ),
+        }
+
+    # ---- 主力护盘: 价跌 ≥ 1% 但当日资金净流入(单日级别,不要求连续) ----
+    if has_main and change <= -1.0 and main_last > 0:
+        return {
+            "action": "主力护盘",
+            "tone": "up",
+            "reason": (
+                f"跌 {change:+.2f}% 但主力净流入 {main_wan}{date_tag}，"
+                "下方承接明显"
+            ),
+        }
+
+    # ---- 持续流入 / 持续流出: 连 3 日同向(已经包含在抢筹/出逃里则不重复) ----
+    # 仅对 state_grade 为 inflow/outflow 但 state 不是「抢筹/出逃」的中间档触发,
+    # 比如「主力净流入」/「主力净流出」连续 3 日以上,说明趋势稳定。
+    if streak >= 3 and state_grade == "inflow" and "抢筹" not in state:
+        last5_wan = flow.get("main_last5", 0) / 1e4 if isinstance(flow.get("main_last5"), (int, float)) else 0
+        return {
+            "action": "持续流入",
+            "tone": "up",
+            "reason": (
+                f"连 {streak} 日主力净流入{date_tag}，"
+                f"近 5 日合计 {last5_wan:+.0f}万"
+            ),
+        }
+    if streak >= 3 and state_grade == "outflow" and "出逃" not in state:
+        last5_wan = flow.get("main_last5", 0) / 1e4 if isinstance(flow.get("main_last5"), (int, float)) else 0
+        return {
+            "action": "持续流出",
+            "tone": "down",
+            "reason": (
+                f"连 {streak} 日主力净流出{date_tag}，"
+                f"近 5 日合计 {last5_wan:+.0f}万"
+            ),
+        }
+
+    return None
+
+
 # ------------------------------------------------------------------ 自选股看板
 
-def watch_monitor(data: dict[str, Any], atr: float | None = None) -> dict[str, str]:
-    """根据实时行情生成首页关键监测提示。
+def watch_monitor(data: dict[str, Any], atr: float | None = None,
+                  flow: dict[str, Any] | None = None) -> dict[str, str]:
+    """根据实时行情 + 资金流生成首页关键监测提示。
 
-    v3 多维度策略（信号优先级从高到低）：
+    v4 多维度策略（信号优先级从高到低）：
       1. 行情状态异常            → 继续观察(warn)
       2. 涨跌停                  → 涨停关注 / 跌停风险
-      3. 放量下跌                → 应减仓
-      4. ATR 放量上涨            → 可加仓
-      5. 异动放量(量比 ≥ 3 方向不明) → 异动放量
-      6. 高换手 ≥ 10%            → 高换手出货 / 高换手活跃
-      7. 流动性极低(换手 < 0.3%) → 流动性低
-      8. 缩量阴跌                → 继续观察(地量阴跌)
-      9. 偏弱趋势                → 谨慎持有
-      10. 默认                   → 继续观察
+      3. 量价背离                → 量价背离(warn)        [v4 新]
+      4. 主力抢筹                → 主力抢筹(up)          [v4 新]
+      5. 主力出货                → 主力出货(down)        [v4 新]
+      6. 主力护盘                → 主力护盘(up)          [v4 新]
+      7. 持续流入(连 3 日流入)     → 持续流入(up)          [v4 新]
+      8. 持续流出(连 3 日流出)     → 持续流出(down)        [v4 新]
+      9. 应减仓                  → 应减仓(down)          [v3]
+      10. ATR 放量上涨           → 可加仓(up)            [v2]
+      11. 放量上行(1%≤x<3% 量比≥2) → 放量上行(up)          [v3]
+      12. 异动放量(量比 ≥ 3 方向不明) → 异动放量(warn)
+      13. 高换手 ≥ 10%           → 高换手出货 / 高换手活跃
+      14. 温和回调(-3<x≤-1.5% 量比≥1) → 温和回调(warn)      [v3]
+      15. 流动性极低(换手 < 0.3%) → 流动性低(warn)
+      16. 缩量阴跌               → 继续观察(地量阴跌)
+      17. 偏弱趋势               → 谨慎持有
+      18. 默认                   → 继续观察
 
     涨跌停限制按板块差异化（ST 5% / 创业板·科创板 20% / 北交所 30% / 主板 10%），
     容忍 ±0.3% 抖动。「可加仓」沿用 v2 的 ATR 归一化 + 量比过滤（无量拉升不算）。
+    v4 起,资金流信号(via indicators.summarize_flow 的 state/state_grade/streak_dir 等)
+    优先级高于量比信号——"谁在买"比"成交多不多"更早一步指示意图。
+    flow=None 或 flow['available']=False 时,资金流信号全部跳过,向后兼容。
     """
     status = data.get("status") or "unknown"
     if status != "normal":
@@ -158,6 +300,13 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None) -> dict[str, s
                 "次日可能继续下挫"
             ),
         }
+
+    # ---- 1.5. 资金流信号 (v4 新增) ----
+    # 资金流向比"成交量"更早一步指示意图,优先级高于后续的量比信号。
+    # 仅当 flow 存在且 available=True 时触发,否则跳过(向后兼容)。
+    flow_signal = _watch_monitor_flow(data, change, flow)
+    if flow_signal is not None:
+        return flow_signal
 
     # ---- 2. 应减仓：跌幅 ≤ -3% 且量比 ≥ 0.8（缩量阴跌属空头衰竭，不触发减仓）
     if change <= -3 and (not has_vr or vr >= 0.8):
