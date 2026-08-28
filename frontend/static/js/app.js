@@ -396,15 +396,37 @@
       providers.forEach(function (p) {
         const h = providerHealth(p);
         const caps = (p.caps || []).map(function (c) { return CAP_LABELS[c] || c; }).join('·');
+        const hasMetrics = typeof p.score === 'number';
+        const scoreText = hasMetrics ? '评分 ' + Math.round(p.score * 100) : '';
+        const latencyText = p.avg_latency_ms ? p.avg_latency_ms + 'ms' : '';
+        const rateText = typeof p.success_rate === 'number' ? Math.round(p.success_rate * 100) + '%' : '';
         let stateText = '正常';
         let cls = 'ok';
         if (p.cooling > 0) { stateText = '熔断冷却 ' + p.cooling + 's'; cls = 'err'; }
+        else if (hasMetrics && p.score < 0.4) { stateText = '质量差'; cls = 'err'; }
         else if (p.fails > 0) { stateText = '连续失败 ' + p.fails; cls = 'warn'; }
+        const metrics = [scoreText, latencyText, rateText].filter(Boolean).join(' · ');
+        const title = 'ok=' + (p.ok || 0) + ' / fail=' + (p.fail || 0) +
+          (p.last_quote_time ? ' · 最新行情 ' + p.last_quote_time : '');
         parts.push('<div class="ds-row">' +
-          '<span class="ds-name ' + cls + '">' + U.escapeHtml(p.name) + '</span>' +
+          '<span class="ds-name ' + cls + '" title="' + U.escapeHtml(title) + '">' + U.escapeHtml(p.name) + '</span>' +
           '<span class="ds-caps">' + caps + '</span>' +
+          '<span class="ds-metrics">' + U.escapeHtml(metrics) + '</span>' +
           '<span class="ds-state ' + cls + '">' + stateText + '</span></div>');
       });
+    }
+
+    // 主机级自适应限流统计
+    const hostStats = state.meta.host_stats || {};
+    const hostKeys = Object.keys(hostStats);
+    if (hostKeys.length) {
+      parts.push('<div class="ds-sub">🐌 主机自适应限流：<br>' +
+        hostKeys.map(function (h) {
+          const s = hostStats[h];
+          const cooling = s.cooling > 0 ? ' · 冷却 ' + Math.ceil(s.cooling) + 's' : '';
+          return U.escapeHtml(h) + '：间隔 ' + s.interval_actual + 's（基准 ' + s.interval_base +
+            's × ' + s.multiplier + '）' + (s.ok_rate != null ? ' · 成功率 ' + Math.round(s.ok_rate * 100) + '%' : '') + cooling;
+        }).join('<br>'));
     }
 
     const tkeys = Object.keys(throttled);
