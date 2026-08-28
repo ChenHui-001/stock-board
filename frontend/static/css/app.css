@@ -4264,3 +4264,226 @@ a.hotspot-title:hover {
 
 
 
+
+/* ---------------------------------------------------------- 价值投资页 */
+/* 整体：让 value 页跟首页/详情页保持一致的字体与留白 */
+.page-value {
+  padding: 16px 20px 28px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+.val-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.val-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.val-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.val-gen {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-bottom: 10px;
+}
+.val-market {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+.val-market-state {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.val-market-meta {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  padding-left: 4px;
+  border-left: 1px solid var(--line);
+  margin-left: 4px;
+}
+.val-market-meta:first-of-type {
+  border-left: none;
+  margin-left: 0;
+}
+.val-market-tip {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--bg-elev-2);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.val-boards {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.val-board-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.val-board-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.val-board-strength {
+  font-size: 12px;
+  color: var(--up);
+  font-weight: 600;
+}
+.val-pool {
+  margin-bottom: 20px;
+}
+.val-pool-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+  flex-wrap: wrap;
+}
+.val-pool-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text);
+}
+.val-pool-desc {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.val-empty {
+  text-align: center;
+  padding: 24px;
+  font-size: 13px;
+  color: var(--text-faint);
+  background: var(--bg-elev);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+.val-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 13px;
+}
+.val-table thead th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--text-faint);
+  padding: 10px 10px;
+  background: var(--bg-elev-2);
+  border-bottom: 1px solid var(--line);
+}
+.val-table tbody td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+.val-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.val-row:last-child td {
+  border-bottom: none;
+}
+.val-name { min-width: 130px; }
+.val-code { font-size: 12px; color: var(--text-faint); font-family: var(--mono, monospace); }
+.val-cname { font-weight: 600; font-size: 13.5px; }
+.val-board { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+.val-price { white-space: nowrap; }
+.val-price .val-num { font-size: 13.5px; font-weight: 600; }
+.val-change { font-size: 12px; margin-top: 2px; }
+.val-change.up { color: var(--up); }
+.val-change.down { color: var(--down); }
+.val-change.flat { color: var(--text-faint); }
+.val-num {
+  font-family: var(--mono, monospace);
+  font-size: 13px;
+}
+.val-num-big {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: var(--mono, monospace);
+}
+.val-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.val-band {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  margin-top: 3px;
+  border: 1px solid transparent;
+}
+.val-flat { background: rgba(128, 128, 128, 0.15); color: var(--text-dim); border-color: rgba(128, 128, 128, 0.25); }
+.val-up { background: rgba(34, 197, 94, 0.14); color: var(--up); border-color: rgba(34, 197, 94, 0.35); }
+.val-up-soft { background: rgba(34, 197, 94, 0.07); color: var(--text-dim); border-color: rgba(34, 197, 94, 0.2); }
+.val-warn { background: rgba(245, 158, 11, 0.14); color: var(--warn); border-color: rgba(245, 158, 11, 0.35); }
+.val-down { background: rgba(239, 68, 68, 0.14); color: var(--down); border-color: rgba(239, 68, 68, 0.35); }
+.val-signal {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+.val-signal.val-up { background: rgba(34, 197, 94, 0.12); color: var(--up); }
+.val-signal.val-warn { background: rgba(245, 158, 11, 0.14); color: var(--warn); }
+.val-signal.val-flat { background: rgba(128, 128, 128, 0.15); color: var(--text-dim); }
+.val-signal.val-down { background: rgba(239, 68, 68, 0.12); color: var(--down); }
+.val-grade { font-size: 11.5px; color: var(--text-faint); margin-top: 4px; }
+.val-error {
+  text-align: center;
+  padding: 40px;
+  font-size: 14px;
+  color: var(--down);
+}
+/* 移动端：表格横向滚动，避免挤变形 */
+@media (max-width: 720px) {
+  .page-value { padding: 12px 12px 24px; }
+  .val-table { display: block; overflow-x: auto; white-space: nowrap; }
+  .val-table thead, .val-table tbody, .val-table tr, .val-table td, .val-table th {
+    display: inline-block;
+  }
+  .val-pool-desc { display: none; }
+}
