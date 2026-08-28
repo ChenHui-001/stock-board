@@ -181,6 +181,9 @@ class Quote:
     turnover: float | None = None    # 换手率 %
     volume_ratio: float | None = None  # 量比
     trade_date: str = ""
+    # 数据新鲜度 / 延迟感知（由取源时填充，用于多源竞速择优）
+    quote_time: str = ""             # 源给出的最新报价时间（HH:MM:SS 或完整时间）
+    latency_ms: int = 0              # 本次请求往返延迟（毫秒）
     status: str = "normal"           # normal / suspended / delayed / unknown
     status_text: str = ""
     source: str = ""
