@@ -234,6 +234,8 @@ class Registry:
     ) -> tuple[Any, str]:
         errors: list[str] = []
         for provider in self._available(cap):
+            start = time.monotonic()
+            quote_time = ""
             try:
                 result = await call(provider)
             except NotSupported:
@@ -241,17 +243,26 @@ class Registry:
             except Throttled as exc:
                 # 主机级频控已由 limiter 快速失败，不计入数据源健康度
                 errors.append(f"{provider.name}: {describe_exc(exc)}")
+                self._stat(provider.name).record(False, int((time.monotonic() - start) * 1000))
                 continue
             except Exception as exc:  # noqa: BLE001
                 self._mark_fail(provider.name)
                 errors.append(f"{provider.name}: {describe_exc(exc)}")
                 log.info("数据源 %s 的 %s 失败：%s", provider.name, cap, describe_exc(exc))
+                self._stat(provider.name).record(False, int((time.monotonic() - start) * 1000))
                 continue
+            latency_ms = int((time.monotonic() - start) * 1000)
             if not result and not empty_ok:
                 # 空结果是「这个源没有这条数据」，不是故障，不计入健康度
                 errors.append(f"{provider.name}: 空结果")
                 continue
             self._mark_ok(provider.name)
+            # 对行情结果提取最新报价时间，用于新鲜度评分
+            if cap == "quotes" and isinstance(result, dict):
+                best = max(result.values(), key=_quote_freshness, default=None)
+                if best:
+                    quote_time = best.quote_time or best.trade_date
+            self._stat(provider.name).record(True, latency_ms, quote_time)
             return result, provider.name
         raise ProviderError(f"{cap} 全部数据源失败 -> " + "; ".join(errors or ["无可用源"]))
 
