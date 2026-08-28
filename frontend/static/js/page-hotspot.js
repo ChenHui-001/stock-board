@@ -472,6 +472,69 @@
     return row;
   }
 
+  // 行内关联股：点击「相关股」展开，复用 AI 分析接口但不弹窗。
+  async function toggleInlineStocks(item) {
+    if (state.inline.item && state.inline.item.id === item.id) {
+      state.inline = { item: null, loading: false, data: null, error: null };
+      repaintList();
+      return;
+    }
+    state.inline = { item: item, loading: true, data: null, error: null };
+    repaintList();
+    try {
+      const data = await API.hotspotAnalyze(item, false);
+      if (data && data.ok === false) throw new Error(data.error || '分析失败');
+      state.inline = { item: item, loading: false, data: data, error: null };
+    } catch (err) {
+      state.inline = { item: item, loading: false, data: null, error: err.message || String(err) };
+    }
+    if (isCurrent()) repaintList();
+  }
+
+  function renderInlineStocks() {
+    const wrap = U.el('div', 'hotspot-inline');
+    if (state.inline.loading) {
+      wrap.appendChild(U.el('div', 'hotspot-inline-loading', '正在分析关联股…'));
+      return wrap;
+    }
+    if (state.inline.error) {
+      wrap.appendChild(U.el('div', 'hotspot-inline-err', state.inline.error));
+      return wrap;
+    }
+    const data = state.inline.data || {};
+    const stocks = data.stocks || [];
+    if (!stocks.length) {
+      wrap.appendChild(U.el('div', 'hotspot-inline-empty', '未检索到明确关联个股'));
+      return wrap;
+    }
+    const list = U.el('div', 'hotspot-inline-stocks');
+    stocks.slice(0, 5).forEach(function (s) {
+      const card = U.el('div', 'hotspot-inline-stock');
+      card.onclick = function () {
+        location.hash = '#/stock/' + s.code;
+      };
+      const head = U.el('div', 'hotspot-inline-head');
+      head.appendChild(U.el('span', 'hs-stock-name', s.name || s.code));
+      head.appendChild(U.el('span', 'hs-stock-code', s.code));
+      if (s.board) head.appendChild(U.el('span', 'hs-stock-board', s.board));
+      card.appendChild(head);
+      const meta = U.el('div', 'hotspot-inline-meta');
+      if (U.isNum(s.price)) {
+        meta.appendChild(U.el('span', 'hs-stock-price', U.price(s.price)));
+      }
+      if (U.isNum(s.change_pct)) {
+        meta.appendChild(U.el('span', 'hs-stock-chg ' + U.tone(s.change_pct), U.pct(s.change_pct)));
+      }
+      if (s.reason) {
+        meta.appendChild(U.el('span', 'hs-stock-reason', s.reason));
+      }
+      card.appendChild(meta);
+      list.appendChild(card);
+    });
+    wrap.appendChild(list);
+    return wrap;
+  }
+
   // ---------------------------------------------------------- 快讯 AI 分析弹窗
   // 与股票 AI 分析不同：这是「快讯 → 行业影响 + 关联股」的独立分析。
   const HS_SENT_CLASS = { '利好': 'sent-bull', '利空': 'sent-bear', '中性': 'sent-flat' };
