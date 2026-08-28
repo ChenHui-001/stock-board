@@ -3869,6 +3869,246 @@ a.hotspot-title:hover {
   }
 }
 
+/* ------------------------------------------------------------ 热点概念榜单 */
+.sector-heat {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-elev-1);
+}
+
+.sector-heat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.sector-heat-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sector-heat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sector-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, transform .1s;
+}
+
+.sector-chip:hover {
+  border-color: var(--accent);
+  background: var(--bg-elev);
+}
+
+.sector-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.sector-chip-name {
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sector-chip-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+.sector-chip-sent {
+  display: inline-flex;
+  gap: 3px;
+  font-size: 10px;
+}
+
+.sector-chip-sent span {
+  padding: 0 4px;
+  border-radius: 6px;
+}
+
+.sector-chip-trend {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sector-trend-up .sector-chip-trend { color: #ff4d5a; }
+.sector-trend-down .sector-chip-trend { color: #2ecc71; }
+.sector-trend-flat .sector-chip-trend { color: var(--text-dim); }
+
+.sector-heat-empty {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+/* 单条快讯的概念标签 */
+.hotspot-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.hotspot-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: opacity .15s, transform .1s;
+}
+
+.hotspot-tag:hover {
+  opacity: .85;
+  transform: translateY(-1px);
+}
+
+/* 时间分组标签 */
+.hotspot-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 10px 2px 6px;
+  margin-top: 2px;
+  border-bottom: 1px dashed var(--line-soft);
+}
+
+.hotspot-group-label:first-child {
+  padding-top: 4px;
+}
+
+/* 相关股按钮 */
+.hotspot-rel-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.hotspot-rel-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 行内关联股面板 */
+.hotspot-inline {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-1);
+  border: 1px solid var(--line-soft);
+}
+
+.hotspot-inline-loading,
+.hotspot-inline-empty,
+.hotspot-inline-err {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.hotspot-inline-err {
+  color: #ff6b6b;
+}
+
+.hotspot-inline-stocks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.hotspot-inline-stock {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+
+.hotspot-inline-stock:hover {
+  border-color: var(--accent);
+  background: var(--bg-elev);
+}
+
+.hotspot-inline-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.hotspot-inline-head .hs-stock-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.hotspot-inline-head .hs-stock-code {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+
+.hotspot-inline-head .hs-stock-board {
+  font-size: 10px;
+  color: var(--text-faint);
+  background: var(--bg-elev);
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+.hotspot-inline-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.hotspot-inline-meta .hs-stock-reason {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+@media (max-width: 560px) {
+  .sector-heat {
+    padding: 10px 12px;
+  }
+
+  .sector-chip {
+    padding: 4px 8px;
+  }
+
+  .hotspot-inline-stocks {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* 快讯 AI 分析：弹窗内行业影响 / 关联股 */
 
 .hs-industries {

@@ -805,6 +805,8 @@
   global.PageHotspot = {
     mount: function () {
       state.filter = 'all';
+      state.sector = null;
+      state.inline = { item: null, loading: false, data: null, error: null };
       state.q = '';
       state.search.q = '';
       state.search.items = [];
