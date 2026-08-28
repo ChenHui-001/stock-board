@@ -153,6 +153,34 @@ def _cached_report(code: str) -> dict[str, Any] | None:
     # 避免升级后用户仍看到「AI 服务调用失败（LLM 请求失败: ）」的无信息报错
     if _BLANK_LLM_REASON_RE.search(meta.get("degraded_reason") or ""):
         return None
+    # 首页批量轻量快照（is_brief）不能替代单股完整 AI 分析
+    if meta.get("is_brief"):
+        return None
+    return cached
+
+
+def _cached_brief_report(code: str) -> dict[str, Any] | None:
+    """读取缓存，允许命中批量生成的轻量快照（is_brief=True）。"""
+    cached = storage.get_report(code)
+    if not cached:
+        return None
+    if not _cache_fresh(cached.get("cached_at") or ""):
+        return None
+    meta = cached.get("meta") or {}
+    if meta.get("fingerprint") != llmcfg.fingerprint():
+        return None
+    if meta.get("score_fp") != scorecfg.fingerprint():
+        return None
+    # 轻量/完整快照都需要核心字段
+    if any(k not in cached for k in _REQUIRED_REPORT_FIELDS):
+        return None
+    adv_scores = ((cached.get("analysis") or {}).get("advice") or {}).get("scores") or {}
+    if not adv_scores or "intraday" not in adv_scores:
+        return None
+    if (meta.get("schema_version") or 0) < REPORT_SCHEMA_VERSION:
+        return None
+    if _BLANK_LLM_REASON_RE.search(meta.get("degraded_reason") or ""):
+        return None
     return cached
 
 
