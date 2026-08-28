@@ -121,8 +121,11 @@
     const wrap = U.el('div', 'detail-head');
 
     const nav = U.el('div', 'detail-nav');
-    const back = U.el('button', 'btn btn-sm', '← 返回首页');
-    back.onclick = function () { location.hash = '#/home'; };
+    // 返回按钮:从哪儿来回哪儿去(home/value/hotspot/search),无来源时 fallback 到 home。
+    // App.backLabel() / App.goBack() 在 app.js 中实现,详情页不再硬编码目标。
+    const back = U.el('button', 'btn btn-sm', App.backLabel());
+    back.onclick = function () { App.goBack(); };
+    // hash 变化时(同页面内跳转到其他股票)不重渲按钮;只在 mount 时设定即可。
     nav.appendChild(back);
 
     const refreshBtn = U.el('button', 'btn btn-sm', '');
