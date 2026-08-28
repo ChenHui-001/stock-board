@@ -279,8 +279,14 @@ async def _tencent_extra(code: str, market: str) -> dict[str, Any]:
     return got.get(f"{code}.{market}") or {}
 
 
-async def _stock_profile(cand: dict[str, Any]) -> dict[str, Any]:
-    """单只候选的完整数据：行情 + 补充字段 + 财务 + 资金流 + K线。全部尽力而为。"""
+async def _stock_profile(
+    cand: dict[str, Any], extra: "dict[str, Any] | None" = None
+) -> dict[str, Any]:
+    """单只候选的完整数据：行情 + 补充字段 + 财务 + 资金流 + K线。全部尽力而为。
+
+    extra 为 run_screen 预先批量取好的腾讯补充字段（PE/PB/市值/量比等）；
+    传入时不再逐只请求腾讯接口。财务/资金/K线三路并发取，缩短单股耗时。
+    """
     code, market = cand["code"], cand["market"]
     profile: dict[str, Any] = {
         "code": code, "market": market, "name": cand.get("name") or "",
@@ -299,37 +305,50 @@ async def _stock_profile(cand: dict[str, Any]) -> dict[str, Any]:
             })
     except Exception:  # noqa: BLE001
         pass
-    extra = await _tencent_extra(code, market)
-    profile.update(extra)
-    # 财务（最近 8 期）
-    try:
-        fin, _src = await registry().financials(code, market, 8)
-        profile["financials"] = [
-            {
-                "period": f.period, "revenue_yoy": f.revenue_yoy,
-                "net_profit_yoy": f.net_profit_yoy,
-                "net_profit": f.net_profit, "roe": f.roe,
-                "gross_margin": f.gross_margin, "debt_ratio": f.debt_ratio,
-            }
-            for f in fin
-        ]
-    except Exception:  # noqa: BLE001
-        profile["financials"] = []
-    # 资金流（近 30 日）
-    try:
-        flow, _src = await registry().fund_flow(code, market, 30)
-        profile["flow"] = [{"date": d.date, "main": d.main, "main_pct": d.main_pct} for d in flow]
-    except Exception:  # noqa: BLE001
-        profile["flow"] = []
-    # K线（近 30 日，算相对强度）
-    try:
-        bars, _src = await registry().kline(code, market, 30)
-        profile["kline"] = [
-            {"date": b.date, "close": b.close, "change_pct": b.change_pct, "volume": b.volume}
-            for b in bars
-        ]
-    except Exception:  # noqa: BLE001
-        profile["kline"] = []
+    # 腾讯补充字段：优先用预取的批量结果，缺失时才单独补一次
+    if extra is None:
+        extra = await _tencent_extra(code, market)
+    profile.update(extra or {})
+
+    async def _fin() -> list[dict[str, Any]]:
+        try:
+            fin, _src = await registry().financials(code, market, 8)
+            return [
+                {
+                    "period": f.period, "revenue_yoy": f.revenue_yoy,
+                    "net_profit_yoy": f.net_profit_yoy,
+                    "net_profit": f.net_profit, "roe": f.roe,
+                    "gross_margin": f.gross_margin, "debt_ratio": f.debt_ratio,
+                    "ocf_to_netprofit": getattr(f, "ocf_to_netprofit", None),
+                }
+                for f in fin
+            ]
+        except Exception:  # noqa: BLE001
+            return []
+
+    async def _flow() -> list[dict[str, Any]]:
+        try:
+            flow, _src = await registry().fund_flow(code, market, 30)
+            return [{"date": d.date, "main": d.main, "main_pct": d.main_pct} for d in flow]
+        except Exception:  # noqa: BLE001
+            return []
+
+    async def _kline() -> list[dict[str, Any]]:
+        try:
+            bars, _src = await registry().kline(code, market, 30)
+            return [
+                {"date": b.date, "close": b.close, "change_pct": b.change_pct,
+                 "volume": b.volume, "high": b.high, "low": b.low}
+                for b in bars
+            ]
+        except Exception:  # noqa: BLE001
+            return []
+
+    # 三路并发：财务 / 资金 / K线互不依赖
+    fin_list, flow_list, kline_list = await asyncio.gather(_fin(), _flow(), _kline())
+    profile["financials"] = fin_list
+    profile["flow"] = flow_list
+    profile["kline"] = kline_list
     return profile
 
 
