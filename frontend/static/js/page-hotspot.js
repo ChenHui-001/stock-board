@@ -68,11 +68,7 @@
     const left = U.el('div');
     left.appendChild(U.el('div', 'card-title', '🔥 热点追踪'));
     const sub = U.el('div', 'card-sub');
-    if (state.view === 'value') {
-      sub.textContent = state.value
-        ? 'A股快速轮动量化选股 · 市场环境 → 板块 → 多维评分 → 分级池'
-        : (state.valueLoading ? '正在运行量化选股引擎…' : '量化选股面板');
-    } else if (state.error) {
+    if (state.error) {
       sub.textContent = state.error;
     } else if (state.meta) {
       sub.textContent = '近 ' + state.meta.window_minutes + ' 分钟 · ' + state.meta.total + ' 条'
@@ -86,12 +82,8 @@
     left.appendChild(sub);
     head.appendChild(left);
 
-    head.appendChild(renderHeadTabs());
-
     const refresh = U.el('button', 'btn btn-sm', '⟳ 刷新');
-    refresh.onclick = function () {
-      if (state.view === 'value') loadValue(true); else load(true);
-    };
+    refresh.onclick = function () { load(true); };
     head.appendChild(refresh);
     return head;
   }
