@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from ..utils import TZ, normalize_code, resolve_market, sina_code, to_float
-from .base import Bar, FlowDay, NewsItem, Provider, ProviderError, Quote, fetch
+from .base import Bar, FlowDay, NewsItem, Provider, ProviderError, Quote, SearchItem, fetch
 
 QUOTE_URL = "https://hq.sinajs.cn/list="
 KLINE_URL = (
@@ -94,16 +94,15 @@ class SinaProvider(Provider):
         items: list[SearchItem] = []
         for chunk in body.split(";"):
             parts = chunk.split(",")
-            # 格式：name, py, code, market?, ... 实际新浪 suggest 字段较固定
+            # 实测格式：名称,市场类型(11=SH/12=SZ),代码,完整代码(sh600000),名称,...
             if len(parts) < 4:
                 continue
-            # parts[0]=name, parts[1]=py, parts[2]=code, parts[3]=market_type
-            name, code, mtype = parts[0], normalize_code(parts[2]), parts[3]
+            name, mtype, code = parts[0], parts[1], normalize_code(parts[2])
             if len(code) != 6 or not code.isdigit():
                 continue
-            if mtype in ("11",):
+            if mtype == "11":
                 market = "SH"
-            elif mtype in ("12",):
+            elif mtype == "12":
                 market = "SZ"
             else:
                 market = resolve_market(code)
