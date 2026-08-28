@@ -33,6 +33,7 @@ from .base import (
     limiter,
 )
 from .eastmoney import EastmoneyProvider
+from .netease import NeteaseProvider
 from .sina import SinaProvider
 from .tencent import TencentProvider
 from .ths import ThsProvider
@@ -44,6 +45,7 @@ _FACTORIES: dict[str, Callable[[], Provider]] = {
     "tencent": TencentProvider,
     "sina": SinaProvider,
     "ths": ThsProvider,
+    "netease": NeteaseProvider,
 }
 
 if settings.ENABLE_AKSHARE:
