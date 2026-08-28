@@ -190,6 +190,11 @@ class Registry:
         if cap in {"news", "reports", "financials"}:
             priority = {"ths": 0, "eastmoney": 1}
             ready.sort(key=lambda p: priority.get(p.name, 2))
+            return ready
+        # 行情按综合评分动态排序：快且稳的源优先，减少固定顺序下
+        # 东财频控对首屏的阻塞。
+        if cap == "quotes":
+            ready.sort(key=lambda p: self._stat(p.name).score, reverse=True)
         return ready
 
     def _mark_ok(self, name: str) -> None:
