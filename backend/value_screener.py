@@ -739,9 +739,14 @@ def _position_score(profile: dict[str, Any]) -> dict[str, Any]:
     if not highs or not lows or not price:
         return {"score": 3, "detail": "价格/区间缺失", "completeness": 0}
     hi, lo = max(highs), min(lows)
+    # 关键：现价要参与区间计算。K 线最后一根常不含当日（数据源延迟/频控回落），
+    # 而现价是实时的——涨停股现价会冲到 20 日区间之外，算出不合法的 >100% 位置。
+    # 用现价扩展区间：创新高即 100%（最高位），破新低即 0%。
+    hi = max(hi, price)
+    lo = min(lo, price)
     if hi <= lo:
         return {"score": 3, "detail": "区间过窄", "completeness": 0}
-    pos = (price - lo) / (hi - lo) * 100  # 0=最低 100=最高
+    pos = max(0.0, min(100.0, (price - lo) / (hi - lo) * 100))  # 0=最低 100=最高
     if pos <= 20:
         pts = 6
     elif pos <= 40:
@@ -1166,10 +1171,12 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     pool_core = sorted(
         [s for s in stocks if _fin(s) >= 25 and _risk(s) <= 40],
         key=lambda s: s["trade_score"], reverse=True)[:10]
-    # 趋势池阈值同样按 BASE_TOTAL 占比（约 60%），避免维度增减后分池漂移
+    # 趋势池阈值同样按 BASE_TOTAL 占比（约 60%），避免维度增减后分池漂移。
+    # 不再叠加 grade 过滤：grade 本身就由 total_score 推导，双重门槛（0.60 与
+    # grade C 的 0.65）会让 0.60~0.65 区间的股票被误筛掉，导致分池为空。
     trend_cut = round(valuecfg.BASE_TOTAL * 0.60, 1)
     pool_trend = sorted(
-        [s for s in stocks if s["total_score"] >= trend_cut and s["grade"] in ("A", "B", "C")],
+        [s for s in stocks if s["total_score"] >= trend_cut],
         key=lambda s: s["trade_score"], reverse=True)[:10]
     pool_emotion = sorted(
         [s for s in stocks if (s.get("lianban") or 0) >= 2],
