@@ -39,8 +39,15 @@ _INDEX_KEYS = [
 ]
 
 # 市场状态分类（按涨跌家数/涨停数/指数强度粗判）
-def _market_state(indices: list[dict[str, Any]], zt_count: int, avg_chg: float) -> dict[str, Any]:
-    """市场状态分类 A-F 与进攻等级 0-100。"""
+def _market_state(
+    indices: list[dict[str, Any]], zt_count: int, avg_chg: float,
+    zb_count: int = 0,
+) -> dict[str, Any]:
+    """市场状态分类 A-F 与进攻等级 0-100。
+
+    zb_count 为炸板数（涨停后开板）。炸板率是情绪退潮的领先指标：
+    ≥50% 说明封板资金扛不住抛压，次日常补跌，需压低进攻等级。
+    """
     sh = next((i for i in indices if i["code"] == "000001"), None)
     sh_chg = (sh or {}).get("change_pct") or 0.0
     cyb = next((i for i in indices if i["code"] == "399006"), None)
@@ -77,6 +84,17 @@ def _market_state(indices: list[dict[str, Any]], zt_count: int, avg_chg: float) 
 
     if sh_chg <= -2.5:
         attack = min(attack, 15)
+
+    # 炸板率：封板资金承接力度的直接体现
+    total_limit = zt_count + zb_count
+    zb_rate = round(zb_count / total_limit * 100, 1) if total_limit > 0 else 0.0
+    if zb_rate >= 50:
+        attack = int(attack * 0.6)
+        emotion = "退潮"
+    elif zb_rate >= 35:
+        attack = int(attack * 0.75)
+        if emotion == "亢奋":
+            emotion = "活跃"
     return {
         "state": state,
         "name": name,
@@ -84,6 +102,8 @@ def _market_state(indices: list[dict[str, Any]], zt_count: int, avg_chg: float) 
         "emotion": emotion,
         "sh_change_pct": round(sh_chg, 2),
         "cyb_change_pct": round(cyb_chg, 2),
+        "zb_count": zb_count,
+        "zb_rate": zb_rate,
     }
 
 
@@ -139,6 +159,30 @@ async def _fetch_zt_pool() -> dict[str, Any]:
         return {"count": data.get("tc") or len(rows), "rows": rows}
     except Exception as exc:  # noqa: BLE001
         log.warning("涨停池获取失败：%s", exc)
+        return {"count": 0, "rows": []}
+
+
+async def _fetch_zb_pool() -> dict[str, Any]:
+    """东财炸板池（涨停后开板）数量，用于计算炸板率。
+
+    炸板率 = 炸板数 / (涨停数 + 炸板数)，是情绪退潮的领先指标：
+    封板资金扛不住抛压 → 次日常伴随高位股补跌。失败返回空结构。
+    """
+    try:
+        resp = await fetch(
+            "https://push2ex.eastmoney.com/getTopicZBPool",
+            params={
+                "ut": "7eea3edcaed734bea9cbfc24409ed989", "dpt": "wz.ztzt",
+                "Pageindex": 0, "pagesize": 400, "sort": "fbt:asc",
+                "date": datetime.now().strftime("%Y%m%d"),
+            },
+            headers={"Referer": "https://quote.eastmoney.com/ztb/"},
+        )
+        data = (resp.json() or {}).get("data") or {}
+        pool = data.get("pool") or []
+        return {"count": data.get("tc") or len(pool), "rows": pool}
+    except Exception as exc:  # noqa: BLE001
+        log.debug("炸板池获取失败：%s", exc)
         return {"count": 0, "rows": []}
 
 
@@ -810,6 +854,19 @@ def _buy_score(profile: dict[str, Any], scores: dict[str, Any]) -> dict[str, Any
     if 1 <= lb <= 3: pts += 12   # 启动/发酵期最优
     elif 4 <= lb <= 5: pts += 6
     elif lb >= 6: pts -= 8       # 高位接力风险
+    # 价格位置：低位回踩加分、接近阶段高点减分（避免追高）
+    pos = (scores.get("position") or {}).get("position_pct")
+    if pos is not None:
+        if pos <= 25: pts += 8      # 回踩充分，上行空间大
+        elif pos <= 40: pts += 4
+        elif pos >= 90: pts -= 12   # 20 日高点附近，追高风险大
+        elif pos >= 75: pts -= 6
+    # 相对板块强度：跑赢板块均值的才是资金主攻标的
+    rel = (scores.get("relative") or {}).get("relative_chg")
+    if rel is not None:
+        if rel >= 3: pts += 8
+        elif rel >= 1: pts += 4
+        elif rel <= -3: pts -= 8
     # 估值时机：低估值是价值投资的最佳买点（资金面+技术面的补充维度）
     fin_score = scores.get("finance") or {}
     vm = fin_score.get("value_metrics") or {}
@@ -854,11 +911,14 @@ def _composite_score(scores: dict[str, Any], weights: dict[str, float]) -> float
     return max(0.0, min(float(valuecfg.BASE_TOTAL), round(total, 1)))
 
 
-def _signal(profile: dict[str, Any], total: float, buy: int, risk: int) -> str:
+def _signal(
+    profile: dict[str, Any], total: float, buy: int, risk: int,
+    value_metrics: "dict[str, Any] | None" = None,
+) -> str:
     """买卖信号：覆盖价值投资与情绪博弈两套语义：
         EXIT          高估 + 风险 → 建议清仓
         AVOID         风险 > 60    → 不参与
-        VALUE_BUY     PE<15 且基本面稳健 + 风险低 → 价值低估买入
+        VALUE_BUY     估值低估（PE/PEG 档位）+ 基本面稳健 + 风险低 → 价值低估买入
         QUALITY_HOLD  总分 80+ 且估值合理 → 长期持有
         BREAKOUT_BUY  趋势突破 + 量价齐升
         PULLBACK_BUY  启动期/分歧期低吸
@@ -870,24 +930,37 @@ def _signal(profile: dict[str, Any], total: float, buy: int, risk: int) -> str:
     vr = profile.get("volume_ratio") or 0
     lb = profile.get("lianban") or 0
     pe = profile.get("pe")
+    # 阈值按 BASE_TOTAL 的相对比例（维度增减后 BASE_TOTAL 会变，写死会漂移）：
+    #   hi ≈ 0.815（原 75/92）、top ≈ 0.87（原 80/92）、mid ≈ 0.65（原 60/92）
+    base = valuecfg.BASE_TOTAL or 92.0
+    hi_cut = base * 0.815
+    top_cut = base * 0.87
+    mid_cut = base * 0.65
     if risk > 60:
         return "AVOID"
-    # 价值投资维度（独立分支,不依赖 total>=75）：PE 深度低估 + 基本面及格 + 风险低
-    if pe is not None and 0 < pe < 15 and total >= 60 and risk < 30:
+    # 价值投资维度（独立分支,不依赖 total>=hi_cut）：
+    # 旧口径硬性要求 PE<15 过严，会漏掉「PE 30 但增速 40%」这类 PEG 极优标的。
+    # 改为按估值档位判定：PE 低估/深度低估 或 PEG 低估/极低估，配基本面与低风险。
+    vm = value_metrics or {}
+    pe_band = vm.get("pe_band")
+    peg_band = vm.get("peg_band")
+    value_ok = pe_band in ("深度低估", "低估") or peg_band in ("极低估", "低估")
+    # 连板梯队股走情绪线，不占用价值买点语义
+    if value_ok and total >= mid_cut and risk < 30 and lb == 0:
         return "VALUE_BUY"
     # EXIT：估值严重高估 + 风险中等 → 建议清仓
     if pe is not None and pe >= 100 and risk > 25:
         return "EXIT"
-    if total >= 75 and buy >= 70:
+    if total >= hi_cut and buy >= 70:
         # 长期持有：总分优秀 + 估值明确合理（PE 缺失时不走 QUALITY_HOLD,保持既有信号）
-        if total >= 80 and pe is not None and 0 < pe <= 30:
+        if total >= top_cut and pe is not None and 0 < pe <= 30:
             return "QUALITY_HOLD"
         if chg > 5 and vr >= 1.5 and lb >= 1:
             return "BREAKOUT_BUY"
         if 0 < chg <= 5 and vr < 1.2 and lb >= 1:
             return "PULLBACK_BUY"
         return "BUY"
-    if total >= 60:
+    if total >= mid_cut:
         return "WATCH"
     if chg < -4:
         return "REDUCE"
@@ -895,10 +968,16 @@ def _signal(profile: dict[str, Any], total: float, buy: int, risk: int) -> str:
 
 
 def _grade(total: float) -> tuple[str, str]:
-    if total >= 85: return "S", "核心机会池"
-    if total >= 78: return "A", "重点观察池"
-    if total >= 70: return "B", "待确认池"
-    if total >= 60: return "C", "观察池"
+    """分级：阈值按 BASE_TOTAL 的相对比例判定。
+
+    维度增减会改变 BASE_TOTAL（如新增相对强度/价格位置后 92 → 106），
+    写死绝对阈值会让分布整体漂移，故统一用占比口径，保证分级语义稳定。
+    """
+    ratio = total / valuecfg.BASE_TOTAL if valuecfg.BASE_TOTAL else 0.0
+    if ratio >= 0.92: return "S", "核心机会池"
+    if ratio >= 0.85: return "A", "重点观察池"
+    if ratio >= 0.76: return "B", "待确认池"
+    if ratio >= 0.65: return "C", "观察池"
     return "D", "淘汰"
 
 
@@ -915,18 +994,27 @@ def _completeness(profile: dict[str, Any]) -> int:
 async def _analyze_one(
     cand: dict[str, Any], board_strength: dict[str, float],
     weights: dict[str, float] | None = None,
+    board_avg: "dict[str, float] | None" = None,
+    extra: "dict[str, Any] | None" = None,
 ) -> dict[str, Any] | None:
-    profile = await _stock_profile(cand)
+    profile = await _stock_profile(cand, extra=extra)
     if profile.get("price") is None and not profile.get("financials"):
         return None  # 核心数据全缺，跳过
+    # 注入所属板块平均涨幅，供「个股相对板块强度」评分使用
+    b = profile.get("board") or ""
+    if board_avg and b:
+        profile["board_avg_chg"] = board_avg.get(b)
     fin_score = _financial_score(profile, board_strength=board_strength)
     board = _board_score(profile, board_strength)
     flow = _flow_score(profile)
     volume = _volume_score(profile)
     emotion = _emotion_score(profile)
+    relative = _relative_score(profile)
+    position = _position_score(profile)
     risk = _risk_score(profile, fin_score)
     scores = {"finance": fin_score, "board": board, "flow": flow,
-              "volume": volume, "emotion": emotion, "risk": risk}
+              "volume": volume, "emotion": emotion,
+              "relative": relative, "position": position, "risk": risk}
     # 综合评分：各维度加权（默认权重 1.0 即原始分）- 风险扣分
     w = weights or valuecfg.get_weights()
     total = _composite_score(scores, w)
@@ -934,7 +1022,8 @@ async def _analyze_one(
     trade = round(total * 0.7 + buy["score"] * 0.3, 1)
     grade, grade_name = _grade(total)
     completeness = _completeness(profile)
-    signal = _signal(profile, total, buy["score"], risk["score"])
+    signal = _signal(profile, total, buy["score"], risk["score"],
+                     fin_score.get("value_metrics") or {})
     # 投资建议 = 信号的中文含义,前端直接展示
     advice_map = {
         "EXIT": "建议清仓",
@@ -958,6 +1047,10 @@ async def _analyze_one(
         "scores": {k: v["score"] for k, v in scores.items()},
         "score_details": {k: v.get("detail", "") for k, v in scores.items()},
         "value_metrics": fin_score.get("value_metrics", {}),
+        # 新增：相对板块超额收益与 20 日价格位置（前端展示 + 买点提示）
+        "relative_chg": relative.get("relative_chg"),
+        "position_pct": position.get("position_pct"),
+        "board_avg_chg": profile.get("board_avg_chg"),
         "risk_notes": risk.get("notes", []),
         "total_score": total, "buy_score": buy["score"], "trade_score": trade,
         "grade": grade, "grade_name": grade_name,
@@ -967,6 +1060,31 @@ async def _analyze_one(
 
 
 # ------------------------------------------------------------------ 板块强度
+
+def _board_avg_change(
+    zt_rows: list[dict[str, Any]], hot_rows: list[dict[str, Any]]
+) -> dict[str, float]:
+    """各板块当日平均涨幅（涨停池去重后叠加热门榜），用于个股相对强度对比。
+
+    涨停池个股涨幅几乎都是 ±10%/±20%（封板），直接用会把板块均值顶到极端值；
+    因此优先取热门榜（连续分布）的均值，涨停池不足时再回退。
+    """
+    agg: dict[str, list[float]] = {}
+    for r in hot_rows:
+        b = r.get("board") or ""
+        c = r.get("change_pct")
+        if b and c is not None:
+            agg.setdefault(b, []).append(c)
+    for r in zt_rows:
+        b = r.get("board") or ""
+        c = r.get("change_pct")
+        if b and c is not None:
+            agg.setdefault(b, []).append(c)
+    return {
+        b: round(sum(v) / len(v), 2)
+        for b, v in agg.items() if v
+    }
+
 
 async def _fetch_board_strength(zt_rows: list[dict[str, Any]]) -> dict[str, float]:
     """板块强度：按涨停池中候选所属板块聚合（涨停数 + 平均涨幅）。
@@ -1002,29 +1120,40 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
 
     weights = valuecfg.get_weights()
 
-    # 第一层：市场环境
-    indices = await _fetch_index_quotes()
-    zt = await _fetch_zt_pool()
-    hot = await _fetch_hot_pool(20)
+    # 第一层：市场环境（指数 / 涨停池 / 炸板池 / 热门榜 并发）
+    indices, zt, zb, hot = await asyncio.gather(
+        _fetch_index_quotes(), _fetch_zt_pool(), _fetch_zb_pool(), _fetch_hot_pool(20)
+    )
     avg_chg = 0.0
     if hot:
         chgs = [h.get("change_pct") for h in hot if h.get("change_pct") is not None]
         avg_chg = sum(chgs) / len(chgs) if chgs else 0.0
-    market = _market_state(indices, zt.get("count") or 0, avg_chg)
+    market = _market_state(indices, zt.get("count") or 0, avg_chg,
+                           zb_count=zb.get("count") or 0)
 
     # 板块强度
     board_strength = await _fetch_board_strength(zt.get("rows") or [])
 
     # 候选池
     candidates = _merge_candidates(zt, hot)
-    log.info("价值选股：市场=%s(%s) 涨停=%s 候选=%s",
-             market["name"], market["state"], zt.get("count"), len(candidates))
+    log.info("价值选股：市场=%s(%s) 涨停=%s 炸板=%s(%.0f%%) 候选=%s",
+             market["name"], market["state"], zt.get("count"),
+             zb.get("count") or 0, market.get("zb_rate") or 0, len(candidates))
+
+    # 板块平均涨幅（涨停池 + 热门榜聚合），供「个股相对板块强度」评分
+    board_avg = _board_avg_change(zt.get("rows") or [], hot)
+
+    # 腾讯补充字段一次批量取完，避免逐只请求（40 只候选 40 次 → 1 次）
+    extra_map = await _tencent_extra_batch(candidates)
 
     # 逐股评分（并发，限流友好）
     sem = asyncio.Semaphore(8)
     async def _limited(c: dict[str, Any]):
         async with sem:
-            return await _analyze_one(c, board_strength, weights)
+            return await _analyze_one(
+                c, board_strength, weights,
+                board_avg=board_avg, extra=extra_map.get(f"{c['code']}.{c['market']}"),
+            )
     results = await asyncio.gather(*[_limited(c) for c in candidates])
     stocks = [r for r in results if r is not None]
     stocks.sort(key=lambda s: s["trade_score"], reverse=True)
@@ -1037,8 +1166,10 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     pool_core = sorted(
         [s for s in stocks if _fin(s) >= 25 and _risk(s) <= 40],
         key=lambda s: s["trade_score"], reverse=True)[:10]
+    # 趋势池阈值同样按 BASE_TOTAL 占比（约 60%），避免维度增减后分池漂移
+    trend_cut = round(valuecfg.BASE_TOTAL * 0.60, 1)
     pool_trend = sorted(
-        [s for s in stocks if s["total_score"] >= 55 and s["grade"] in ("A", "B", "C")],
+        [s for s in stocks if s["total_score"] >= trend_cut and s["grade"] in ("A", "B", "C")],
         key=lambda s: s["trade_score"], reverse=True)[:10]
     pool_emotion = sorted(
         [s for s in stocks if (s.get("lianban") or 0) >= 2],
@@ -1053,6 +1184,8 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
             **market,
             "indices": indices,
             "zt_count": zt.get("count") or 0,
+            "zb_count": zb.get("count") or 0,
+            "zb_rate": market.get("zb_rate") or 0,
             "candidate_count": len(candidates),
         },
         "board_top": [{"name": b, "strength": s} for b, s in board_top],

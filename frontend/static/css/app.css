@@ -4914,6 +4914,12 @@ a.hotspot-title:hover {
   margin-top: 4px;
   line-height: 1.4;
 }
+/* 相对板块超额收益：跑赢红、跑输绿（A 股惯例） */
+.val-num.up { color: var(--up); }
+.val-num.down { color: var(--down); }
+/* 20 日价格位置：低位=回踩充分（绿），高位=追高警戒（红） */
+.val-pos-low { color: var(--down); }
+.val-pos-high { color: var(--up); font-weight: 600; }
 .val-band {
   display: inline-block;
   padding: 2px 8px;

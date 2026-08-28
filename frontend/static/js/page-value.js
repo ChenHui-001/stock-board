@@ -129,6 +129,25 @@
     }
     tr.appendChild(tdPeg);
 
+    // 相对板块强度 + 20 日价格位置
+    const tdRel = U.el('td', 'val-rel');
+    if (U.isNum(s.relative_chg)) {
+      // A 股惯例：跑赢板块（正超额）用红色、跑输用绿色
+      const cls = s.relative_chg >= 0 ? 'up' : 'down';
+      tdRel.appendChild(U.el('div', 'val-num ' + cls,
+        (s.relative_chg >= 0 ? '+' : '') + s.relative_chg.toFixed(2) + '%'));
+      tdRel.appendChild(U.el('div', 'val-meta', 'vs 板块'));
+    } else {
+      tdRel.appendChild(U.el('div', 'val-meta', U.NBSP));
+    }
+    if (U.isNum(s.position_pct)) {
+      // 位置越低越安全（回踩充分），70% 以上标警戒色提示追高
+      const posCls = s.position_pct >= 75 ? 'val-pos-high' : (s.position_pct <= 30 ? 'val-pos-low' : '');
+      tdRel.appendChild(U.el('div', 'val-meta ' + posCls,
+        '位置 ' + Math.round(s.position_pct) + '%'));
+    }
+    tr.appendChild(tdRel);
+
     // 综合分（带 grade）
     const tdScore = U.el('td', 'val-score');
     if (s.total_score != null) {
@@ -166,7 +185,7 @@
     const thead = U.el('thead');
     const trh = U.el('tr');
     ['代码 · 名称', '现价 · 涨跌', 'PE · 估值', 'PB · 估值', 'PEG · 行业',
-     '综合分 · 分级', '建议 · 风险点'].forEach(function (h) {
+     '相对板块 · 位置', '综合分 · 分级', '建议 · 风险点'].forEach(function (h) {
       trh.appendChild(U.el('th', '', h));
     });
     thead.appendChild(trh);
@@ -287,8 +306,10 @@
     { key: 'finance', label: '基本面', desc: '成长 + 质量 + 估值 + 现金流 + 行业（共 50 分）' },
     { key: 'board',   label: '板块',   desc: '候选所属板块的涨停数与平均涨幅' },
     { key: 'flow',    label: '资金',   desc: '近 5/30 日主力资金方向与拐点' },
-    { key: 'volume',  label: '量价',   desc: '量比、换手、涨跌幅、相对强度' },
-    { key: 'emotion', label: '情绪',   desc: '连板梯队与高换手活跃度' }
+    { key: 'volume',  label: '量价',   desc: '量比、换手、涨跌幅' },
+    { key: 'emotion', label: '情绪',   desc: '连板梯队与高换手活跃度' },
+    { key: 'relative', label: '相对强度', desc: '个股涨幅 − 所属板块平均涨幅（强者恒强）' },
+    { key: 'position', label: '价格位置', desc: '当前价在近 20 日高低区间的百分位（低位加分）' }
   ];
 
   async function loadWeights() {

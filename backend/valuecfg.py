@@ -18,10 +18,11 @@ from typing import Any
 
 from . import storage
 
-FIELDS = ("finance", "board", "flow", "volume", "emotion")
+FIELDS = ("finance", "board", "flow", "volume", "emotion", "relative", "position")
 # 各维度满分（评分引擎口径，用于归一化权重与前端展示）
 DIM_MAXES: dict[str, float] = {"finance": 50.0, "board": 10.0, "flow": 12.0,
-                               "volume": 8.0, "emotion": 12.0}
+                               "volume": 8.0, "emotion": 12.0,
+                               "relative": 8.0, "position": 6.0}
 BASE_TOTAL = round(sum(DIM_MAXES.values()), 1)  # 92.0
 # 权重合法范围：过低会抹掉该维度信号，过高会盖过其他维度
 _MIN, _MAX = 0.2, 3.0

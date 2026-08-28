@@ -328,24 +328,30 @@ def test_value_screener() -> None:
     safe = vs._risk_score({"name": "正常股", "financials": [{"net_profit_yoy": 20.0, "debt_ratio": 30.0, "net_profit": 1e8}], "pe": 20, "change_pct": 1.0, "lianban": 0}, {})
     check("价值选股: 正常股风险低", safe["score"] <= 20, str(safe))
 
-    # 分级与信号
-    check("价值选股: S 级判定", vs._grade(88)[0] == "S")
-    check("价值选股: D 级淘汰", vs._grade(55)[0] == "D")
+    # 分级与信号（阈值按 BASE_TOTAL 相对比例，维度增减后不漂移）
+    _base = vs.valuecfg.BASE_TOTAL
+    check("价值选股: S 级判定", vs._grade(_base * 0.95)[0] == "S")
+    check("价值选股: D 级淘汰", vs._grade(_base * 0.5)[0] == "D")
     check("价值选股: 风险高信号 AVOID", vs._signal({"change_pct": 1, "volume_ratio": 1, "lianban": 0}, 80, 80, 70) == "AVOID")
-    check("价值选股: 突破买入信号", vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1}, 80, 75, 10) == "BREAKOUT_BUY")
+    check("价值选股: 突破买入信号",
+          vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1},
+                     _base * 0.85, 75, 10) == "BREAKOUT_BUY")
 
-    # 综合评分：归一化相对权重（默认全 1.0 = 原始分之和，总分恒在 0~92）
+    # 综合评分：归一化相对权重（默认全 1.0 = 原始分之和，总分恒在 0~BASE_TOTAL）
     def _sc(v): return {"score": v, "detail": ""}
     sc = {"finance": _sc(30), "board": _sc(5), "flow": _sc(6),
-          "volume": _sc(4), "emotion": _sc(6), "risk": _sc(10)}
-    w1 = {k: 1.0 for k in ("finance", "board", "flow", "volume", "emotion")}
+          "volume": _sc(4), "emotion": _sc(6), "relative": _sc(4),
+          "position": _sc(3), "risk": _sc(10)}
+    w1 = {k: 1.0 for k in vs.valuecfg.FIELDS}
     t1 = vs._composite_score(sc, w1)
-    check("价值选股: 默认权重=原始分之和", abs(t1 - 51) < 0.01, f"t1={t1}")
+    check("价值选股: 默认权重=原始分之和", abs(t1 - 58) < 0.01, f"t1={t1}")
     # 权重是相对看重：基本面强的股票调大 finance 权重总分上升，弱的下降（只改排序不单方向加分）
     strong = {"finance": _sc(45), "board": _sc(1), "flow": _sc(1),
-              "volume": _sc(1), "emotion": _sc(1), "risk": _sc(10)}
+              "volume": _sc(1), "emotion": _sc(1), "relative": _sc(1),
+              "position": _sc(1), "risk": _sc(10)}
     weak = {"finance": _sc(5), "board": _sc(9), "flow": _sc(11),
-            "volume": _sc(7), "emotion": _sc(11), "risk": _sc(10)}
+            "volume": _sc(7), "emotion": _sc(11), "relative": _sc(7),
+            "position": _sc(5), "risk": _sc(10)}
     w_fin2 = dict(w1); w_fin2["finance"] = 2.0
     up = vs._composite_score(strong, w_fin2) - vs._composite_score(strong, w1)
     down = vs._composite_score(weak, w_fin2) - vs._composite_score(weak, w1)
@@ -356,14 +362,18 @@ def test_value_screener() -> None:
     neutral["risk"] = _sc(10)
     t_neutral = vs._composite_score(neutral, w1)
     t_neutral2 = vs._composite_score(neutral, w_fin2)
-    check("价值选股: 同质股票权重不影响总分", abs(t_neutral - 46) < 0.01 and abs(t_neutral2 - 46) < 0.01,
+    half = _base / 2
+    check("价值选股: 同质股票权重不影响总分",
+          abs(t_neutral - half) < 0.01 and abs(t_neutral2 - half) < 0.01,
           f"t={t_neutral} t2={t_neutral2}")
-    # 总分恒在 0~92（不再因权重放大顶到 100 截断失真）
+    # 总分恒在 0~BASE_TOTAL（不再因权重放大顶到 100 截断失真）
     maxed = {k: _sc(v) for k, v in vs.valuecfg.DIM_MAXES.items()}
     maxed["risk"] = _sc(10)
-    for w_ in (w1, w_fin2, {"finance": 3.0, "board": 0.2, "flow": 3.0, "volume": 0.2, "emotion": 3.0}):
+    for w_ in (w1, w_fin2, {"finance": 3.0, "board": 0.2, "flow": 3.0,
+                            "volume": 0.2, "emotion": 3.0,
+                            "relative": 0.2, "position": 3.0}):
         t = vs._composite_score(maxed, w_)
-        check("价值选股: 总分在 0~92", 0 <= t <= 92, f"t={t}")
+        check("价值选股: 总分在 0~BASE_TOTAL", 0 <= t <= _base, f"t={t} base={_base}")
     sc_risk = dict(sc); sc_risk["risk"] = _sc(80)
     check("价值选股: 高风险扣分", vs._composite_score(sc_risk, w1) < vs._composite_score(sc, w1))
 
@@ -458,19 +468,32 @@ def test_value_screener() -> None:
           risk_ocf["score"] >= 10 and "OCF" in " ".join(risk_ocf["notes"]),
           str(risk_ocf))
 
-    # 新信号
-    check("价值选股: VALUE_BUY 信号（PE<15 + 基本面好 + 风险低）",
+    # 新信号（判定放宽为估值档位：PE 低估/深度低估 或 PEG 低估/极低估）
+    _sig_base = vs.valuecfg.BASE_TOTAL
+    check("价值选股: VALUE_BUY 信号（PE 深度低估 + 基本面好 + 风险低）",
           vs._signal({"pe": 10, "pb": 1.5, "change_pct": 1, "volume_ratio": 1,
-                      "lianban": 0}, 70, 65, 10) == "VALUE_BUY")
-    check("价值选股: QUALITY_HOLD 信号（总分80+ + PE<=30）",
+                      "lianban": 0}, 70, 65, 10,
+                     {"pe_band": "深度低估"}) == "VALUE_BUY")
+    # PE 30 但增速 40%：PEG 极优，旧口径（硬 PE<15）会漏掉，新口径应命中
+    check("价值选股: VALUE_BUY 覆盖 PEG 极优（PE 30 + 高增速）",
+          vs._signal({"pe": 30, "pb": 3, "change_pct": 1, "volume_ratio": 1,
+                      "lianban": 0}, 70, 65, 10,
+                     {"pe_band": "合理", "peg_band": "极低估"}) == "VALUE_BUY")
+    # 连板梯队股走情绪线，不占用价值买点语义
+    check("价值选股: VALUE_BUY 不覆盖连板股",
+          vs._signal({"pe": 10, "pb": 1.5, "change_pct": 1, "volume_ratio": 1,
+                      "lianban": 2}, 70, 65, 10,
+                     {"pe_band": "深度低估"}) != "VALUE_BUY")
+    check("价值选股: QUALITY_HOLD 信号（总分 top + PE<=30）",
           vs._signal({"pe": 25, "pb": 3, "change_pct": 0, "volume_ratio": 1,
-                      "lianban": 0}, 85, 70, 10) == "QUALITY_HOLD")
+                      "lianban": 0}, _sig_base * 0.9, 70, 10) == "QUALITY_HOLD")
     check("价值选股: EXIT 信号（PE>100 + 风险中等）",
           vs._signal({"pe": 150, "pb": 5, "change_pct": 1, "volume_ratio": 1,
                       "lianban": 0}, 60, 60, 30) == "EXIT")
     check("价值选股: VALUE_BUY 在风险>30 时不触发",
           vs._signal({"pe": 8, "pb": 1, "change_pct": 1, "volume_ratio": 1,
-                      "lianban": 0}, 70, 65, 40) != "VALUE_BUY")
+                      "lianban": 0}, 70, 65, 40,
+                     {"pe_band": "深度低估"}) != "VALUE_BUY")
     # 买点评分接入估值维度
     base = {"change_pct": 2.0, "volume_ratio": 1.0, "lianban": 0}
     deep_pe = dict(base); deep_pe["financials"] = []
@@ -491,8 +514,92 @@ def test_value_screener() -> None:
           deep_buy > fair_buy > over_buy,
           f"deep={deep_buy} fair={fair_buy} over={over_buy}")
     # 既有 BREAKOUT_BUY 行为不变（PE 缺失时仍走既有逻辑）
+    # 阈值已改为按 BASE_TOTAL 相对比例，这里的 total 需按占比给定（旧 80/92 ≈ 0.87）
     check("价值选股: BREAKOUT_BUY 信号（PE 缺失沿用旧逻辑）",
-          vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1}, 80, 75, 10) == "BREAKOUT_BUY")
+          vs._signal({"change_pct": 6, "volume_ratio": 2, "lianban": 1},
+                     vs.valuecfg.BASE_TOTAL * 0.87, 75, 10) == "BREAKOUT_BUY")
+
+    # ---- v3: 腾讯补充字段错位修复（回归测试，防止再改回错索引）----
+    # 构造 50+ 字段的原始数组：f[38]=换手 f[39]=PE f[43]=振幅
+    #                        f[45]=总市值 f[46]=PB f[49]=量比
+    raw = ["" for _ in range(60)]
+    raw[30] = "20260828161452"
+    raw[37] = "52882"      # 成交额（万）
+    raw[38] = "0.18"       # 换手率
+    raw[39] = "5.85"       # PE
+    raw[43] = "0.99"       # 振幅
+    raw[45] = "2997.53"    # 总市值（亿）
+    raw[46] = "0.40"       # PB
+    raw[49] = "0.72"       # 量比
+    parsed = vs._parse_tencent_extra(raw)
+    check("价值选股: PB 取 f[46]（非量比 f[49]）",
+          parsed.get("pb") == 0.40, str(parsed))
+    check("价值选股: 量比取 f[49]（非振幅 f[43]）",
+          parsed.get("volume_ratio") == 0.72, str(parsed))
+    check("价值选股: 振幅取 f[43]", parsed.get("amplitude") == 0.99, str(parsed))
+    check("价值选股: PE 取 f[39]", parsed.get("pe") == 5.85, str(parsed))
+    check("价值选股: 总市值取 f[45]", parsed.get("total_mv") == 2997.53, str(parsed))
+    check("价值选股: quote_time 由 f[30] 解析",
+          parsed.get("quote_time") == "16:14:52", str(parsed))
+    check("价值选股: 字段不足时返回空", vs._parse_tencent_extra(["", ""]) == {})
+
+    # ---- v3: 个股相对板块强度 ----
+    rel_strong = vs._relative_score({"change_pct": 9.0, "board_avg_chg": 2.0, "board": "光伏"})
+    rel_weak = vs._relative_score({"change_pct": -1.0, "board_avg_chg": 6.0, "board": "光伏"})
+    check("价值选股: 跑赢板块得分 > 跑输板块",
+          rel_strong["score"] > rel_weak["score"],
+          f"strong={rel_strong['score']} weak={rel_weak['score']}")
+    check("价值选股: 超额收益计算正确",
+          rel_strong.get("relative_chg") == 7.0, str(rel_strong))
+    check("价值选股: 板块数据缺失给中性分",
+          vs._relative_score({"change_pct": 3.0})["score"] == 4)
+
+    # ---- v3: 20 日价格位置 ----
+    kline = [{"date": f"2026-01-{i+1:02d}", "close": 10 + i * 0.5,
+              "high": 10 + i * 0.5, "low": 9.5 + i * 0.5, "volume": 100}
+             for i in range(20)]  # 区间 9.5 ~ 19.5
+    pos_low = vs._position_score({"price": 11.0, "kline": kline})   # 低位
+    pos_high = vs._position_score({"price": 19.0, "kline": kline})  # 高位
+    check("价值选股: 低位价格位置分 > 高位",
+          pos_low["score"] > pos_high["score"],
+          f"low={pos_low['score']} high={pos_high['score']}")
+    check("价值选股: 位置百分位计算正确",
+          abs((pos_low.get("position_pct") or 0) - 15.8) < 1.0, str(pos_low))
+    check("价值选股: K线不足给中性分",
+          vs._position_score({"price": 10, "kline": []})["score"] == 3)
+
+    # ---- v3: 买点评分接入价格位置与相对强度 ----
+    p2 = {"change_pct": 2.0, "volume_ratio": 1.0, "lianban": 0,
+          "flow": [{"date": "d" + str(i), "main": 1e7} for i in range(5)],
+          "board": "光伏"}
+    s_low = {"board": {"score": 3}, "risk": {"score": 10},
+             "position": {"score": 6, "position_pct": 15.0},
+             "relative": {"score": 7, "relative_chg": 4.0}}
+    s_high = {"board": {"score": 3}, "risk": {"score": 10},
+              "position": {"score": 1, "position_pct": 95.0},
+              "relative": {"score": 1, "relative_chg": -5.0}}
+    buy_low = vs._buy_score(p2, s_low)["score"]
+    buy_high = vs._buy_score(p2, s_high)["score"]
+    check("买点评分: 低位+跑赢板块 > 高位+跑输板块",
+          buy_low > buy_high, f"low={buy_low} high={buy_high}")
+
+    # ---- v3: 炸板率压制市场进攻等级 ----
+    idx = [{"code": "000001", "change_pct": 1.0}, {"code": "399006", "change_pct": 1.0}]
+    m_no_zb = vs._market_state(idx, 60, 1.0, zb_count=0)
+    m_zb = vs._market_state(idx, 60, 1.0, zb_count=60)  # 炸板率 50%
+    check("价值选股: 高炸板率压低进攻等级",
+          m_zb["attack"] < m_no_zb["attack"],
+          f"no_zb={m_no_zb['attack']} zb={m_zb['attack']}")
+    check("价值选股: 炸板率计算正确",
+          m_zb.get("zb_rate") == 50.0, str(m_zb))
+    check("价值选股: 极高炸板率标记退潮",
+          m_zb.get("emotion") == "退潮", str(m_zb))
+
+    # ---- v3: 板块平均涨幅聚合 ----
+    bavg = vs._board_avg_change(
+        [{"board": "光伏", "change_pct": 10.0}],
+        [{"board": "光伏", "change_pct": 4.0}, {"board": "光伏", "change_pct": 6.0}])
+    check("价值选股: 板块平均涨幅聚合", abs(bavg.get("光伏", 0) - 6.67) < 0.1, str(bavg))
 
 
 def test_value_screen_e2e() -> None:
