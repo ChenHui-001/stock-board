@@ -290,6 +290,14 @@ button {
   flex-shrink: 0;
 }
 
+.ds-metrics {
+  font-size: 11px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  margin-right: 8px;
+  font-family: var(--mono);
+}
+
 .ds-state.warn {
   color: var(--warn);
 }
