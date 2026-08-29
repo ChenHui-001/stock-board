@@ -3,14 +3,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-from datetime import datetime
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from . import analysis, hotspot as hotspot_mod, hotspot_ai, hotspot_search, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage, value_screener, valuecfg
+from .api_deps import (
+REPORT_SCHEMA_VERSION,
+_BLANK_LLM_REASON_RE,  # noqa: F401
+_ai_locks,  # noqa: F401  re-exported for tests `from backend import api; api._ai_locks`
+_ai_summary_from_report,  # noqa: F401
+_cache_fresh,
+_cached_brief_report,  # noqa: F401
+_cached_report,
+_fail,
+_mark_value_watched,  # noqa: F401
+_sentiment_stats,
+_with_ai_lock,
+)
 from .config import settings
 from .providers import ProviderError, registry
 from .utils import describe_exc, is_trading_now, normalize_code, resolve_market
@@ -51,137 +62,6 @@ class HotspotAnalyzeBody(BaseModel):
     title: str = Field(..., min_length=1, max_length=500, description="快讯标题")
     summary: str = Field("", max_length=2000, description="快讯摘要")
     source: str = Field("", max_length=100, description="来源媒体")
-
-
-def _fail(exc: Exception, hint: str) -> HTTPException:
-    log.warning("%s: %s", hint, exc)
-    return HTTPException(status_code=503, detail=f"{hint}：{exc}")
-
-
-def _sentiment_stats(items: list[dict[str, Any]]) -> dict[str, int]:
-    """统计资讯/研报情绪分布与评分（与规则引擎口径一致：利好 +5 / 利空 -5 封顶 ±15）。"""
-    bull = sum(1 for it in items if (it.get("interpretation") or {}).get("sentiment") == "利好")
-    bear = sum(1 for it in items if (it.get("interpretation") or {}).get("sentiment") == "利空")
-    neutral = len(items) - bull - bear
-    return {
-        "bull": bull,
-        "bear": bear,
-        "neutral": neutral,
-        "score": max(-15, min(15, bull * 5 - bear * 5)),
-    }
-
-
-# ------------------------------------------------------------------ AI 并发去重
-# 同一股票并发触发分析时只执行一次 LLM 调用，其余请求等待并复用其结果。
-class _AILock:
-    __slots__ = ("lock", "waiters")
-
-    def __init__(self) -> None:
-        self.lock = asyncio.Lock()
-        self.waiters = 0
-
-
-_ai_locks: dict[str, _AILock] = {}
-
-
-async def _with_ai_lock(code: str, work: Callable[[], Awaitable[Any]]) -> Any:
-    entry = _ai_locks.get(code)
-    if entry is None:
-        entry = _ai_locks[code] = _AILock()
-    entry.waiters += 1
-    try:
-        async with entry.lock:
-            return await work()
-    finally:
-        entry.waiters -= 1
-        if entry.waiters <= 0 and _ai_locks.get(code) is entry:
-            _ai_locks.pop(code, None)
-
-
-# AI 报告必含字段：升级后旧格式缓存缺新字段时自动作废（重新生成）
-_REQUIRED_REPORT_FIELDS = ("report_sentiment", "rating_dist", "reports_preview")
-# 历史缺陷缓存作废：旧版本在 LLM 超时类异常 str() 为空时，把「LLM 请求失败: 」
-# 这种空白尾巴写进 degraded_reason 并入库。升级后这些缓存仍能通过下方各项校验
-# 继续命中，用户会一直看到空白报错；检测到即作废重建（重新分析拿到新提示）。
-_BLANK_LLM_REASON_RE = re.compile(r"LLM 请求失败:\s*[）)]")
-# AI 报告结构版本：机会/风险条目升级为 {text,strength,hit,confidence} 后引入。
-# 带版本号的缓存直接命中，不带的一律作废重建——比逐条结构检查更可靠
-# （某些股票机会/风险恰好无盘口信号、全是字符串条目，也会被旧检查误判）。
-REPORT_SCHEMA_VERSION = 3
-
-
-def _cache_fresh(cached_at: str) -> bool:
-    """AI 报告快照是否仍新鲜（盘中 120s / 盘后 1h，可配 AI_CACHE_TTL_*）。"""
-    try:
-        ts = datetime.strptime(cached_at, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return False  # 解析失败（异常数据），宁可重建
-    age = (datetime.now() - ts).total_seconds()
-    ttl = settings.AI_CACHE_TTL_OPEN if is_trading_now() else settings.AI_CACHE_TTL_CLOSED
-    return age <= ttl
-
-
-def _cached_report(code: str) -> dict[str, Any] | None:
-    """当日缓存命中；但 LLM 配置变化、字段缺失或快照过旧时旧缓存作废。
-
-    时效：盘中超过 AI_CACHE_TTL_OPEN（默认 120s）即视为过期——点击 AI 分析
-    时拿到的都是最新实时数据，避免命中几小时前的旧快照；刚分析完短时间内
-    再点仍复用，防止对同一只股票重复打 LLM。盘后数据不变，放宽到 1 小时。
-    """
-    cached = storage.get_report(code)
-    if not cached:
-        return None
-    # 快照时效：缓存里存的报价/盘口是生成时刻的，过旧必须重建
-    if not _cache_fresh(cached.get("cached_at") or ""):
-        return None
-    meta = cached.get("meta") or {}
-    if meta.get("fingerprint") != llmcfg.fingerprint():
-        return None
-    # 评分权重变化后旧缓存作废（权重影响规则引擎结果）
-    if meta.get("score_fp") != scorecfg.fingerprint():
-        return None
-    if any(k not in cached for k in _REQUIRED_REPORT_FIELDS):
-        return None
-    # 嵌套结构校验：分析建议缺三维分面/盘口分项（规则引擎升级）时也作废
-    adv_scores = ((cached.get("analysis") or {}).get("advice") or {}).get("scores") or {}
-    if not adv_scores or "intraday" not in adv_scores:
-        return None
-    # 结构版本校验：旧格式缓存（无版本号或版本过旧）自动作废重建
-    if (meta.get("schema_version") or 0) < REPORT_SCHEMA_VERSION:
-        return None
-    # 空白降级原因作废：历史缺陷缓存（见 _BLANK_LLM_REASON_RE）命中即重建，
-    # 避免升级后用户仍看到「AI 服务调用失败（LLM 请求失败: ）」的无信息报错
-    if _BLANK_LLM_REASON_RE.search(meta.get("degraded_reason") or ""):
-        return None
-    # 首页批量轻量快照（is_brief）不能替代单股完整 AI 分析
-    if meta.get("is_brief"):
-        return None
-    return cached
-
-
-def _cached_brief_report(code: str) -> dict[str, Any] | None:
-    """读取缓存，允许命中批量生成的轻量快照（is_brief=True）。"""
-    cached = storage.get_report(code)
-    if not cached:
-        return None
-    if not _cache_fresh(cached.get("cached_at") or ""):
-        return None
-    meta = cached.get("meta") or {}
-    if meta.get("fingerprint") != llmcfg.fingerprint():
-        return None
-    if meta.get("score_fp") != scorecfg.fingerprint():
-        return None
-    # 轻量/完整快照都需要核心字段
-    if any(k not in cached for k in _REQUIRED_REPORT_FIELDS):
-        return None
-    adv_scores = ((cached.get("analysis") or {}).get("advice") or {}).get("scores") or {}
-    if not adv_scores or "intraday" not in adv_scores:
-        return None
-    if (meta.get("schema_version") or 0) < REPORT_SCHEMA_VERSION:
-        return None
-    if _BLANK_LLM_REASON_RE.search(meta.get("degraded_reason") or ""):
-        return None
-    return cached
 
 
 # ------------------------------------------------------------------ 数据源健康自检
@@ -472,18 +352,6 @@ async def value_screen(refresh: bool = Query(False)) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         raise _fail(exc, "价值选股运行失败") from exc
 
-def _mark_value_watched(result: dict[str, Any]) -> None:
-    """给选股结果补当前自选状态（pools 与 stocks 共用的股票对象）。"""
-    for s in (result.get("stocks") or []):
-        code = s.get("code")
-        if code:
-            s["watched"] = storage.is_watched(code)
-    for pool in (result.get("pools") or {}).values():
-        for s in pool or []:
-            code = s.get("code")
-            if code:
-                s["watched"] = storage.is_watched(code)
-
 
 @router.get("/value/weights")
 async def value_weights_get() -> dict[str, Any]:
@@ -665,38 +533,6 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
 
     # 每股票单飞：并发点击同一只股票只打一次 LLM/取数，其余请求等待复用
     return await _with_ai_lock(code, _work)
-
-
-def _ai_summary_from_report(report: dict[str, Any]) -> dict[str, Any]:
-    """从完整/轻量 AI 报告中提取首页所需的轻量摘要。"""
-    adv = (report.get("analysis") or {}).get("advice") or {}
-    meta = report.get("meta") or {}
-    return {
-        "code": report.get("code"),
-        "name": report.get("name"),
-        "board": report.get("board"),
-        "price": report.get("price"),
-        "change_pct": report.get("change_pct"),
-        "action": adv.get("action"),
-        "confidence": adv.get("confidence"),
-        "reason": adv.get("reason"),
-        "confidence_reason": adv.get("confidence_reason"),
-        "position": adv.get("position"),
-        "support": adv.get("support"),
-        "resistance": adv.get("resistance"),
-        "entry_zone": adv.get("entry_zone"),
-        "exit_zone": adv.get("exit_zone"),
-        "stop_loss": adv.get("stop_loss"),
-        "take_profit": adv.get("take_profit"),
-        "horizon": adv.get("horizon"),
-        "signal": adv.get("signal"),
-        "signal_note": adv.get("signal_note"),
-        "scores": adv.get("scores"),
-        "engine": meta.get("engine") or "rule",
-        "model": meta.get("model"),
-        "cached_at": report.get("cached_at") or meta.get("generated_at"),
-        "is_brief": report.get("is_brief") or meta.get("is_brief") or False,
-    }
 
 
 async def _generate_rule_summary(code: str) -> dict[str, Any]:
