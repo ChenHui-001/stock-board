@@ -6,3 +6,5 @@ tzdata==2024.2
 # Prometheus 指标：单源抓取请求/熔断/耗时等指标暴露。
 # prometheus_client 是 Prometheus 官方 Python 库，零外部依赖、轻量 (<500KB)。
 prometheus-client==0.21.1
+pytest==8.3.4
+pytest-asyncio==0.24.0
