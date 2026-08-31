@@ -24,6 +24,7 @@ DIM_MAXES: dict[str, float] = {"finance": 50.0, "board": 10.0, "flow": 12.0,
                                "volume": 8.0, "emotion": 12.0,
                                "relative": 8.0, "position": 6.0}
 BASE_TOTAL = round(sum(DIM_MAXES.values()), 1)  # 92.0
+BASE_TOTAL = round(sum(DIM_MAXES.values()), 1)  # 106.0 (finance 50 + board 10 + flow 12 + volume 8 + emotion 12 + relative 8 + position 6)
 # 权重合法范围：过低会抹掉该维度信号，过高会盖过其他维度
 _MIN, _MAX = 0.2, 3.0
 _KEY = "value_weights"
