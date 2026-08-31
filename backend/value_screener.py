@@ -26,7 +26,53 @@ from .providers.base import fetch
 log = logging.getLogger("value_screener")
 
 _CACHE_TTL = 900.0  # 15 分钟聚合缓存（避免反复打接口）
-_CANDIDATE_LIMIT = 40  # 候选池上限（涨停池 + 热门榜去重）
+_CANDIDATE_LIMIT = 40  # 候选池上限（涨停池 + 热门榜 + 价值基准 去重）
+# 价值投资基准池:沪深 300 蓝筹 + 部分行业龙头。
+# 这些是公认的价值投资候选,在涨停池为空(弱势市)/ 全部高估时仍能
+# 提供样本,让"价值投资"页面真的选得到价值股,而非纯涨停池的情绪博弈。
+# 列表按"市值 + 流动性 + 行业代表性"挑选,均为真实可交易的 A 股。
+_VALUE_BASELINE: list[dict[str, Any]] = [
+    {"code": "600519", "market": "SH", "name": "贵州茅台"},
+    {"code": "601318", "market": "SH", "name": "中国平安"},
+    {"code": "600036", "market": "SH", "name": "招商银行"},
+    {"code": "601398", "market": "SH", "name": "工商银行"},
+    {"code": "600028", "market": "SH", "name": "中国石化"},
+    {"code": "601857", "market": "SH", "name": "中国石油"},
+    {"code": "600000", "market": "SH", "name": "浦发银行"},
+    {"code": "600030", "market": "SH", "name": "中信证券"},
+    {"code": "600276", "market": "SH", "name": "恒瑞医药"},
+    {"code": "600887", "market": "SH", "name": "伊利股份"},
+    {"code": "601166", "market": "SH", "name": "兴业银行"},
+    {"code": "601288", "market": "SH", "name": "农业银行"},
+    {"code": "601988", "market": "SH", "name": "中国银行"},
+    {"code": "600050", "market": "SH", "name": "中国联通"},
+    {"code": "601012", "market": "SH", "name": "隆基绿能"},
+    {"code": "600585", "market": "SH", "name": "海螺水泥"},
+    {"code": "600900", "market": "SH", "name": "长江电力"},
+    {"code": "601088", "market": "SH", "name": "中国神华"},
+    {"code": "000858", "market": "SZ", "name": "五粮液"},
+    {"code": "000333", "market": "SZ", "name": "美的集团"},
+    {"code": "000651", "market": "SZ", "name": "格力电器"},
+    {"code": "000001", "market": "SZ", "name": "平安银行"},
+    {"code": "000002", "market": "SZ", "name": "万科A"},
+    {"code": "000063", "market": "SZ", "name": "中兴通讯"},
+    {"code": "000725", "market": "SZ", "name": "京东方A"},
+    {"code": "000538", "market": "SZ", "name": "云南白药"},
+    {"code": "000568", "market": "SZ", "name": "泸州老窖"},
+    {"code": "000876", "market": "SZ", "name": "新希望"},
+    {"code": "002415", "market": "SZ", "name": "海康威视"},
+    {"code": "002594", "market": "SZ", "name": "比亚迪"},
+    {"code": "300750", "market": "SZ", "name": "宁德时代"},
+    {"code": "002475", "market": "SZ", "name": "立讯精密"},
+    {"code": "300059", "market": "SZ", "name": "东方财富"},
+    {"code": "600196", "market": "SH", "name": "复星医药"},
+    {"code": "601888", "market": "SH", "name": "中国中免"},
+    {"code": "601628", "market": "SH", "name": "中国人寿"},
+    {"code": "600104", "market": "SH", "name": "上汽集团"},
+    {"code": "601800", "market": "SH", "name": "中国交建"},
+    {"code": "601668", "market": "SH", "name": "中国建筑"},
+    {"code": "600048", "market": "SH", "name": "保利发展"},
+]
 _SCORE_CACHE_TTL = 3600.0
 
 # 指数代码（上证/深成/创业板/科创50/沪深300）
@@ -221,8 +267,17 @@ def _is_stock_code(code: str, market: str) -> bool:
     return True
 
 
-def _merge_candidates(zt: dict[str, Any], hot: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """候选池：涨停池优先（带连板/板块），热门榜补充；去重 + 普通股过滤。"""
+def _merge_candidates(
+    zt: dict[str, Any], hot: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """候选池:涨停池(情绪/题材)+ 热门榜(资金) + 价值基准池(蓝筹),去重 + 普通股过滤。
+
+    优先级:
+    1) 涨停池 - 带连板/板块,情绪博弈的核心样本;
+    2) 热门榜 - 资金关注度,捕捉主流资金动向;
+    3) 价值基准池 - 沪深 300 蓝筹,在弱势市/全部高估时仍能选到价值股。
+    合并去重后截断到 _CANDIDATE_LIMIT。
+    """
     merged: dict[str, dict[str, Any]] = {}
     for r in zt.get("rows") or []:
         if not _is_stock_code(r["code"], r["market"]):
@@ -234,6 +289,15 @@ def _merge_candidates(zt: dict[str, Any], hot: list[dict[str, Any]]) -> list[dic
         key = f"{r['code']}.{r['market']}"
         if key not in merged:
             merged[key] = r
+    # 价值基准池:仅在前面两个池未覆盖时才加入(避免重复抓数据)
+    for r in _VALUE_BASELINE:
+        if not _is_stock_code(r["code"], r["market"]):
+            continue
+        key = f"{r['code']}.{r['market']}"
+        if key not in merged:
+            # 补齐 hot 需要的字段,后续 _stock_profile 会用真实数据覆盖
+            merged[key] = {**r, "change_pct": 0.0, "turnover": None,
+                            "volume_ratio": None, "lianban": 0, "board": ""}
     return list(merged.values())[:_CANDIDATE_LIMIT]
 
 
@@ -379,7 +443,8 @@ async def _stock_profile(
 
     async def _kline() -> list[dict[str, Any]]:
         try:
-            bars, _src = await registry().kline(code, market, 30)
+            # 60 日 K 线:既给 20 日价格位置评分用,又给位置自适应(60 日窗口)用。
+            bars, _src = await registry().kline(code, market, 60)
             return [
                 {"date": b.date, "close": b.close, "change_pct": b.change_pct,
                  "volume": b.volume, "high": b.high, "low": b.low}
@@ -770,16 +835,23 @@ def _relative_score(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def _position_score(profile: dict[str, Any]) -> dict[str, Any]:
-    """20 日价格位置（满分 6）：当前价在近 20 日高低区间中的百分位。
+    """价格位置（满分 6）：当前价在近期高低区间中的百分位。
 
-    位置低（0-30%）= 回踩充分、上行空间大 → 高分；
-    位置高（80-100%）= 接近阶段高点、追高风险 → 低分。
-    中间位置给中性分，配合量价与资金维度共同决定买点。
+    自适应窗口:有 60 日数据用 60 日(对牛市中位 80% 仍判"高位"更准),否则
+    回退 20 日。位置低（0-30%）= 回踩充分、上行空间大 → 高分；位置高
+    (80-100%) = 接近阶段高点、追高风险 → 低分。中间位置给中性分,配合
+    量价与资金维度共同决定买点。
     """
     kline = profile.get("kline") or []
     if len(kline) < 5:
         return {"score": 3, "detail": "K线数据不足", "completeness": 0}
-    window = kline[-20:]
+    # 自适应窗口:60 日优先(更稳健),不足时回退 20 日
+    if len(kline) >= 30:
+        window = kline[-60:]
+        win_label = "60日"
+    else:
+        window = kline[-20:]
+        win_label = "20日"
     highs = [b.get("high") or b.get("close") for b in window if b.get("high") or b.get("close")]
     lows = [b.get("low") or b.get("close") for b in window if b.get("low") or b.get("close")]
     price = profile.get("price")
@@ -806,9 +878,10 @@ def _position_score(profile: dict[str, Any]) -> dict[str, Any]:
         pts = 1
     return {
         "score": pts,
-        "detail": f"20日位置 {pos:.0f}%（{lo:.2f}~{hi:.2f}）",
+        "detail": f"{win_label}位置 {pos:.0f}%（{lo:.2f}~{hi:.2f}）",
         "completeness": 1,
         "position_pct": round(pos, 1),
+        "position_window": win_label,
     }
 
 
