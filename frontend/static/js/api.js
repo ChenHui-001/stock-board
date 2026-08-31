@@ -176,5 +176,31 @@
     },
     llmReset: function () {
       return request('/api/llm/reset', { method: 'POST' });
+    },
+
+    // ---- 策略回测 ----
+    backtestStrategies: function () {
+      return request('/api/backtest/strategies');
+    },
+    backtestRun: function (strategyId, params) {
+      return request('/api/backtest/run', {
+        method: 'POST',
+        body: { strategy_id: strategyId, params: params || {} }
+      });
+    },
+    backtestRunStatus: function (runId) {
+      return request('/api/backtest/run/' + encodeURIComponent(runId));
+    },
+    backtestRuns: function (limit) {
+      return request('/api/backtest/runs?limit=' + (limit || 10));
+    },
+    backtestDelete: function (runId) {
+      return request('/api/backtest/run/' + encodeURIComponent(runId), { method: 'DELETE' });
+    },
+    backtestTrades: function (runId, limit) {
+      return request('/api/backtest/run/' + encodeURIComponent(runId) + '/trades?limit=' + (limit || 200));
+    },
+    backtestReportUrl: function (runId) {
+      return '/api/backtest/run/' + encodeURIComponent(runId) + '/report';
     }
   };
