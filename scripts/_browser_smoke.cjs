@@ -22,7 +22,14 @@
   await page.screenshot({ path: shot, fullPage: false });
   process.stdout.write(JSON.stringify(checks, null, 2) + '\n');
   process.stdout.write('SCREENSHOT: ' + shot + '\n');
+  process.stdout.write('JSON_OUT: ' + (process.env.SMOKE_OUT || 'tests/_smoke_data/_browser_smoke.json') + '\n');
   process.stdout.write('ERRORS: ' + (errors.length ? errors.join('\n') : '(none)') + '\n');
+  // 同时写结果到 _smoke_data 供父进程读取（避开 Windows pipe 缓冲）
+  const fs = require('fs');
+  try {
+    const outPath = process.env.SMOKE_OUT || 'tests/_smoke_data/_browser_smoke.json';
+    fs.writeFileSync(outPath, JSON.stringify({ checks, errors, rc: errors.length ? 1 : 0 }));
+  } catch (e) { /* 忽略 */ }
   await browser.close();
   process.exit(errors.length ? 1 : 0);
 })().catch(e => { process.stderr.write('FATAL ' + e.message + '\n'); process.exit(2); });
