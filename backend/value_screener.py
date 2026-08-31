@@ -1062,10 +1062,12 @@ def _signal(
     pe = profile.get("pe")
     # 阈值按 BASE_TOTAL 的相对比例（维度增减后 BASE_TOTAL 会变，写死会漂移）：
     #   hi ≈ 0.815（原 75/92）、top ≈ 0.87（原 80/92）、mid ≈ 0.65（原 60/92）
-    base = valuecfg.BASE_TOTAL or 92.0
-    hi_cut = base * 0.815
-    top_cut = base * 0.87
-    mid_cut = base * 0.65
+    base = valuecfg.BASE_TOTAL or 106.0
+    # 阈值按 BASE_TOTAL 相对比例:hi=0.80(85)、top=0.85(90)、mid=0.60(64)
+    # 写死绝对值会随维度增减漂移,统一用占比口径,信号分布更顺滑。
+    hi_cut = base * 0.80
+    top_cut = base * 0.85
+    mid_cut = base * 0.60
     if risk > 60:
         return "AVOID"
     # 价值投资维度（独立分支,不依赖 total>=hi_cut）：
@@ -1104,10 +1106,12 @@ def _grade(total: float) -> tuple[str, str]:
     写死绝对阈值会让分布整体漂移，故统一用占比口径，保证分级语义稳定。
     """
     ratio = total / valuecfg.BASE_TOTAL if valuecfg.BASE_TOTAL else 0.0
-    if ratio >= 0.92: return "S", "核心机会池"
-    if ratio >= 0.85: return "A", "重点观察池"
-    if ratio >= 0.76: return "B", "待确认池"
-    if ratio >= 0.65: return "C", "观察池"
+    # S=核心(0.88,稀缺),A=优质(0.80,常见),B=待确认(0.72),
+    # C=观察(0.60),D=淘汰。
+    if ratio >= 0.88: return "S", "核心机会池"
+    if ratio >= 0.80: return "A", "重点观察池"
+    if ratio >= 0.72: return "B", "待确认池"
+    if ratio >= 0.60: return "C", "观察池"
     return "D", "淘汰"
 
 
@@ -1296,10 +1300,9 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     pool_core = sorted(
         [s for s in stocks if _fin(s) >= 25 and _risk(s) <= 40],
         key=lambda s: s["trade_score"], reverse=True)[:10]
-    # 趋势池阈值同样按 BASE_TOTAL 占比（约 60%），避免维度增减后分池漂移。
-    # 不再叠加 grade 过滤：grade 本身就由 total_score 推导，双重门槛（0.60 与
-    # grade C 的 0.65）会让 0.60~0.65 区间的股票被误筛掉，导致分池为空。
-    trend_cut = round(valuecfg.BASE_TOTAL * 0.60, 1)
+    # 趋势池阈值按 BASE_TOTAL 占比(0.55),低于 C 档(0.60),确保趋势池不为空。
+    # 双重门槛会让 0.55~0.60 区间的优质股被误筛掉,这里只用单层 total 过滤。
+    trend_cut = round(valuecfg.BASE_TOTAL * 0.55, 1)
     pool_trend = sorted(
         [s for s in stocks if s["total_score"] >= trend_cut],
         key=lambda s: s["trade_score"], reverse=True)[:10]

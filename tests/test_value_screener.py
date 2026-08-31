@@ -288,7 +288,97 @@ def test_value_screener() -> None:
         [{"board": "光伏", "change_pct": 4.0}, {"board": "光伏", "change_pct": 6.0}])
     assert (abs(bavg.get("光伏", 0) - 6.67) < 0.1), str(bavg)
 
+    # ---- v8: 价值投资优化回归 ----
+    from backend import value_screener as _vs
 
+    # (1) PE/PB 缺失时给中性分(不奖不罚),避免整个价值维度被清零
+    pe_missing = _vs._financial_score(
+        {"pe": None, "pb": None},
+        [{"net_profit_yoy": 15, "roe": 15, "gross_margin": 35, "debt_ratio": 30,
+          "revenue_yoy": 10}])
+    # 中性 5(PE 缺失) + 1(PB 缺失) = 6/18,加上 growth/quality/ocf/industry 子项
+    assert (pe_missing.get("value_metrics", {}).get("pe_band") == "数据缺失")
+    assert (pe_missing.get("value_metrics", {}).get("pb_band") == "数据缺失")
+    # 价值分至少有中性 6 分(5+1)
+    assert (pe_missing["score"] >= 6), f"PE missing score={pe_missing['score']}"
+
+    # (2) 亏损公司给 2/18 中性偏负分
+    pe_loss = _vs._financial_score(
+        {"pe": -5, "pb": 1.5},
+        [{"net_profit_yoy": 15, "roe": 15, "gross_margin": 35, "debt_ratio": 30,
+          "revenue_yoy": 10}])
+    assert (pe_loss.get("value_metrics", {}).get("pe_band") == "亏损")
+
+    # (3) 资金流按市值占比打分(小盘股 5% 占比 vs 大盘股 0.5% 占比)
+    flow_same = [{"date": f"d{i}", "main": 1e7} for i in range(10)]  # 1亿/日
+    # 小盘(100亿市值):10日累计10亿 → 10% 占比 → 应得高 flow 分
+    fp_small = _vs._flow_score({"flow": flow_same, "total_mv": 100})
+    # 大盘(1000亿市值):10日累计10亿 → 1% 占比 → 应得低 flow 分
+    fp_big = _vs._flow_score({"flow": flow_same, "total_mv": 1000})
+    assert (fp_small["score"] > fp_big["score"]), (
+        f"small={fp_small['score']} big={fp_big['score']}")
+
+    # 资金流无市值数据时退回绝对额(向后兼容)
+    fp_no_mv = _vs._flow_score({"flow": flow_same})
+    assert (fp_no_mv["score"] >= 0)
+
+    # (4) 连板 >= 6 时 emotion 不再奖分(与 buy/risk 方向一致)
+    e_low = _vs._emotion_score({"lianban": 3, "turnover": 10, "change_pct": 6})
+    e_high = _vs._emotion_score({"lianban": 6, "turnover": 10, "change_pct": 6})
+    # 连板 6 不应比连板 3 高(因为高位接盘不给情绪分)
+    assert (e_high["score"] <= e_low["score"]), (
+        f"low={e_low['score']} high={e_high['score']}")
+    assert ("高位接盘" in e_high["detail"])
+
+    # (5) 风险扣分非线性:risk=80 扣分应明显大于 risk=20
+    sc_base = {"finance": _sc(30), "board": _sc(5), "flow": _sc(6),
+               "volume": _sc(4), "emotion": _sc(6), "relative": _sc(4),
+               "position": _sc(3), "risk": _sc(20)}
+    sc_high = dict(sc_base); sc_high["risk"] = _sc(80)
+    sc_mid = dict(sc_base); sc_mid["risk"] = _sc(40)
+    t_base = _vs._composite_score(sc_base, w1)
+    t_mid = _vs._composite_score(sc_mid, w1)
+    t_high = _vs._composite_score(sc_high, w1)
+    drop_mid = t_base - t_mid
+    drop_high = t_base - t_high
+    # 高风险扣分应明显大于中风险(非线性)
+    assert (drop_high > drop_mid * 1.5), (
+        f"drop_mid={drop_mid:.1f} drop_high={drop_high:.1f}")
+    # risk=80 扣分应至少 25 分(对 AVOID 阈值有实质影响)
+    assert (drop_high >= 25), f"drop_high={drop_high:.1f}"
+
+    # (6) 位置评分自适应:60+ 日 K线使用 60 日窗口
+    kline60 = [{"date": f"d{i}", "close": 10 + i * 0.1, "high": 10 + i * 0.1,
+                "low": 9.5 + i * 0.1, "volume": 100} for i in range(60)]
+    p60 = _vs._position_score({"price": 14.0, "kline": kline60})
+    assert (p60.get("position_window") == "60日"), str(p60)
+    kline20 = [{"date": f"d{i}", "close": 10 + i * 0.1, "high": 10 + i * 0.1,
+                "low": 9.5 + i * 0.1, "volume": 100} for i in range(20)]
+    p20 = _vs._position_score({"price": 11.0, "kline": kline20})
+    assert (p20.get("position_window") == "20日"), str(p20)
+
+    # (7) 价值基准池存在且为蓝筹
+    from backend.value_screener import _VALUE_BASELINE
+    assert (len(_VALUE_BASELINE) >= 30), f"baseline={len(_VALUE_BASELINE)}"
+    codes = [s["code"] for s in _VALUE_BASELINE]
+    # 验证一些知名蓝筹
+    assert ("600519" in codes and "601318" in codes and "000858" in codes), codes
+
+    # (8) 分级阈值:0.88 是 S,0.85 是 A,0.65 是 C,0.5 是 D
+    _base = _vs.valuecfg.BASE_TOTAL
+    assert (_vs._grade(_base * 0.90)[0] == "S"), str(_vs._grade(_base * 0.90))
+    assert (_vs._grade(_base * 0.82)[0] == "A"), str(_vs._grade(_base * 0.82))
+    assert (_vs._grade(_base * 0.70)[0] == "B"), str(_vs._grade(_base * 0.70))
+    assert (_vs._grade(_base * 0.62)[0] == "C"), str(_vs._grade(_base * 0.62))
+    assert (_vs._grade(_base * 0.50)[0] == "D"), str(_vs._grade(_base * 0.50))
+
+    # (9) 信号阈值校准:hi_cut=0.80, top_cut=0.85
+    # total=0.82 * BASE + buy=85, risk=10 → BUY(总分达 0.80 阈值)
+    assert (_vs._signal({"change_pct": 1, "volume_ratio": 1, "lianban": 0},
+                        _base * 0.82, 85, 10) == "BUY"), "BUY threshold"
+    # total=0.86 * BASE + buy=85, risk=10 + pe 25 → QUALITY_HOLD
+    assert (_vs._signal({"pe": 25, "pb": 3, "change_pct": 1, "volume_ratio": 1,
+                        "lianban": 0}, _base * 0.86, 85, 10) == "QUALITY_HOLD"), "QH threshold"
 
 
 
