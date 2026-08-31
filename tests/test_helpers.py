@@ -130,18 +130,12 @@ def test_check_sources_backtest_struct() -> None:
     assert (all("confidence" in s for s in conf_rep["signals"])), str(conf_rep["signals"][:1])
 
     # 独立回测脚本同步置信度：confidence 分档与 render 报告含置信列（不触网）
-    import backtest_intraday as _bt
+    # 独立回测子包同步置信度分档 + 信号提取（不触网）
+    from backend.backtest import intraday_strategy as _bt
     assert (_bt.confidence(500)[0] == "高" and _bt.confidence(60)[0] == "中"
           and _bt.confidence(10)[0] == "低"), str((_bt.confidence(500), _bt.confidence(60), _bt.confidence(10)))
-    _bt_report = _bt.render({
-        "per_stock": [{"code": "600000"}],
-        "samples": [
-            {"score": 3, "next_ret": 1.2, "labels": [("高位强势", True)]},
-            {"score": -2, "next_ret": -0.5, "labels": [("低位下跌", False)]},
-            {"score": 0, "next_ret": 0.3, "labels": []},
-        ] * 40,
-    })
-    assert ("置信度:" in _bt_report and "置信" in _bt_report), _bt_report[:200]
+    assert _bt.signal_labels("当日高位强势，且放量上攻"), "信号关键词提取失败"
+    assert len(_bt.SIGNAL_RULES) == 13, "信号规则数量与生产口径不一致"
 
     # _summarize_backtest_safe 兜底：异常样本结构不抛错，返回 ok=False
     bad_summary = check_sources._summarize_backtest_safe(
