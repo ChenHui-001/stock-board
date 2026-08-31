@@ -181,8 +181,8 @@ def _volume_confirm(bars: list[dict[str, Any]]) -> tuple[int, str]:
 
 # ------------------------------------------------------------------ 盘口信号 + 可靠性
 
-# 盘口信号历史可靠性（基于两次离线回测：backtest_intraday.py 大样本日线回测
-# ≈1596 样本，backtest_compare.py 盘中 vs 收盘对照实验 14:00 真实快照 240 样本）：
+# 盘口信号历史可靠性（基于两次离线回测：backend/backtest 盘口信号策略 大样本日线回测
+# ≈1596 样本，盘中 vs 收盘对照实验 14:00 真实快照 240 样本）：
 #   strength: 高=两时点命中率≥52% 或大样本≥53%；中=样本不足但方向有逻辑支撑；
 #             低=命中率显著低于基线（如振幅收敛，撤销看多方向）。
 #   n:        支撑该判断的回测样本数（与 strength 同源，取自大样本/对照实验统计）；
@@ -217,7 +217,7 @@ SIGNAL_RELIABILITY: dict[str, dict[str, str]] = {
                 "note": "大样本与盘中命中率均超52%，清淡信号可靠"},
 }
 
-# 信号关键词匹配（与 backtest_intraday.SIGNAL_RULES 同口径，生产代码不依赖脚本）
+# 信号关键词匹配（与 backend/backtest/intraday_strategy.SIGNAL_RULES 同口径，生产代码不依赖回测模块）
 _SIGNAL_KEYS: list[tuple[str, tuple[str, ...]]] = [
     ("高位强势", ("当日高位", "强势")),
     ("冲高回落", ("高位", "回落")),
@@ -239,7 +239,7 @@ def _intraday_score(q: dict[str, Any]) -> tuple[int, str]:
     """当日盘口分项：盘中位置×涨跌方向 + 量比 + 振幅 + 换手对技术面的修正。
 
     返回 (加分, 说明)。盘口数据缺失时返回 (0, "")，不影响其它分项。
-    权重校准依据见 backtest_intraday.py 日线近似 + backtest_compare.py 盘中对照。
+    权重校准依据见 backend/backtest 盘口信号策略（日线近似）+ 盘中对照实验。
     """
     price, prev = q.get("price"), q.get("prev_close")
     hi, lo = q.get("high"), q.get("low")

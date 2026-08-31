@@ -176,30 +176,31 @@ async def check_news(p: Any) -> dict[str, Any]:
 async def check_backtest(sample: list[tuple[str, str | None]], days: int = 120) -> dict[str, Any]:
     """近期盘口信号命中率：用样本股的日线直接复用线上 _intraday_score。
 
-    与独立回测脚本 backtest_intraday.py 同一套逻辑（该脚本支持完整股票池/自测），
+    与回测模块 backend/backtest 的盘口信号策略同一套逻辑（完整股票池/CLI 自测在模块内），
     这里仅取样本股快速估算：总分分桶单调性 + 各信号命中率与校准建议。
     不触网失败时返回 ok=False，不影响整体自检。
     """
-    # 延迟导入：容器镜像可能未打包根目录回测脚本，缺失时回测段降级提示
-    # （不拖垮整个自检，其余数据源探测照常执行）
+    # 延迟导入：回测逻辑已收进 backend.backtest 独立子包，
+    # 导入失败时回测段降级提示（不拖垮整个自检，其余数据源探测照常执行）
     try:
-        from backtest_intraday import run_backtest, signal_labels  # noqa: F401
         import statistics
-    except ModuleNotFoundError as exc:
-        return {"ok": False, "error": f"回测脚本未打包进镜像（{_err_text(exc)}）", "degraded": True}
+        from backend.backtest import intraday_strategy
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"回测模块导入失败: {_err_text(exc)}", "degraded": True}
 
     codes = [c for c, _m in sample]
     try:
-        res = await asyncio.wait_for(run_backtest(codes, days), timeout=TIMEOUT + 10)
+        samples, per_stock = await asyncio.wait_for(
+            intraday_strategy.collect_samples(codes, days, lambda _p, _s: None),
+            timeout=TIMEOUT + 10)
+        res = {"samples": samples, "per_stock": per_stock}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"回测失败: {_err_text(exc)}"}
     return _summarize_backtest_safe(res, sample)
 
 
 def _confidence(n: int) -> dict[str, str]:
-    """按样本量标注统计置信度（与离线回测 backtest_intraday 同口径，共享实现）。"""
+    """按样本量标注统计置信度（与回测模块 intraday_strategy 同口径，共享实现）。"""
     return confidence(n)
 
 
@@ -253,7 +254,7 @@ def _summarize_backtest(res: dict[str, Any], sample: list[tuple[str, str | None]
         })
 
     # 各信号命中率
-    from backtest_intraday import SIGNAL_RULES  # noqa: E402
+    from backend.backtest.intraday_strategy import SIGNAL_RULES  # noqa: E402
     grouped: dict[str, list[dict]] = {}
     for s in samples:
         for label, bullish in s.get("labels", []):

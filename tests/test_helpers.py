@@ -19,28 +19,19 @@ def test_backtest_selftest() -> None:
     import sys as _sys
 
     root = Path(__file__).resolve().parent.parent
-    try:
-        proc = subprocess.run(
-            [_sys.executable, str(root / "backtest_intraday.py"), "--selftest"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-        )
-        detail = (proc.stdout or "")[-200:] + (proc.stderr or "")[-200:]
-    except subprocess.TimeoutExpired as exc:
-        assert (False), f"超时: {exc}"
-        return
-    assert (proc.returncode == 0), detail
-
-    # 盘中 vs 收盘对照实验脚本自测（不触网，合成日线+分钟线）
-    try:
-        proc2 = subprocess.run(
-            [_sys.executable, str(root / "backtest_compare.py"), "--selftest"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-        )
-        detail2 = (proc2.stdout or "")[-200:] + (proc2.stderr or "")[-200:]
-    except subprocess.TimeoutExpired as exc:
-        assert (False), f"超时: {exc}"
-        return
-    assert (proc2.returncode == 0), detail2
+    # 回测已收进 backend.backtest 独立子包，CLI：python -m backend.backtest --strategy X --selftest
+    for strategy in ("intraday_signal", "intraday_compare"):
+        try:
+            proc = subprocess.run(
+                [_sys.executable, "-m", "backend.backtest", "--strategy", strategy, "--selftest"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=30, cwd=root,
+            )
+            detail = (proc.stdout or "")[-200:] + (proc.stderr or "")[-200:]
+        except subprocess.TimeoutExpired as exc:
+            assert (False), f"{strategy} 自测超时: {exc}"
+            return
+        assert (proc.returncode == 0), f"{strategy}: {detail}"
 
 
 
@@ -63,15 +54,15 @@ def test_check_sources_backtest_struct() -> None:
     res = asyncio.run(_probe_empty())
     assert (res.get("ok") is False), str(res)
 
-    # 回测脚本缺失降级分支：镜像未打包 backtest_intraday.py 时返回 degraded
+    # 回测模块缺失降级分支：backend.backtest 不可导入时返回 degraded
     # 提示而非抛异常（容器运行时场景，不触网）
     orig_import = check_sources.__dict__.get("__bt_import_guard")
     import builtins
     real_import = builtins.__import__
 
     def _fake_import(name, *args, **kwargs):
-        if name == "backtest_intraday":
-            raise ModuleNotFoundError("No module named 'backtest_intraday'")
+        if name.startswith("backend.backtest"):
+            raise ModuleNotFoundError("No module named 'backend.backtest'")
         return real_import(name, *args, **kwargs)
 
     builtins.__import__ = _fake_import
@@ -79,7 +70,7 @@ def test_check_sources_backtest_struct() -> None:
         res_d = asyncio.run(check_sources.check_backtest([("600000", "SH")], days=5))
     finally:
         builtins.__import__ = real_import
-    assert (res_d.get("ok") is False and res_d.get("degraded") is True and "未打包" in res_d.get("error", "")), str(res_d)
+    assert (res_d.get("ok") is False and res_d.get("degraded") is True and "导入失败" in res_d.get("error", "")), str(res_d)
 
     # 渲染函数能处理含回测段/无回测段的报告
     text_with = check_sources.render_text({
