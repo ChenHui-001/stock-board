@@ -8,6 +8,7 @@ import { PageValue } from './page-value.js';
 import { PageHotspot } from './page-hotspot.js';
 import { PageHome } from './page-home.js';
 import { PageDetail } from './page-detail.js';
+import { PageBacktest } from './page-backtest.js';
 import { Settings } from './settings.js';
 
 
@@ -27,6 +28,7 @@ import { Settings } from './settings.js';
     if (parts[0] === 'search') return { route: 'search', param: null };
     if (parts[0] === 'hotspot') return { route: 'hotspot', param: null };
     if (parts[0] === 'value') return { route: 'value', param: null };
+    if (parts[0] === 'backtest') return { route: 'backtest', param: null };
     return { route: 'home', param: null };
   }
 
