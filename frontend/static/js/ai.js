@@ -1,6 +1,7 @@
-/* AI 分析弹窗（需求 6.x） */
-(function (global) {
-  'use strict';
+/* ai（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+import { API } from './api.js';
+
 
   const ACTION_CLASS = {
     '积极持仓/加仓': 'act-buy',
@@ -503,5 +504,4 @@
     if (e.key === 'Escape' && !root().hidden) close();
   });
 
-  global.AI = { open: open, close: close };
-})(window);
+  export const AI = { open: open, close: close };

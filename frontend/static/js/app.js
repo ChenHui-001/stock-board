@@ -1,6 +1,15 @@
-/* 路由与全局调度 */
-(function (global) {
-  'use strict';
+/* app（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+import { API } from './api.js';
+import { Charts } from './charts.js';
+import { AI } from './ai.js';
+import { PageSearch } from './page-search.js';
+import { PageValue } from './page-value.js';
+import { PageHotspot } from './page-hotspot.js';
+import { PageHome } from './page-home.js';
+import { PageDetail } from './page-detail.js';
+import { Settings } from './settings.js';
+
 
   const state = {
     route: null, param: null,
@@ -547,7 +556,7 @@
   }
 
   function bind() {
-    global.addEventListener('hashchange', route);
+    window.addEventListener('hashchange', route);
     document.getElementById('btn-refresh').addEventListener('click', manualRefresh);
     document.getElementById('btn-manage').addEventListener('click', function () {
       PageHome.toggleManage();
@@ -595,7 +604,7 @@
     setInterval(loadMeta, 60000);
   }
 
-  global.App = {
+  export const App = {
     setSession: setSession,
     getSession: function () { return state.session; },
     refreshMeta: loadMeta,
@@ -611,5 +620,5 @@
     }
   };
 
-  document.addEventListener('DOMContentLoaded', function () { App.start(); });
-})(window);
+// ESM defer 下 DOMContentLoaded 已触发 → 改同步执行
+App.start();

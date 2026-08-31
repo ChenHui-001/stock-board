@@ -1,6 +1,4 @@
-/* 通用工具函数：格式化、涨跌配色、DOM 助手、提示 */
-(function (global) {
-  'use strict';
+/* util（从 IIFE+global 转 ESM） */
 
   const NBSP = '--';
 
@@ -246,7 +244,7 @@
     }
   }
 
-  global.U = {
+  export const U = {
     NBSP: NBSP,
     isNum: isNum,
     price: price,
@@ -266,5 +264,3 @@
     confirmAt: confirmAt,
     copyText: copyText
   };
-})(window);
-

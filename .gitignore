@@ -38,3 +38,13 @@ watcher_stderr.log
 tmp/
 uvicorn_test.log
 uvicorn_test_err.log
+
+# === 前端：Vite + npm ===
+node_modules/
+frontend/static/dist/
+frontend/static/public/
+frontend/static/js/_backup_iiife/
+
+# === 测试运行产物 ===
+tests/_smoke_data/
+tests/_node_import.mjs

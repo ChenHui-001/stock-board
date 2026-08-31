@@ -1,9 +1,8 @@
-/* 个股资讯 / 券商研报弹窗：页签切换
- * - 资讯：近一个月相关新闻，逐条附 AI 解读（LLM / 规则引擎）
- * - 研报：同花顺券商研报，展示标题/机构/研究员/评级/日期
- */
-(function (global) {
-  'use strict';
+/* news（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+import { API } from './api.js';
+import { AI } from './ai.js';
+
 
   const SENTIMENT_CLASS = {
     '利好': 'sent-bull',
@@ -399,5 +398,4 @@
     if (e.key === 'Escape' && !root().hidden) close();
   });
 
-  global.News = { open: open, close: close };
-})(window);
+  export const News = { open: open, close: close };

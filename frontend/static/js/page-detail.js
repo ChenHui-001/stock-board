@@ -1,6 +1,10 @@
-/* 股票详情页：基础行情 / 均线 / 30日两融 / 30日资金流向 / 当前状态（需求 5.x） */
-(function (global) {
-  'use strict';
+/* page-detail（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+import { API } from './api.js';
+import { Charts } from './charts.js';
+import { AI } from './ai.js';
+import { App } from './app.js';
+
 
   // seq：请求代号。每次 mount 自增，异步响应回来时若代号已变，说明用户已切到
   // 别的股票，这份响应必须丢弃——数据源被频控时详情要几秒才回，快速切换 A→B
@@ -881,13 +885,8 @@
     }
   }
 
-  global.PageDetail = {
+  export const PageDetail = {
     mount: mount,
     refresh: function () { return load(true); },
     tick: tick
   };
-})(window);
-
-
-
-

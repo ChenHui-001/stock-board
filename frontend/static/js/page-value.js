@@ -1,7 +1,7 @@
-/* 价值投资菜单页：候选池 + 估值标签 + 投资建议
-   渲染 /api/value/screen 返回的 pools.core/trend/emotion 三个分层池。 */
-(function (global) {
-  'use strict';
+/* page-value（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+import { API } from './api.js';
+
 
   // ---- 池子语义说明（核心 / 趋势 / 情绪各看什么） ----
   const POOL_DESC = {
@@ -497,7 +497,7 @@
     }
   }
 
-  global.PageValue = {
+  export const PageValue = {
     mount: function () {
       viewEl = document.getElementById('view');
       load();
@@ -513,4 +513,3 @@
       if (state.error) U.toast('价值投资数据加载异常: ' + state.error, 'warn');
     }
   };
-})(window);

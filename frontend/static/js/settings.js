@@ -1,6 +1,9 @@
-/* AI 模型配置弹窗（顶栏 ⚙ 入口）：支持多套模型档案 + 自动故障转移 */
-(function (global) {
-  'use strict';
+/* settings（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+import { API } from './api.js';
+import { AI } from './ai.js';
+import { App } from './app.js';
+
 
   const state = {
     vendors: [],
@@ -422,7 +425,7 @@
       state.profiles = res.profiles || [];
       renderAll();
       U.toast(res.engine === 'llm' ? '配置已保存，AI 分析已切换到大模型' : '配置已保存', 'ok');
-      if (global.App && App.refreshMeta) App.refreshMeta();
+      if (window.App && App.refreshMeta) App.refreshMeta();
       close();
     } catch (err) {
       U.toast('保存失败：' + err.message, 'err');
@@ -438,7 +441,7 @@
       state.profiles = cfg.profiles || [];
       renderAll();
       U.toast('已恢复默认（环境变量）', 'ok');
-      if (global.App && App.refreshMeta) App.refreshMeta();
+      if (window.App && App.refreshMeta) App.refreshMeta();
     } catch (err) {
       U.toast('恢复失败：' + err.message, 'err');
     }
@@ -504,11 +507,11 @@
     });
   }
 
-  global.Settings = {
+  export const Settings = {
     open: open,
     close: close,
     bind: bind
   };
 
-  document.addEventListener('DOMContentLoaded', function () { Settings.bind(); });
-})(window);
+// ESM defer 下 DOMContentLoaded 已触发 → 改同步执行
+Settings.bind();

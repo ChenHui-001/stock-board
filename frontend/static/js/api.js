@@ -1,6 +1,4 @@
-/* 后端 API 封装 */
-(function (global) {
-  'use strict';
+/* api（从 IIFE+global 转 ESM） */
 
   // 请求超时（毫秒）：普通取数接口用这个默认值
   const REQUEST_TIMEOUT = 90000;
@@ -46,7 +44,7 @@
     return data;
   }
 
-  global.API = {
+  export const API = {
     meta: function () {
       return request('/api/meta');
     },
@@ -180,4 +178,3 @@
       return request('/api/llm/reset', { method: 'POST' });
     }
   };
-})(window);

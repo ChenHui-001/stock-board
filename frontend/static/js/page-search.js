@@ -1,6 +1,7 @@
-/* 查询页：搜索添加自选 + 热门推荐（需求 4.x） */
-(function (global) {
-  'use strict';
+/* page-search（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+import { API } from './api.js';
+
 
   const state = { keyword: '', items: [], hot: null, loading: false };
 
@@ -224,7 +225,7 @@
     return card;
   }
 
-  global.PageSearch = {
+  export const PageSearch = {
     mount: function () {
       state.hot = null;
       render();
@@ -236,4 +237,3 @@
     },
     tick: function () { /* 查询页不做自动刷新 */ }
   };
-})(window);

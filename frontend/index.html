@@ -106,18 +106,9 @@
 
   <div class="toast-root" id="toast-root"></div>
 
-  <script src="/static/vendor/echarts.min.js"></script>
-  <script src="/static/js/util.js"></script>
-  <script src="/static/js/api.js"></script>
-  <script src="/static/js/charts.js"></script>
-  <script src="/static/js/page-home.js"></script>
-  <script src="/static/js/page-search.js"></script>
-  <script src="/static/js/page-hotspot.js"></script>
-  <script src="/static/js/page-value.js"></script>
-  <script src="/static/js/page-detail.js"></script>
-  <script src="/static/js/ai.js"></script>
-  <script src="/static/js/news.js"></script>
-  <script src="/static/js/settings.js"></script>
-  <script src="/static/js/app.js"></script>
+  <!-- 普通脚本：echarts 作为 window.echarts 全局（Vite 从 publicDir 拷贝原样） -->
+  <script src="/vendor/echarts.min.js"></script>
+  <!-- 单入口 ESM：app.js 内部 import 所有依赖模块；main.py 注入 ?v= 强刷 -->
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

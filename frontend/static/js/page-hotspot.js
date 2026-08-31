@@ -1,6 +1,8 @@
-/* 热点追踪页：近 30 分钟市场热点（同花顺/东方财富/新浪财经 7x24 快讯聚合） */
-(function (global) {
-  'use strict';
+/* page-hotspot（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+import { API } from './api.js';
+import { AI } from './ai.js';
+
 
   const state = {
     items: [],
@@ -827,7 +829,7 @@
     }
   }
 
-  global.PageHotspot = {
+  export const PageHotspot = {
     mount: function () {
       state.filter = 'all';
       state.sector = null;
@@ -851,4 +853,3 @@
       load(false);
     }
   };
-})(window);

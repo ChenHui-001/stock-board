@@ -1,6 +1,10 @@
-/* 首页：自选股看板（需求 3.x） */
-(function (global) {
-  'use strict';
+/* page-home（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+import { API } from './api.js';
+import { AI } from './ai.js';
+import { News } from './news.js';
+import { App } from './app.js';
+
 
   const state = {
     items: [],
@@ -696,7 +700,7 @@
     });
   }
 
-  global.PageHome = {
+  export const PageHome = {
     mount: function () {
       state.sortKey = null;
       state.manage = false;
@@ -722,4 +726,3 @@
       render();
     }
   };
-})(window);

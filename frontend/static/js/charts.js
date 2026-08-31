@@ -1,6 +1,6 @@
-/* ECharts 图表封装：均线走势 / 资金流向 / 两融趋势（需求 7.1） */
-(function (global) {
-  'use strict';
+/* charts（从 IIFE+global 转 ESM） */
+import { U } from './util.js';
+
 
   const UP = '#f5465d';
   const DOWN = '#17b26a';
@@ -51,16 +51,16 @@
 
   function mount(dom, option, group) {
     if (!dom) return null;
-    if (!global.echarts) {
+    if (!window.echarts) {
       dom.innerHTML = '<div class="loading-block">图表库未加载，无法渲染曲线</div>';
       return null;
     }
-    const existing = global.echarts.getInstanceByDom(dom);
+    const existing = window.echarts.getInstanceByDom(dom);
     if (existing) existing.dispose();
     const opts = { renderer: 'canvas' };
     // echarts.connect: 同 group 的图表自动联动 (tooltip / axisPointer / dataZoom)
     if (group) opts.group = group;
-    const chart = global.echarts.init(dom, null, opts);
+    const chart = window.echarts.init(dom, null, opts);
     chart.setOption(option);
     instances.push(chart);
     return chart;
@@ -69,8 +69,8 @@
   // connect(): 为后续创建的同 group 图表手动调用 echarts.connect
   // (适用于事后注入的场景; mount 传入 group 时也会自动连接)
   function connect(group) {
-    if (!global.echarts || !group) return;
-    try { global.echarts.connect(group); } catch (e) { /* ignore */ }
+    if (!window.echarts || !group) return;
+    try { window.echarts.connect(group); } catch (e) { /* ignore */ }
   }
 
   function disposeAll() {
@@ -360,7 +360,7 @@
     return mount(dom, option, group);
   }
 
-  global.Charts = {
+  export const Charts = {
     maChart: maChart,
     flowChart: flowChart,
     marginChart: marginChart,
@@ -370,5 +370,4 @@
     resizeAll: resizeAll
   };
 
-  global.addEventListener('resize', U.debounce(resizeAll, 180));
-})(window);
+  window.addEventListener('resize', U.debounce(resizeAll, 180));
