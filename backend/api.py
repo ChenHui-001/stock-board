@@ -29,6 +29,10 @@ from .utils import describe_exc, is_trading_now, normalize_code, resolve_market
 log = logging.getLogger("api")
 router = APIRouter(prefix="/api")
 
+# 回测独立子模块：路由在 api_backtest.py，挂到主 router 上（prefix 已含 /api）
+from .api_backtest import router as backtest_router  # noqa: E402
+router.include_router(backtest_router)
+
 
 class AddWatchBody(BaseModel):
     code: str = Field(..., description="6 位股票代码")
