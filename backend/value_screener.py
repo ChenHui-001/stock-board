@@ -490,7 +490,10 @@ def _financial_score(
             quality_pts -= 2
     quality_pts = max(0, min(10, quality_pts))
 
-    # -------- 估值 18:价值投资核心维度（PE + PB + PEG）
+    # -------- 估值 18:价值投资核心维度（PE + PB + PEG）----
+    # 数据缺失时给中性分（不奖不罚），避免因数据缺失而把整个价值维度清零。
+    # 旧实现是 PE/PB 任一缺失 → 该子项 0 分,导致价值维度永远 < 6 分,
+    # 同时 VALUE_BUY 走不到(pe_band=None 不在低估档位),与页面"价值投资"定位冲突。
     value_pts = 0
     metrics: dict[str, Any] = {}
     pe = profile.get("pe")
@@ -530,9 +533,14 @@ def _financial_score(
         else:
             metrics["peg_band"] = "增速缺失"
     elif pe is not None and pe <= 0:
+        # 亏损公司 PE 失效,给 2/18 中性偏负分(避免与正利润公司同等)
+        value_pts += 2
         metrics["pe_band"] = "亏损"
     else:
-        metrics["pe_band"] = None
+        # PE 数据缺失(腾讯接口偶发空字段)→ 5/18 中性分
+        # 不奖不罚,仅阻止整个价值维度被清零
+        value_pts += 5
+        metrics["pe_band"] = "数据缺失"
 
     pb = profile.get("pb")
     if pb is not None and pb > 0:
@@ -551,7 +559,9 @@ def _financial_score(
         else:
             metrics["pb_band"] = "高估"
     else:
-        metrics["pb_band"] = None
+        # PB 数据缺失 → 1/18 中性分(PB 信息含量低于 PE)
+        value_pts += 1
+        metrics["pb_band"] = "数据缺失"
 
     # 连续正增长 + 估值合理/低估：再给点奖励（基本面+价值双正向）
     np_trend = [f.get("net_profit_yoy") for f in fin[:3] if f.get("net_profit_yoy") is not None]
@@ -617,6 +627,10 @@ def _flow_score(profile: dict[str, Any]) -> dict[str, Any]:
 
     重点找「30 日流出 → 20 日流出 → 10 日企稳 → 5/3/1 日流入」的资金拐点，
     禁止只看 30 日累计。
+
+    资金信号强度按「流通市值占比」归一化：5 亿流入对 100 亿市值是 5%（强信号），
+    对 1000 亿市值是 0.5%（弱信号）。有市值数据时按占比打分；市值缺失时退回
+    绝对额（保持向后兼容）。
     """
     flow = profile.get("flow") or []
     if len(flow) < 2:
@@ -628,17 +642,42 @@ def _flow_score(profile: dict[str, Any]) -> dict[str, Any]:
     main_30 = sum(d["main"] for d in flow)
 
     pts = 0
-    if main_1 > 0: pts += 3
-    elif main_1 < 0: pts -= 2
-    if main_3 > 0: pts += 3
-    elif main_3 < 0: pts -= 2
-    if main_5 > 0: pts += 2
-    if main_30 > 0: pts += 1
-    # 资金拐点：30 日流出但 5 日转流入 → 额外加分
-    if main_30 < 0 and main_5 > 0:
-        pts += 3
+    total_mv = profile.get("total_mv")  # 总市值（亿）
+    # 按市值占比打分（小数,如 0.05 = 5%）
+    if total_mv and total_mv > 0:
+        r1 = main_1 / (total_mv * 1e8)
+        r3 = main_3 / (total_mv * 1e8)
+        r5 = main_5 / (total_mv * 1e8)
+        r30 = main_30 / (total_mv * 1e8)
+        # 阈值：1 日 ±0.1%、3 日 ±0.3%、5 日 0.5%、30 日 1%
+        if r1 > 0.001: pts += 3
+        elif r1 < -0.001: pts -= 2
+        if r3 > 0.003: pts += 3
+        elif r3 < -0.003: pts -= 2
+        if r5 > 0.005: pts += 2
+        if r30 > 0.01: pts += 1
+        # 资金拐点：30 日占比流出但 5 日占比流入 → 额外加分
+        if r30 < -0.005 and r5 > 0.003:
+            pts += 3
+        detail = (
+            f"1日{r1*100:+.2f}% 3日{r3*100:+.2f}% 5日{r5*100:+.2f}% "
+            f"30日{r30*100:+.2f}%(占市值{int(total_mv)}亿)"
+        )
+    else:
+        # 市值缺失 → 退回绝对额打分(兼容老数据)
+        if main_1 > 0: pts += 3
+        elif main_1 < 0: pts -= 2
+        if main_3 > 0: pts += 3
+        elif main_3 < 0: pts -= 2
+        if main_5 > 0: pts += 2
+        if main_30 > 0: pts += 1
+        if main_30 < 0 and main_5 > 0:
+            pts += 3
+        detail = (
+            f"1日{main_1/1e8:.1f}亿 3日{main_3/1e8:.1f}亿 "
+            f"5日{main_5/1e8:.1f}亿 30日{main_30/1e8:.1f}亿"
+        )
     pts = max(0, min(12, pts))
-    detail = f"1日{main_1/1e8:.1f}亿 3日{main_3/1e8:.1f}亿 5日{main_5/1e8:.1f}亿 30日{main_30/1e8:.1f}亿"
     return {"score": pts, "detail": detail, "completeness": 1}
 
 
