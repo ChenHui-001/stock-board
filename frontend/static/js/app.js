@@ -111,6 +111,7 @@ import { Settings } from './settings.js';
   // 给详情页返回按钮用的标签:从哪儿来回哪儿去,无来源时显示「首页」。
   const ROUTE_BACK_LABEL = {
     home: '首页', value: '价值投资', hotspot: '热点追踪', search: '查询',
+    backtest: '策略回测',
   };
   function backLabel() {
     const r = (state.fromRoute && state.fromRoute !== 'stock') ? state.fromRoute : 'home';
