@@ -37,6 +37,7 @@ import { Settings } from './settings.js';
     if (state.route === 'stock') return PageDetail;
     if (state.route === 'hotspot') return PageHotspot;
     if (state.route === 'value') return PageValue;
+    if (state.route === 'backtest') return PageBacktest;
     return PageHome;
   }
 
@@ -85,6 +86,8 @@ import { Settings } from './settings.js';
       PageHotspot.mount();
     } else if (state.route === 'value') {
       PageValue.mount();
+    } else if (state.route === 'backtest') {
+      PageBacktest.mount();
     } else {
       await PageHome.mount();
     }
