@@ -6,7 +6,8 @@
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.on('requestfailed', r => errors.push('requestfailed: ' + r.url() + ' ' + (r.failure()?.errorText || '')));
-  await page.goto('http://127.0.0.1:18765/', { waitUntil: 'networkidle', timeout: 30000 });
+  const baseUrl = process.env.SMOKE_URL || 'http://127.0.0.1:18765';
+  await page.goto(baseUrl + '/', { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(1500);
   const checks = {
     title: await page.title(),
@@ -19,9 +20,9 @@
   };
   const shot = 'tests/_smoke_data/frontend_smoke.png';
   await page.screenshot({ path: shot, fullPage: false });
-  console.log(JSON.stringify(checks, null, 2));
-  console.log('SCREENSHOT:', shot);
-  console.log('ERRORS:', errors.length ? errors.join('\n') : '(none)');
+  process.stdout.write(JSON.stringify(checks, null, 2) + '\n');
+  process.stdout.write('SCREENSHOT: ' + shot + '\n');
+  process.stdout.write('ERRORS: ' + (errors.length ? errors.join('\n') : '(none)') + '\n');
   await browser.close();
   process.exit(errors.length ? 1 : 0);
-})().catch(e => { console.error('FATAL', e.message); process.exit(2); });
+})().catch(e => { process.stderr.write('FATAL ' + e.message + '\n'); process.exit(2); });
