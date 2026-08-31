@@ -310,10 +310,12 @@ def test_value_screener() -> None:
     assert (pe_loss.get("value_metrics", {}).get("pe_band") == "亏损")
 
     # (3) 资金流按市值占比打分(小盘股 5% 占比 vs 大盘股 0.5% 占比)
-    flow_same = [{"date": f"d{i}", "main": 1e7} for i in range(10)]  # 1亿/日
-    # 小盘(100亿市值):10日累计10亿 → 10% 占比 → 应得高 flow 分
+    # 用 2亿/日,小盘100亿市值 → 1日 0.2%(>0.1%)、3日 0.6%、5日 1%、10日 2%
+    # 大盘1000亿市值 → 1日 0.02%、3日 0.06%、均不达阈值
+    flow_same = [{"date": f"d{i}", "main": 2e7} for i in range(10)]  # 2亿/日
+    # 小盘(100亿市值):10日累计20亿 → 20% 占比 → 应得高 flow 分
     fp_small = _vs._flow_score({"flow": flow_same, "total_mv": 100})
-    # 大盘(1000亿市值):10日累计10亿 → 1% 占比 → 应得低 flow 分
+    # 大盘(1000亿市值):10日累计20亿 → 2% 占比 → 应得低 flow 分
     fp_big = _vs._flow_score({"flow": flow_same, "total_mv": 1000})
     assert (fp_small["score"] > fp_big["score"]), (
         f"small={fp_small['score']} big={fp_big['score']}")
@@ -364,12 +366,12 @@ def test_value_screener() -> None:
     # 验证一些知名蓝筹
     assert ("600519" in codes and "601318" in codes and "000858" in codes), codes
 
-    # (8) 分级阈值:0.88 是 S,0.85 是 A,0.65 是 C,0.5 是 D
+    # (8) 分级阈值:0.88 是 S,0.80 是 A,0.72 是 B,0.60 是 C,< 0.60 是 D
     _base = _vs.valuecfg.BASE_TOTAL
     assert (_vs._grade(_base * 0.90)[0] == "S"), str(_vs._grade(_base * 0.90))
     assert (_vs._grade(_base * 0.82)[0] == "A"), str(_vs._grade(_base * 0.82))
-    assert (_vs._grade(_base * 0.70)[0] == "B"), str(_vs._grade(_base * 0.70))
-    assert (_vs._grade(_base * 0.62)[0] == "C"), str(_vs._grade(_base * 0.62))
+    assert (_vs._grade(_base * 0.75)[0] == "B"), str(_vs._grade(_base * 0.75))
+    assert (_vs._grade(_base * 0.65)[0] == "C"), str(_vs._grade(_base * 0.65))
     assert (_vs._grade(_base * 0.50)[0] == "D"), str(_vs._grade(_base * 0.50))
 
     # (9) 信号阈值校准:hi_cut=0.80, top_cut=0.85
