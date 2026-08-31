@@ -707,10 +707,15 @@ def _volume_score(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def _emotion_score(profile: dict[str, Any]) -> dict[str, Any]:
-    """情绪妖股评分（满分 12）：连板高度 + 换手活跃度 + 涨停属性。"""
+    """情绪妖股评分（满分 12）：连板高度 + 换手活跃度 + 涨停属性。
+
+    连板 >= 6 视为「高位接盘」,与 _risk_score(+15)和 _buy_score(-8) 同向:
+    不再奖励情绪溢价(给 0 而非 +6),避免三处评分互相打架。
+    """
     pts = 0
     lb = profile.get("lianban") or 0
-    if lb >= 5: pts += 6
+    if lb >= 6: pts += 0      # 高位接盘,不奖分(与风险/买点评分方向一致)
+    elif lb >= 5: pts += 6
     elif lb >= 3: pts += 5
     elif lb >= 2: pts += 4
     elif lb >= 1: pts += 3
@@ -720,9 +725,12 @@ def _emotion_score(profile: dict[str, Any]) -> dict[str, Any]:
         elif 3 <= to < 8: pts += 2
         elif to > 25: pts += 1       # 过热但仍是焦点
     chg = profile.get("change_pct")
-    if chg is not None and chg > 5: pts += 2
+    # 连板 >= 6 时,涨幅加分也要打折(避免高位接盘再叠加情绪溢价)
+    if chg is not None and chg > 5:
+        pts += 2 if lb < 6 else 0
     pts = max(0, min(12, pts))
-    return {"score": pts, "detail": f"连板{lb} 换手{to}%", "completeness": 1}
+    note = "高位接盘" if lb >= 6 else f"连板{lb}"
+    return {"score": pts, "detail": f"{note} 换手{to}%", "completeness": 1}
 
 
 def _relative_score(profile: dict[str, Any]) -> dict[str, Any]:
@@ -944,6 +952,10 @@ def _composite_score(scores: dict[str, Any], weights: dict[str, float]) -> float
     权重表达「相对看重程度」：默认全 1.0 时即原始分之和（行为不变）；
     调大某维度，该维度强的股票总分上升、弱的下降。任意维度权重翻倍的
     相对影响相同（不再受各维度满分差异影响），总分恒在 0~BASE_TOTAL 之间。
+
+    风险扣分非线性：risk > 20 时按 (risk-20)^1.5 / 12 扣分,接近 AVOID 阈值
+    (60)时扣分显著加速,与「risk>60 → AVOID」信号语义一致。
+    参考点:risk=30→2.6,risk=50→13.7,risk=60→21.1,risk=80→38.7。
     """
     m = valuecfg.DIM_MAXES
     num = sum(scores[k]["score"] * weights.get(k, 1.0) for k in m)
@@ -951,7 +963,8 @@ def _composite_score(scores: dict[str, Any], weights: dict[str, float]) -> float
     total = valuecfg.BASE_TOTAL * num / den if den > 0 else 0.0
     risk = scores["risk"]["score"]
     if risk > 20:
-        total -= risk / 10
+        # 非线性扣分:接近 AVOID 阈值时大幅扣分
+        total -= (risk - 20) ** 1.5 / 12
     return max(0.0, min(float(valuecfg.BASE_TOTAL), round(total, 1)))
 
 
