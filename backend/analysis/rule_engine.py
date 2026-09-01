@@ -436,35 +436,38 @@ def rule_based(
 
     # ==================== 三维分面评分 ====================
     # 技术面：均线结构 / 排列 / 斜率 / 区间 / 乖离
-    tech_score = 0
+    # 各因子按 FACTOR_WEIGHTS 加权（回测标定，见文件顶部注释）
+    W = FACTOR_WEIGHTS
+    tech_score = 0.0
     above = ma_sum.get("above_count", 0)
-    tech_score += (above - 2) * 8
+    tech_score += (above - 2) * 8 * W["above"]
     arrangement = ma_sum.get("arrangement", "")
-    tech_score += {"多头排列": 18, "短期多头": 8, "空头排列": -18, "短期空头": -8}.get(arrangement, 0)
+    tech_score += {"多头排列": 18, "短期多头": 8, "空头排列": -18, "短期空头": -8}.get(arrangement, 0) * W["arrange"]
     for w, weight in ((5, 3), (10, 3), (20, 4), (60, 4)):
         slope = (ma.get(w) or {}).get("slope")
-        tech_score += weight if slope == "上行" else (-weight if slope == "下行" else 0)
+        tech_score += (weight if slope == "上行" else (-weight if slope == "下行" else 0)) * W["slope"]
 
     chg20 = trend.get("chg_20d")
     if chg20 is not None:
-        tech_score += 6 if chg20 > 0 else -6
+        tech_score += (6 if chg20 > 0 else -6) * W["chg20"]
 
     sr_state = sr.get("state", "")
     if "突破" in sr_state:
-        tech_score += 8
+        tech_score += 8 * W["sr"]
     elif "跌破" in sr_state:
-        tech_score -= 12
+        tech_score -= 12 * W["sr"]
 
-    # 乖离修正：现价偏离 MA20 过大时提示超买/超卖风险
+    # 乖离修正：现价偏离 MA20 过大时提示超买/超卖风险。
+    # 这是全部因子中唯一方向在 7/7 个半年期保持为正的信号，故提权。
     ma20v = (ma.get(20) or {}).get("value")
     deviation_note = ""
     if price and ma20v:
         dev_pct = (price - ma20v) / ma20v * 100
         if dev_pct > 8:
-            tech_score -= 4
+            tech_score -= 4 * W["dev"]
             deviation_note = f"现价较 MA20 乖离 {dev_pct:.1f}%（超买）"
         elif dev_pct < -8:
-            tech_score += 4
+            tech_score += 4 * W["dev"]
             deviation_note = f"现价较 MA20 乖离 {dev_pct:.1f}%（超卖）"
 
     # 摆动指标（MACD/KDJ）：仅分析展示与 LLM 投喂，不参与评分与结论
@@ -494,7 +497,7 @@ def rule_based(
 
     # 当日盘口分项（技术面修正）
     intraday_pts, intraday_note = _intraday_score(q)
-    tech_score += intraday_pts
+    tech_score += intraday_pts * W["intraday"]
 
     # 资金面：当日主力为主 / 近5日辅 / 连续流向 / 两融 / 量能确认
     # 当日资金流向未发布时主项改用近5日口径，避免把前日 main_last 当成「当日」数据参与评分。
