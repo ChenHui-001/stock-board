@@ -52,8 +52,6 @@ COPY frontend/ ./frontend/
 # 任何修改 Dockerfile 的 commit 请同步检查此规则未被打破
 # ============================================================
 COPY --from=frontend-build /build/frontend/static/dist/ ./frontend/static/dist/
-# 根目录脚本：自检回测（check_sources 运行时引用）、对照实验
-COPY backtest_intraday.py backtest_compare.py ./
 
 RUN mkdir -p /app/data
 
