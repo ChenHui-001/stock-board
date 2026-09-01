@@ -21,15 +21,13 @@ from typing import Any, Callable
 
 import pandas as pd
 
+from ..analysis.rule_engine import (  # 与生产同口径，避免回测与线上脱节
+    FACTOR_WEIGHTS, TH_ADD, TH_HOLD, TH_REDUCE, _damp, _round_half_away,
+)
 from . import engine, render
 
 STRATEGY_ID = "score_threshold"
 STRATEGY_NAME = "AI 评分阈值检验"
-
-# 生产阈值（backend/analysis/rule_engine.py rule_based）
-TH_ADD = 28.0      # >= 加仓
-TH_HOLD = 5.0      # >= 观望
-TH_REDUCE = -22.0  # >= 减仓，否则清仓
 
 ORDER = ["加仓", "观望", "减仓", "清仓"]
 QORDER = ["Q1 低分", "Q2", "Q3", "Q4 高分"]
