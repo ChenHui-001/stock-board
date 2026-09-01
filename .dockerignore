@@ -12,14 +12,16 @@ data/
 *.db-shm
 .env
 srv.log
-*.json
+# *.json 故意不加：package.json / package-lock.json 必须随构建上下文传入（Stage 1 npm ci 需要）
 _probe.py
 *.docx
 .pytest_cache
 .mypy_cache
 .ruff_cache
 README.md
-
+# AI 评分产物快照不进镜像构建上下文
+ai_score_*.csv
+ai_score_*.json
 # dist / node_modules 永不进 Docker 构建上下文：dist 必须在镜像内从源码 build
 frontend/static/dist/
 node_modules/
