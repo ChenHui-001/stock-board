@@ -309,41 +309,42 @@ def _intraday_score(q: dict[str, Any]) -> tuple[int, str]:
     bits: list[str] = []
 
     # 盘中位置 × 涨跌方向：高位强势/冲高回落、低位弱势/空头衰竭
+    # 各分支按自身支撑样本量衰减（见 _damp），样本不足的信号不再等值参与决策
     if pos >= 75:
         if chg > 0:
-            score += 3
+            score += 3 * _damp("高位强势")
             bits.append(f"现价运行至当日高位（{pos:.0f}%）且上涨，多头强势（注意冲高后回归压力）")
         else:
-            score -= 4
+            score -= 4 * _damp("冲高回落")
             bits.append(f"现价自当日高位回落（{pos:.0f}%）转跌，短线抛压显现")
     elif pos <= 25:
         if chg < 0:
-            score -= 4
+            score -= 4 * _damp("低位下跌")
             bits.append(f"现价贴近当日低位（{pos:.0f}%）且下跌，弱势明显")
         else:
-            score += 2
+            score += 2 * _damp("低位回升")
             bits.append(f"现价自当日低位（{pos:.0f}%）回升，空头动能衰竭")
 
     # 量比：放量验证方向 / 缩量削弱信号
     if vr is not None:
         if vr >= 2:
             if chg > 0:
-                score += 3
+                score += 3 * _damp("放量上攻")
                 bits.append(f"量比 {vr:.2f} 放量上攻，量价配合良好")
             else:
-                score -= 3
+                score -= 3 * _damp("放量下挫")
                 bits.append(f"量比 {vr:.2f} 放量下挫，抛压集中释放")
         elif vr <= 0.6:
             if chg > 0:
-                score -= 1
+                score -= 1 * _damp("缩量上涨")
                 bits.append(f"量比 {vr:.2f} 缩量上涨，涨势动能存疑")
             else:
-                score += 1
+                score += 1 * _damp("缩量下跌")
                 bits.append(f"量比 {vr:.2f} 缩量下跌，抛压有所减轻")
 
     # 振幅：剧烈波动是风险；收敛不进分（回测显示振幅收敛次日上涨率 42.2% 反向）
     if amp >= 8:
-        score -= 2
+        score -= 2 * _damp("振幅剧烈")
         bits.append(f"当日振幅 {amp:.1f}%，波动剧烈")
     elif amp <= 1.5:
         bits.append(f"当日振幅 {amp:.1f}%，走势收敛")
@@ -351,13 +352,16 @@ def _intraday_score(q: dict[str, Any]) -> tuple[int, str]:
     # 换手：极高警惕分歧出货；极低交投清淡
     if turnover is not None:
         if turnover >= 10:
-            score += (-2 if chg < 0 else 1)
+            if chg < 0:
+                score += -2 * _damp("换手出货")
+            else:
+                score += 1 * _damp("换手活跃")
             bits.append(f"换手率 {turnover:.1f}% 偏高，{'分歧出货风险' if chg < 0 else '交投活跃'}")
         elif turnover <= 0.8:
-            score -= 3
+            score -= 3 * _damp("交投清淡")
             bits.append(f"换手率 {turnover:.1f}% 过低，交投清淡")
 
-    return max(-8, min(8, score)), "；".join(bits)
+    return _round_half_away(max(-8.0, min(8.0, score))), "；".join(bits)
 
 
 def _annotate_intraday(note: str) -> list[dict[str, Any]]:
