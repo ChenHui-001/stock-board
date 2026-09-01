@@ -63,6 +63,13 @@ TH_ADD = 12.0      # >= 加仓
 TH_HOLD = -6.0     # >= 观望
 TH_REDUCE = -16.0  # >= 减仓，否则清仓
 
+# 置信度区间（原 45~92，基础值 68）：回测已证明评分方向性有限——总分 IC 在
+# 7 个半年期里 0/7 为正，加仓档胜率 48.4% 反而低于清仓档 50.7%。
+# 若保持旧公式，一个方向被证伪的评分仍会输出 90+ 的置信度，等于用高置信度
+# 驱动加仓。故收敛到 35~78，并把基础值降到 50：中性评分应落在中性置信度上。
+CONF_MIN, CONF_MAX, CONF_BASE = 35, 78, 50
+CONF_PER_POINT = 0.25   # 每 1 分评分对应的置信度增量（原为 1/3 ≈ 0.333）
+
 
 def _damp(signal_label: str) -> float:
     """按盘口信号的支撑样本量衰减权重：样本越少，越不该主导决策。
@@ -749,7 +756,9 @@ def rule_based(
                 + "。"
             ),
             "confidence": max(
-                45, min(92, 68 + int(abs(score) / 3) + (8 if signal_aligned else (-12 if signal_conflict else 0)))
+                CONF_MIN,
+                min(CONF_MAX, CONF_BASE + int(abs(score) * CONF_PER_POINT)
+                    + (8 if signal_aligned else (-12 if signal_conflict else 0))),
             ),
             "position": position,
             "support": support,
