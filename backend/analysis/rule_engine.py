@@ -107,7 +107,7 @@ def _confidence_reason_text(
         sample_bits.append("财报源不可用、参考上次缓存")
     if sample_bits:
         parts.append("、".join(sample_bits) + "拉低置信度")
-    if abs(score) >= 28:
+    if abs(score) >= TH_ADD:
         parts.append("评分极端，进一步增强置信度")
     return "，".join(parts) if parts else "样本与信号均充足"
 
@@ -550,13 +550,13 @@ def rule_based(
     elif signal_aligned:
         signal_note = "技术面/资金面/消息面方向一致，信号共振增强"
 
-    if score >= 28:
+    if score >= TH_ADD:
         action = ACTIONS[0]
         position = "可持有 7 成以上仓位，回踩不破 MA10 可加仓"
-    elif score >= 5:
+    elif score >= TH_HOLD:
         action = ACTIONS[1]
         position = "维持现有 5-7 成仓位，不加不减"
-    elif score >= -22:
+    elif score >= TH_REDUCE:
         action = ACTIONS[2]
         position = "仓位降至 3 成以下，反弹至压力位分批减"
     else:
