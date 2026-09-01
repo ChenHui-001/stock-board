@@ -32,6 +32,11 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # ubuntu-latest 默认 LANG=C（ASCII），print 中文会 UnicodeEncodeError；强制 UTF-8
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      PYTHONIOENCODING: utf-8
     steps:
       - name: 检出代码
         uses: actions/checkout@v4.4.0
