@@ -77,6 +77,9 @@ import { App } from './app.js';
     const root = view();
     root.innerHTML = '';
 
+    // 顶部快捷入口卡片（始终显示，让用户进首页一眼能看到回测入口）
+    root.appendChild(renderQuickEntries());
+
     if (!state.items.length) {
       root.appendChild(renderEmpty());
       return;
@@ -107,6 +110,38 @@ import { App } from './app.js';
       ? '当前为临时排序视图，拖拽排序请先点击「默认顺序」还原。'
       : '拖动左侧 ⠿ 手柄可调整自选股顺序，顺序会自动保存。';
     root.appendChild(tip);
+  }
+
+  // ---------------------------------------------------------- 首页快捷入口
+  function renderQuickEntries() {
+    const card = U.el('div', 'card entry-card');
+    const grid = U.el('div', 'entry-grid');
+
+    const entry = U.el('div', 'entry entry-backtest');
+    entry.tabIndex = 0;
+    entry.setAttribute('role', 'link');
+    entry.setAttribute('aria-label', '跳转策略回测');
+
+    const icon = U.el('div', 'entry-icon', '📊');
+    const body = U.el('div', 'entry-body');
+    body.appendChild(U.el('div', 'entry-title', '策略回测'));
+    body.appendChild(U.el('div', 'entry-desc',
+      '用真实历史行情检验你的作业信号是否真的有区分度 · 三个策略事件研究'));
+    const cta = U.el('div', 'entry-cta', '进入 →');
+
+    entry.appendChild(icon);
+    entry.appendChild(body);
+    entry.appendChild(cta);
+
+    const goBacktest = function () { location.hash = '#/backtest'; };
+    entry.onclick = goBacktest;
+    entry.onkeydown = function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goBacktest(); }
+    };
+
+    grid.appendChild(entry);
+    card.appendChild(grid);
+    return card;
   }
 
   function renderEmpty() {
