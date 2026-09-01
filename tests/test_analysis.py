@@ -106,7 +106,13 @@ def test_rule_precision() -> None:
     fb_al = analysis.rule_based(detail_al, news_cf, reports_cf)
     assert (fb_al["advice"]["signal"] == "aligned"), str(fb_al["advice"]["signal"])
     assert ("共振" in fb_al["advice"]["reason"]), fb_al["advice"]["reason"]
-    assert (fb_al["advice"]["confidence"] > 80), str(fb_al["advice"]["confidence"])
+    # 置信度量表已按因子归因结论收敛：原 45~92/基础 68 → 现 35~78/基础 50。
+    # 依据：回测显示总分 IC 在 7 个半年期里 0/7 为正，加仓档胜率 48.4% 反低于清仓档 50.7%，
+    # 旧公式会给一个方向已被证伪的评分输出 90+ 置信度。故原断言 >80 在新量表下不可达（上限 78），
+    # 改为断言「共振落在量表顶部区间」+「共振与背离的置信度差 >=30」，保留原测试意图。
+    assert (fb_al["advice"]["confidence"] > 70), str(fb_al["advice"]["confidence"])
+    assert (fb_al["advice"]["confidence"] - fb_cf["advice"]["confidence"] >= 30), (
+        str(fb_al["advice"]["confidence"]), str(fb_cf["advice"]["confidence"]))
 
     # 5.4) 资金面当日优先：当日流出但 30 日累计流入 -> 判定偏空（与详情页展示一致）
     detail_daily = _mk_detail(
