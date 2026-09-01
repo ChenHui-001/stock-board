@@ -46,6 +46,11 @@ COPY backend/ ./backend/
 # 前端源（main.py 在生产模式下不直接读它，但保留以支持快速切回 dev 模式）
 COPY frontend/ ./frontend/
 # 关键：从 Stage 1 拷入 Vite 构建产物（覆盖 frontend/static/dist/）
+# ============================================================
+# ⚠️  dist 必须从源码 build，**禁止**从 host 直接 COPY frontend/static/dist
+# Stage 1 已通过 `RUN npm run build` 从源码生成 dist，本 Stage 仅从 Stage 1 拷入
+# 任何修改 Dockerfile 的 commit 请同步检查此规则未被打破
+# ============================================================
 COPY --from=frontend-build /build/frontend/static/dist/ ./frontend/static/dist/
 # 根目录脚本：自检回测（check_sources 运行时引用）、对照实验
 COPY backtest_intraday.py backtest_compare.py ./

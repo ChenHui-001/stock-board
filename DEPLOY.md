@@ -173,8 +173,13 @@ python backtest_compare.py --selftest               # 离线自测（不触网�
 
 ```bash
 cd /opt/stock-board
-docker compose up -d --build
+git pull origin main                       # 同步最新源码
+docker compose build --no-cache frontend-build  # 强制重跑前端 npm build
+docker compose up -d
 ```
+
+> 前端 dist 是镜像内 `npm run build` 生成的产物，**不是从 host 拷贝**。
+> 改前端代码后必须 `--build` 才生效；如果改了 Dockerfile / 前端源码，追加 `--no-cache frontend-build` 防止 Docker 复用缓存层。
 
 如需升级镜像但不想重新构建（配合 CI 推送镜像）：
 

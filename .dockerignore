@@ -19,3 +19,9 @@ _probe.py
 .mypy_cache
 .ruff_cache
 README.md
+
+# dist / node_modules 永不进 Docker 构建上下文：dist 必须在镜像内从源码 build
+frontend/static/dist/
+node_modules/
+tmp/
+shots/
