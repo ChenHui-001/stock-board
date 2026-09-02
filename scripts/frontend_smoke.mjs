@@ -110,9 +110,15 @@ globalThis.document = {
   createElement: (t) => new El(t),
   createElementNS: (ns, t) => new El(t),
   createTextNode: (t) => ({ nodeType: 3, tagName: '#TEXT', textContent: String(t), childNodes: [] }),
-  getElementById: (id) => el(id),
+  getElementById: (id) => {
+    // 优先在 #view 树里找页面真正渲染出来的节点，找不到再按需造一个空壳。
+    // 否则 getElementById 会返回一个游离节点，页面里依赖它的逻辑（如锚点
+    // 观察器 observe 的 section）就测不到真实行为。
+    return el('view').querySelector('#' + id) || el(id);
+  },
   querySelector: (s) => el('view').querySelector(s),
-  querySelectorAll: () => [],
+  // 同样委托到 #view 树：nav 里那些 .nav-item 不在 #view 内，返回 [] 是对的
+  querySelectorAll: (s) => el('view').querySelectorAll(s),
   addEventListener: () => { },
   body: new El('body'),
   readyState: 'complete',
@@ -138,6 +144,25 @@ globalThis.echarts = {
   getInstanceByDom: () => null,
   dispose: () => { },
 };
+
+// 假 IntersectionObserver：记录所有实例与 observe/disconnect 调用。
+// 详情页的锚点高亮靠它，destroy() 有没有真的断开，只能从这里看出来。
+const observers = [];
+class FakeIntersectionObserver {
+  constructor(cb, opts) {
+    this.cb = cb;
+    this.opts = opts;
+    this.observed = [];
+    this.disconnected = false;
+    observers.push(this);
+  }
+  observe(node) { this.observed.push(node); }
+  unobserve(node) { this.observed = this.observed.filter((n) => n !== node); }
+  disconnect() { this.disconnected = true; this.observed = []; }
+  takeRecords() { return []; }
+}
+globalThis.IntersectionObserver = FakeIntersectionObserver;
+globalThis.window.IntersectionObserver = FakeIntersectionObserver;
 
 // ------------------------------------------------------------------ 假 fetch
 const reqs = {};
