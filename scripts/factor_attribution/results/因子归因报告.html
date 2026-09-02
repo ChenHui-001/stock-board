@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>AI 分析策略 · 因子级归因报告</title>
+<style>
+:root{--bg:#f7f8fa;--card:#fff;--bd:#e3e6eb;--tx:#1f2329;--mut:#646a73;--pos:#c0392b;--neg:#1e8e5a}
+*{box-sizing:border-box}
+body{margin:0;padding:28px;background:var(--bg);color:var(--tx);
+font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:1180px;margin:0 auto}
+h1{font-size:24px;margin:0 0 6px}
+h2{font-size:18px;margin:32px 0 12px;padding-left:10px;border-left:4px solid #4a6cf7}
+.sub{color:var(--mut);font-size:13px;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:18px 20px;margin-bottom:16px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid var(--bd);padding:7px 10px;text-align:right;white-space:nowrap}
+th{background:#f0f2f5;font-weight:600;text-align:right}
+td:first-child,th:first-child{text-align:left}
+tbody tr:nth-child(even){background:#fafbfc}
+.pos{color:var(--pos);font-weight:600}
+.neg{color:var(--neg);font-weight:600}
+.ok{color:#1e8e5a;font-weight:600}
+.bad{color:#c0392b;font-weight:600}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:18px}
+.k{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px 16px}
+.k .v{font-size:22px;font-weight:700;margin:2px 0}
+.k .l{color:var(--mut);font-size:12px}
+.alert{background:#fff4f0;border:1px solid #ffbb96;border-radius:8px;padding:14px 16px;margin:14px 0}
+.alert.ok{background:#f0f9f4;border-color:#9ad3b4}
+ul{margin:8px 0;padding-left:22px}
+li{margin:4px 0}
+.scroll{overflow-x:auto}
+code{background:#f0f2f5;padding:1px 5px;border-radius:4px;font-size:12px}
+</style></head><body><div class="wrap">
+
+<h1>首页 AI 分析策略 · 因子级归因报告</h1>
+<div class="sub">样本 7050 个事件 · 10 只 A 股面板 · 2023-09-22 ~ 2026-08-24 ·
+口径：信号日收盘计算 → 次日开盘买入 → 持有 5 日收盘卖出</div>
+
+<div class="alert">
+<b>一句话结论</b>：这套评分不是"权重没调好"，而是<b>因子集本身在 A 股 5 日尺度上没有可稳定提取的信号</b>。
+更严重的是，生产总分的 IC 在 7 个半年期里<b>全部为负（0/7）</b>——评分越高，后续 5 日表现越差，方向高度一致。
+</div>
+<div class="alert">
+<b>对散户最致命的一点</b>：加仓档均值 +0.379% 看起来是正的，但<b>中位数是 -0.109%</b>（偏度 1.59）——
+超过一半的"加仓"交易实际亏损，正收益完全由少数暴涨样本贡献。
+反观清仓档中位数 +0.080%、胜率 50.7%，<b>实际体验反而更好</b>。
+</div>
+
+<div class="kpi">
+<div class="k"><div class="l">生产总分 IC</div><div class="v neg">-0.0681</div><div class="l">7 个半年期 0/7 为正</div></div>
+<div class="k"><div class="l">加仓档中位数收益</div><div class="v neg">-0.109%</div><div class="l">过半交易亏损 · 清仓档 +0.080%</div></div>
+<div class="k"><div class="l">加仓档胜率</div><div class="v neg">48.4%</div><div class="l">低于清仓档 50.7%</div></div>
+<div class="k"><div class="l">均线三兄弟平均相关</div><div class="v">0.715</div><div class="l">同一信号计入 3 遍</div></div>
+<div class="k"><div class="l">唯一稳定正因子</div><div class="v">乖离修正</div><div class="l">7/7 期为正，权重仅 ±4</div></div>
+</div>
+
+<h2>一、生产四档：均值与胜率背离</h2>
+<div class="card">
+<table class=""><thead><tr><th>档位</th><th>样本</th><th>占比%</th><th>均值%</th><th>中位数%</th><th>胜率%</th><th>偏度</th><th>P25%</th><th>P75%</th></tr></thead><tbody><tr><td class="">加仓</td><td class="">2031</td><td class="">28.8</td><td class="">0.379</td><td class="">-0.109</td><td class="">48.4</td><td class="">1.59</td><td class="">-2.75</td><td class="">2.85</td></tr><tr><td class="">观望</td><td class="">1169</td><td class="">16.6</td><td class="">0.527</td><td class="">0.069</td><td class="">50.5</td><td class="">1.51</td><td class="">-2.17</td><td class="">2.51</td></tr><tr><td class="">减仓</td><td class="">1453</td><td class="">20.6</td><td class="">0.385</td><td class="">-0.093</td><td class="">49.0</td><td class="">1.23</td><td class="">-1.89</td><td class="">2.25</td></tr><tr><td class="">清仓</td><td class="">2397</td><td class="">34.0</td><td class="">0.325</td><td class="">0.08</td><td class="">50.7</td><td class="">1.83</td><td class="">-2.03</td><td class="">2.23</td></tr></tbody></table>
+<svg viewBox="0 0 640 178" width="100%" xmlns="http://www.w3.org/2000/svg"><text x="260.8" y="21" text-anchor="end" font-size="12" fill="#333">加仓</text><rect x="268.8" y="11" width="230.13282732447817" height="16" fill="#c0392b" rx="2"/><text x="504.9328273244782" y="24" font-size="12" fill="#c0392b" text-anchor="start">+0.379</text><text x="260.8" y="63" text-anchor="end" font-size="12" fill="#333">观望</text><rect x="268.8" y="53" width="320.0" height="16" fill="#c0392b" rx="2"/><text x="594.8" y="66" font-size="12" fill="#c0392b" text-anchor="start">+0.527</text><text x="260.8" y="105" text-anchor="end" font-size="12" fill="#333">减仓</text><rect x="268.8" y="95" width="233.77609108159393" height="16" fill="#c0392b" rx="2"/><text x="508.576091081594" y="108" font-size="12" fill="#c0392b" text-anchor="start">+0.385</text><text x="260.8" y="147" text-anchor="end" font-size="12" fill="#333">清仓</text><rect x="268.8" y="137" width="197.34345351043643" height="16" fill="#c0392b" rx="2"/><text x="472.1434535104364" y="150" font-size="12" fill="#c0392b" text-anchor="start">+0.325</text><line x1="268.8" y1="0" x2="268.8" y2="168" stroke="#bbb" stroke-width="1"/></svg>
+<ul>
+<li>加仓档均值 <b>+0.379%</b> 但胜率仅 <b>48.4%</b>；清仓档均值 +0.325% 而胜率 50.7%</li>
+<li>加仓档均值高于中位数（-0.109%），偏度 1.59 → <b>右偏</b>：少数暴涨把均值拉高，多数交易实际亏损</li>
+<li>对散户而言胜率比均值更重要：<b>均值正、胜率负的组合无法靠纪律执行</b></li>
+</ul>
+</div>
+
+<h2>二、逐因子有效性（前瞻 5 日）</h2>
+<div class="card scroll">
+<table class=""><thead><tr><th>因子</th><th>样本</th><th>IC</th><th>IC非重叠</th><th>高分位5日%</th><th>低分位5日%</th><th>多空差%</th><th>t</th><th>判定</th></tr></thead><tbody><tr><td class="">站上均线条数 (above-2)×8</td><td class="">7050</td><td class="pos">0.016</td><td class="">-0.0024</td><td class="">0.479</td><td class="">0.071</td><td class="pos">0.408</td><td class="pos">2.48</td><td class="ok">边际有效</td></tr><tr><td class="">均线排列 ±8/±18</td><td class="">7050</td><td class="neg">-0.0252</td><td class="">-0.0315</td><td class="">0.393</td><td class="">0.407</td><td class="neg">-0.014</td><td class="neg">-0.07</td><td class="">弱/噪音</td></tr><tr><td class="">四均线斜率 ±14</td><td class="">7050</td><td class="neg">-0.0182</td><td class="">-0.035</td><td class="">0.345</td><td class="">0.449</td><td class="neg">-0.104</td><td class="neg">-0.55</td><td class="">弱/噪音</td></tr><tr><td class="">20日涨跌 ±6</td><td class="">7050</td><td class="neg">-0.0415</td><td class="">-0.061</td><td class="">0.268</td><td class="">0.506</td><td class="neg">-0.239</td><td class="neg">-2.12</td><td class="ok">有效</td></tr><tr><td class="">支撑压力突破/跌破 +8/-12</td><td class="">7050</td><td class="neg">-0.011</td><td class="">-0.0047</td><td class="">0.386</td><td class="">0.389</td><td class="neg">-0.003</td><td class="neg">-0.04</td><td class="">弱/噪音</td></tr><tr><td class="">MA20乖离修正 ±4</td><td class="">7050</td><td class="pos">0.0657</td><td class="">0.1012</td><td class="">0.41</td><td class="">0.317</td><td class="pos">0.094</td><td class="pos">1.19</td><td class="">弱/噪音</td></tr><tr><td class="">盘口信号 clamp ±8</td><td class="">7050</td><td class="pos">0.0122</td><td class="">0.0219</td><td class="">0.565</td><td class="">0.136</td><td class="pos">0.43</td><td class="pos">2.87</td><td class="ok">边际有效</td></tr><tr><td class="">基本面 ±8</td><td class="">7050</td><td class="pos">0.017</td><td class="">0.013</td><td class="">0.472</td><td class="">0.409</td><td class="pos">0.062</td><td class="pos">0.49</td><td class="">弱/噪音</td></tr><tr><td class="">盘口·位置×涨跌</td><td class="">7050</td><td class="pos">0.0132</td><td class="">0.0323</td><td class="">0.474</td><td class="">0.25</td><td class="pos">0.224</td><td class="pos">1.39</td><td class="">弱/噪音</td></tr><tr><td class="">盘口·量比</td><td class="">7050</td><td class="neg">-0.0057</td><td class="">-0.0327</td><td class="">0.385</td><td class="">0.378</td><td class="pos">0.006</td><td class="pos">0.08</td><td class="">噪音</td></tr><tr><td class="">盘口·振幅</td><td class="">7050</td><td class="pos">0.0266</td><td class="">0.0205</td><td class="">0.396</td><td class="">0.386</td><td class="pos">0.009</td><td class="pos">0.12</td><td class="">弱/噪音</td></tr><tr><td class="">盘口·换手</td><td class="">7050</td><td class="neg">-0.0032</td><td class="">-0.0043</td><td class="">0.594</td><td class="">0.3</td><td class="pos">0.293</td><td class="pos">1.92</td><td class="bad">方向矛盾</td></tr></tbody></table>
+</div>
+
+<h2>三、共线：均线三兄弟是同一个信号计了三遍</h2>
+<div class="card scroll">
+<table class=""><thead><tr><th>因子</th><th>F_above</th><th>F_arrange</th><th>F_slope</th><th>F_chg20</th><th>F_sr</th><th>F_dev</th><th>F_intraday</th></tr></thead><tbody><tr><td class="">F_above</td><td class="">1.0</td><td class="">0.65</td><td class="">0.645</td><td class="">0.595</td><td class="">0.457</td><td class="">-0.371</td><td class="">0.379</td></tr><tr><td class="">F_arrange</td><td class="">0.65</td><td class="">1.0</td><td class="">0.851</td><td class="">0.654</td><td class="">0.398</td><td class="">-0.381</td><td class="">0.105</td></tr><tr><td class="">F_slope</td><td class="">0.645</td><td class="">0.851</td><td class="">1.0</td><td class="">0.72</td><td class="">0.375</td><td class="">-0.365</td><td class="">0.099</td></tr><tr><td class="">F_chg20</td><td class="">0.595</td><td class="">0.654</td><td class="">0.72</td><td class="">1.0</td><td class="">0.36</td><td class="">-0.306</td><td class="">0.159</td></tr><tr><td class="">F_sr</td><td class="">0.457</td><td class="">0.398</td><td class="">0.375</td><td class="">0.36</td><td class="">1.0</td><td class="">-0.362</td><td class="">0.344</td></tr><tr><td class="">F_dev</td><td class="">-0.371</td><td class="">-0.381</td><td class="">-0.365</td><td class="">-0.306</td><td class="">-0.362</td><td class="">1.0</td><td class="">-0.174</td></tr><tr><td class="">F_intraday</td><td class="">0.379</td><td class="">0.105</td><td class="">0.099</td><td class="">0.159</td><td class="">0.344</td><td class="">-0.174</td><td class="">1.0</td></tr></tbody></table>
+<p><code>F_arrange ~ F_slope = 0.851</code>，三因子平均相关 <b>0.715</b>；
+三者权重合计 ±48 分，占技术面 ±78 的 <b>62%</b> → 同一"价格趋势"信号被放大 3 倍，噪声同步放大。</p>
+</div>
+
+<h2>四、IC 半年期稳定性（核心证据）</h2>
+<div class="card scroll">
+<table class=""><thead><tr><th>因子</th><th>均值IC</th><th>IC标准差</th><th>为正期数</th><th>方向稳定</th><th>IR</th></tr></thead><tbody><tr><td class="">站上均线条数 (above-2)×8</td><td class="neg">-0.0162</td><td class="">0.055</td><td class="">3/7</td><td class="bad">否</td><td class="pos">0.29</td></tr><tr><td class="">均线排列 ±8/±18</td><td class="neg">-0.0718</td><td class="">0.0878</td><td class="">1/7</td><td class="ok">是</td><td class="pos">0.82</td></tr><tr><td class="">四均线斜率 ±14</td><td class="neg">-0.0805</td><td class="">0.0779</td><td class="">0/7</td><td class="ok">是</td><td class="pos">1.03</td></tr><tr><td class="">20日涨跌 ±6</td><td class="neg">-0.0948</td><td class="">0.1067</td><td class="">0/7</td><td class="ok">是</td><td class="pos">0.89</td></tr><tr><td class="">支撑压力突破/跌破 +8/-12</td><td class="neg">-0.0508</td><td class="">0.063</td><td class="">1/7</td><td class="ok">是</td><td class="pos">0.81</td></tr><tr><td class="">MA20乖离修正 ±4</td><td class="pos">0.0735</td><td class="">0.0477</td><td class="">7/7</td><td class="ok">是</td><td class="pos">1.54</td></tr><tr><td class="">盘口信号 clamp ±8</td><td class="pos">0.0011</td><td class="">0.0277</td><td class="">4/7</td><td class="bad">否</td><td class="pos">0.04</td></tr><tr><td class="">基本面 ±8</td><td class="pos">0.0011</td><td class="">0.1236</td><td class="">2/7</td><td class="bad">否</td><td class="pos">0.01</td></tr><tr><td class="">盘口·位置×涨跌</td><td class="pos">0.0082</td><td class="">0.0305</td><td class="">4/7</td><td class="bad">否</td><td class="pos">0.27</td></tr><tr><td class="">盘口·量比</td><td class="neg">-0.0135</td><td class="">0.0437</td><td class="">2/7</td><td class="bad">否</td><td class="pos">0.31</td></tr><tr><td class="">盘口·振幅</td><td class="pos">0.0144</td><td class="">0.0563</td><td class="">4/7</td><td class="bad">否</td><td class="pos">0.25</td></tr><tr><td class="">盘口·换手</td><td class="neg">-0.0188</td><td class="">0.0558</td><td class="">3/7</td><td class="bad">否</td><td class="pos">0.34</td></tr><tr><td class="">【生产总分】</td><td class="neg">-0.0681</td><td class="">0.08</td><td class="">0/7</td><td class="ok">是</td><td class="pos">0.85</td></tr></tbody></table>
+<p style="margin-top:14px">各期明细：</p>
+<table class=""><thead><tr><th>2023H2</th><th>2024H1</th><th>2024H2</th><th>2025H1</th><th>2025H2</th><th>2026H1</th><th>2026H2</th><th>因子</th></tr></thead><tbody><tr><td class="">0.0649</td><td class="">-0.0342</td><td class="">-0.1169</td><td class="">0.0052</td><td class="">-0.0178</td><td class="">-0.0235</td><td class="">0.0087</td><td class="">站上均线条数 (above-2)×8</td></tr><tr><td class="">-0.0289</td><td class="">0.0315</td><td class="">-0.2354</td><td class="">-0.0273</td><td class="">-0.0265</td><td class="">-0.0954</td><td class="">-0.121</td><td class="">均线排列 ±8/±18</td></tr><tr><td class="">-0.0798</td><td class="">-0.0156</td><td class="">-0.2083</td><td class="">-0.0216</td><td class="">-0.0059</td><td class="">-0.0702</td><td class="">-0.1622</td><td class="">四均线斜率 ±14</td></tr><tr><td class="">-0.0455</td><td class="">-0.0438</td><td class="">-0.1953</td><td class="">-0.0259</td><td class="">-0.0253</td><td class="">-0.0338</td><td class="">-0.2944</td><td class="">20日涨跌 ±6</td></tr><tr><td class="">-0.0173</td><td class="">0.0069</td><td class="">-0.0715</td><td class="">-0.0261</td><td class="">-0.0293</td><td class="">-0.0349</td><td class="">-0.1835</td><td class="">支撑压力突破/跌破 +8/-12</td></tr><tr><td class="">0.0275</td><td class="">0.0865</td><td class="">0.1574</td><td class="">0.0611</td><td class="">0.0113</td><td class="">0.0896</td><td class="">0.0814</td><td class="">MA20乖离修正 ±4</td></tr><tr><td class="">-0.0263</td><td class="">0.0226</td><td class="">-0.0441</td><td class="">-0.0073</td><td class="">0.0243</td><td class="">0.0143</td><td class="">0.0245</td><td class="">盘口信号 clamp ±8</td></tr><tr><td class="">—</td><td class="">—</td><td class="">-0.0895</td><td class="">-0.1219</td><td class="">0.1903</td><td class="">0.0426</td><td class="">-0.0159</td><td class="">基本面 ±8</td></tr><tr><td class="">-0.0208</td><td class="">-0.0045</td><td class="">-0.0279</td><td class="">0.0204</td><td class="">0.0065</td><td class="">0.0205</td><td class="">0.0628</td><td class="">盘口·位置×涨跌</td></tr><tr><td class="">-0.0259</td><td class="">0.061</td><td class="">0.0284</td><td class="">-0.0329</td><td class="">-0.0701</td><td class="">-0.0307</td><td class="">-0.0246</td><td class="">盘口·量比</td></tr><tr><td class="">—</td><td class="">0.0109</td><td class="">0.1135</td><td class="">-0.0606</td><td class="">0.0016</td><td class="">-0.0</td><td class="">0.0207</td><td class="">盘口·振幅</td></tr><tr><td class="">-0.0392</td><td class="">0.0394</td><td class="">-0.0781</td><td class="">-0.0536</td><td class="">0.0658</td><td class="">0.0027</td><td class="">-0.0687</td><td class="">盘口·换手</td></tr><tr><td class="">-0.0254</td><td class="">-0.0052</td><td class="">-0.215</td><td class="">-0.0291</td><td class="">-0.0049</td><td class="">-0.0555</td><td class="">-0.1417</td><td class="">【生产总分】</td></tr></tbody></table>
+<ul>
+<li><b>【生产总分】0/7 全负</b>：7 个半年期 IC 无一为正</li>
+<li><b>唯一 7/7 稳定为正的是「MA20 乖离修正」</b>（均值 IC +0.0735，IR 1.541 最高），权重却只有 ±4，占技术面 5%</li>
+<li>趋势跟随类因子（斜率 0/7、20日涨跌 0/7、均线排列 1/7、突破 1/7）<b>稳定为负</b></li>
+<li>站上均线条数 3/7、盘口 4/7、基本面 2/7 → 符号反复翻转，是噪音</li>
+</ul>
+</div>
+
+<h2>五、内部逻辑冲突</h2>
+<div class="card">
+<ul>
+<li>触发"超买扣分 −4"的 458 个事件中，<b>100%</b> 动量类因子合计为正（看多）</li>
+<li>触发"超卖加分 +4"的 219 个事件中，<b>99.1%</b> 动量类因子合计为负（看空）</li>
+<li>即：唯一方向正确的反转因子，在几乎 100% 的场景下都在对抗动量因子，且权重只有对方的 1/12</li>
+</ul>
+</div>
+
+<h2>六、证伪过程（我自己的"好结果"被推翻）</h2>
+<div class="card scroll">
+<table class=""><thead><tr><th>轮次</th><th>做法</th><th>结果</th><th>是否可信</th></tr></thead><tbody><tr><td class="">① 因子归因（全样本）</td><td class="">逐因子算 IC，找最强/最弱</td><td class="">乖离修正 IC+0.066 最高；20日涨跌 IC-0.042 最负</td><td class="">仅描述，未检验</td></tr><tr><td class="">② 共线检验</td><td class="">因子相关矩阵</td><td class="">均线三兄弟平均相关 0.715，同一信号计 3 遍</td><td class="">可信（无拟合）</td></tr><tr><td class="">③ 动量翻转（全样本）</td><td class="">去共线 + chg20 反向 + 乖离×3</td><td class="">多空差 +0.577%，t=4.05，四年全正</td><td class="">❌ 前视，已证伪</td></tr><tr><td class="">④ 样本外（IC定方向）</td><td class="">训练期 IC 定符号，测试期验证</td><td class="">多空差 -0.458%，t=-2.25，两年全负</td><td class="">✅ 证伪了③</td></tr><tr><td class="">⑤ 样本外（稳定性筛选）</td><td class="">前3期 3/3 同号才入选，后4期验证</td><td class="">多空差 -0.231%，t=-1.13，五档非单调</td><td class="">✅ 最终结论</td></tr></tbody></table>
+<div class="alert">第③轮拿到 t=4.05、四年全正的漂亮结果，但方向是用全样本 IC 定的（前视）。
+第④⑤轮改用样本外后<b>全部失效甚至反向</b>。<br><br>
+<b>方法论教训</b>：在这套因子上用 IC 均值定方向不可靠（基本面因子训练期 IC −0.059 vs 全样本 +0.017）。
+任何基于全样本的"优化"都必须过样本外这一关。</div>
+</div>
+
+<h2>七、对你交易偏好的验证</h2>
+<div class="card scroll">
+<table><thead><tr><th>你的偏好</th><th>数据结论</th></tr></thead><tbody>
+<tr><td>禁用 5/10 日均线准则</td><td class="ok">✅ 数据支持：斜率 IC 0/7 全负、均线排列 1/7、站上条数 3/7 不稳定</td></tr>
+<tr><td>板块情绪周期 / 相对板块强弱</td><td class="bad">⚠️ 策略中完全缺失，且历史数据不可得，无法回测</td></tr>
+<tr><td>主力净比</td><td class="bad">⚠️ 历史资金流数据不可得，本次未纳入检验</td></tr>
+<tr><td>VWAP / 量比分层</td><td class="bad">⚠️ 量比子因子 IC 符号 4/7 翻转，当前口径无效</td></tr>
+<tr><td>价格 + 时间双止损</td><td class="bad">❌ 当前"5-10 个交易日"仅文案，无强制时间止损</td></tr>
+</tbody></table>
+</div>
+
+<h2>八、可执行建议</h2>
+<div class="card">
+<ol>
+<li><b>不要用高分驱动加仓</b>。生产总分 IC 0/7 为负，加仓档胜率 48.4% 低于清仓档 50.7%</li>
+<li><b>唯一可保留的技术信号是 MA20 乖离修正</b>（7/7 稳定正 IC）：乖离 &gt; +8% 减仓、&lt; −8% 关注超跌反弹——与你"板块高潮即减仓"的偏好一致</li>
+<li><b>趋势跟随类因子应整体降权或反向</b>，而非微调权重</li>
+<li><b>补齐资金面历史数据是当前最大缺口</b>：主力净比是你体系的核心，却完全无法验证</li>
+<li>信号可靠性表中 n=1/4 的条目（放量下挫、振幅剧烈、换手出货）应停止参与打分</li>
+</ol>
+</div>
+
+<div class="sub" style="margin-top:26px">
+数据限制：资金面（主力资金/两融）与消息面（资讯/研报情绪）历史数据不可得，
+回测版评分 = 技术面 + 基本面；本结论检验的是技术面主导的评分体系。
+事件研究不计手续费与滑点，不模拟仓位；日度事件前瞻窗口重叠，标准误被低估。
+</div>
+
+</div></body></html>
