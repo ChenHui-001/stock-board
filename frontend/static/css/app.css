@@ -114,6 +114,28 @@ button {
   font-weight: 500;
 }
 
+/* 策略回测：作为核心功能之一，用左侧小色条强调 */
+.nav-item-backtest {
+  position: relative;
+  padding-left: 22px;
+  color: var(--accent);
+}
+.nav-item-backtest::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: translateY(-50%);
+  opacity: .55;
+}
+.nav-item-backtest:hover { color: var(--text); }
+.nav-item-backtest.active { color: var(--text); }
+.nav-item-backtest.active::before { opacity: 1; }
+
 .topbar-right {
   margin-left: auto;
   display: flex;
