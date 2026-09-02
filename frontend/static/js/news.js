@@ -107,7 +107,7 @@ import { AI } from './ai.js';
   function renderError(msg, tab) {
     body().innerHTML =
       '<div class="empty">'
-      + '<div class="empty-icon">⚠️</div>'
+      + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
       + '<div class="empty-title">' + (tab === 'reports' ? '研报获取失败' : '资讯获取失败') + '</div>'
       + '<div class="empty-desc">' + U.escapeHtml(msg) + '</div>'
       + '</div>';
@@ -180,7 +180,7 @@ import { AI } from './ai.js';
 
     if (!items.length) {
       host.appendChild(emptyBox('暂无相关资讯',
-        (meta && meta.error) || '该时间范围内没有检索到相关新闻', '🗞️'));
+        U.icon('news', { size: 40 }), (meta && meta.error) || '该时间范围内没有检索到相关新闻'));
       appendMeta(meta);
       appendActions('refresh');
       return;
@@ -299,7 +299,7 @@ import { AI } from './ai.js';
 
     if (!items.length) {
       host.appendChild(emptyBox('暂无券商研报',
-        (meta && meta.error) || '该股暂无收录的券商研报', '📄'));
+        U.icon('fileText', { size: 40 }), (meta && meta.error) || '该股暂无收录的券商研报'));
       appendMeta(meta);
       appendActions('refresh');
       return;
