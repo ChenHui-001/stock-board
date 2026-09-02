@@ -342,9 +342,11 @@ async def analyze_news(
 
     try:
         result = await cache.get_or_set(key, TTL, load, force=force)
-        # 补当前自选状态（在缓存外计算，保证每次打开弹窗都是最新）
+        # 补当前自选状态（在缓存外计算，保证每次打开弹窗都是最新）。
+        # 一次取回全部自选代码做集合判定，避免逐行 is_watched 退化成 N+1 次查询。
+        watched = await storage.a_watched_codes()
         for s in result.get("stocks") or []:
-            s["watched"] = storage.is_watched(s["code"])
+            s["watched"] = s["code"] in watched
         return result
     except Exception as exc:  # noqa: BLE001
         log.warning("热点快讯分析失败：%s", describe_exc(exc))

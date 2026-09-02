@@ -558,6 +558,11 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
             missing.append((r["code"], r["market"]))
     board_map = await _industry_map(missing) if missing else {}
 
+    # 回写攒批：原来在循环里逐行 update_meta，50 只自选股就是最多 100 次
+    # 「抢锁 + 开事务 + commit 落 WAL」。攒成一批后只有 1 次。
+    # 顺序与原来的逐条调用一致（同一行先回写名称、再回写板块），
+    # COALESCE 语义不变，所以最终库状态与改之前逐条执行完全相同。
+    pending_meta: list[tuple[str, str | None, str | None]] = []
     items: list[dict[str, Any]] = []
     for row in rows:
         key = full_code(row["code"], row["market"])
@@ -570,7 +575,7 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
             if not data.get("name"):
                 data["name"] = row.get("name") or ""
             if quote.name and quote.name != row.get("name"):
-                storage.update_meta(row["code"], quote.name, quote.board or None)
+                pending_meta.append((row["code"], quote.name, quote.board or None))
         else:
             data = Quote(
                 code=row["code"],
@@ -582,13 +587,16 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
             ).to_dict()
         board = (data.get("board") or "").strip() or board_map.get(key, "")
         if board and board != row.get("board"):
-            storage.update_meta(row["code"], None, board)
+            pending_meta.append((row["code"], None, board))
         data["board"] = board
         data["monitor"] = watch_monitor(
             data, atr=atr_by_key.get(key), flow=flow_by_key.get(key),
         )
         data["sort_no"] = row["sort_no"]
         items.append(data)
+
+    if pending_meta:
+        await storage.a_update_meta_batch(pending_meta)
 
     return {"items": items, "session": session_info()}
 
@@ -827,7 +835,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
         first_name = boards[0].name if hasattr(boards[0], "name") else str(boards[0])
         quote_dict["board"] = first_name
         # 回写数据库，看板页从此不再依赖行情源是否携带行业字段
-        storage.update_meta(code, None, first_name)
+        await storage.a_update_meta(code, None, first_name)
 
     # 东财批量行情接口拿不到更新时间戳时（f86 语义异常），用 K 线最新日期回填，
     # 避免 trade_date 恒为空导致 delayed 判定与前端展示失效
@@ -847,7 +855,7 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
         "quote": quote_dict,
         "boards": boards_names,
         "boards_detail": [b.to_dict() for b in boards],
-        "watched": storage.is_watched(code),
+        "watched": await storage.a_is_watched(code),
         "kline": [asdict(b) for b in bars[-120:]],
         "ma": [asdict(m) for m in ma_infos],
         "ma_summary": {
@@ -931,7 +939,7 @@ async def search(keyword: str, limit: int = 15) -> list[dict[str, Any]]:
         quotes = {}
 
     out: list[dict[str, Any]] = []
-    watched = storage.watched_codes()
+    watched = await storage.a_watched_codes()
     for item in items:
         key = f"{item.code}.{item.market}"
         quote = quotes.get(key)
@@ -960,7 +968,7 @@ async def hot(limit: int = 8) -> dict[str, Any]:
         empty={"data": {"gainers": [], "losers": [], "actives": []}},
     )
     data = pack.get("data") or {}
-    watched = storage.watched_codes()
+    watched = await storage.a_watched_codes()
 
     def pack_rows(items: list[Quote]) -> list[dict[str, Any]]:
         return [{**q.to_dict(), "watched": q.code in watched} for q in items]
