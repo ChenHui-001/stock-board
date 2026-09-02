@@ -305,7 +305,42 @@ for (const [hash, label] of ROUTES) {
     '又打了 ' + (count('quote') - t) + ' 次');
 }
 
-// ---- 详情页来回切：确认重新挂载后定时器能恢复（不是被 destroy 一棒子打死）
+// ---- 卸载链路：详情页锚点观察器（不发请求，但持续持有已摘除的 DOM 引用与闭包）
+{
+  await goto('#/stock/600000');
+  await sleep(400);                  // setupAnchorObserver 是 setTimeout(...,100) 触发的
+  const first = observers[observers.length - 1];
+  check('详情页：挂载后创建了锚点观察器并 observe 了 section',
+    !!first && first.observed.length > 0,
+    first ? ('observe ' + first.observed.length + ' 个节点') : '没有创建观察器');
+
+  // 行为级验证：真的触发一次「进入 ma 区块」，看锚点高亮会不会亮
+  const maSec = first && first.observed.filter((n) => n.dataset && n.dataset.anchor === 'ma')[0];
+  if (maSec) {
+    first.cb([{ target: maSec, isIntersecting: true }]);
+    const links = el('view').querySelectorAll('#detail-anchor .detail-anchor-item');
+    const hit = links.filter((a) => a.dataset.target === 'ma')[0];
+    check('详情页：锚点高亮生效（观察器回调能点亮对应 nav）',
+      !!hit && hit.classList.contains('active'),
+      hit ? ('class=' + hit.className) : '没找到 target=ma 的 nav（navLinks ' + links.length + ' 个）');
+  } else {
+    check('详情页：锚点高亮生效（观察器回调能点亮对应 nav）', false, '观察器没有观察到带 dataset.anchor 的 section');
+  }
+
+  await goto('#/search');            // 切走 → destroy() 必须 disconnect
+  check('详情页：切走后锚点观察器已 disconnect', !!first && first.disconnected,
+    first && first.disconnected ? '' : 'observer 仍持有 ' + (first ? first.observed.length : '?') + ' 个节点');
+
+  // 重建路径：destroy 之后再进详情页，观察器要能重新建起来（不是被一棒子打死）
+  await goto('#/stock/600000');
+  await sleep(400);
+  const rebuilt = observers[observers.length - 1];
+  check('详情页：destroy 后重新挂载能重建观察器', rebuilt && rebuilt !== first && rebuilt.observed.length > 0,
+    rebuilt ? ('新实例 observe ' + rebuilt.observed.length + ' 个节点') : '没有重建');
+  await goto('#/search');
+}
+
+// ---- 详情页来回切：确认重新挂载后倒计时定时器能恢复（不是被 destroy 一棒子打死）
 {
   await goto('#/stock/600000');
   const before = count('quote');
