@@ -271,3 +271,176 @@ def test_db_newer_than_code_is_left_alone(isolated_db: Path) -> None:
 
     assert _pragma_version(conn) == 99
     assert "note" not in _columns(conn, "watchlist")
+
+
+# ------------------------------------------------------------------ 批量回写
+
+def _seed_watchlist(n: int) -> None:
+    for i in range(n):
+        storage.add_watch(f"{600000 + i:06d}", f"股票{i}", None)
+
+
+def test_update_meta_batch_applies_all_rows(isolated_db: Path) -> None:
+    _seed_watchlist(3)
+    changed = storage.update_meta_batch(
+        [("600000", "新名字A", "板块A"), ("600001", "新名字B", "板块B")]
+    )
+
+    assert changed == 2
+    rows = {r["code"]: dict(r) for r in storage.list_watchlist()}
+    assert rows["600000"]["name"] == "新名字A" and rows["600000"]["board"] == "板块A"
+    assert rows["600001"]["name"] == "新名字B" and rows["600001"]["board"] == "板块B"
+    # 没传的行不受影响
+    assert rows["600002"]["name"] == "股票2" and rows["600002"]["board"] is None
+
+
+def test_update_meta_batch_keeps_old_value_on_none(isolated_db: Path) -> None:
+    """COALESCE 语义：传 None 表示「不改动」，不能把已有值清成空。"""
+    _seed_watchlist(1)
+    storage.update_meta("600000", "原名", "原板块")
+
+    storage.update_meta_batch([("600000", None, "新板块")])
+    row = storage.list_watchlist()[0]
+    assert (row["name"], row["board"]) == ("原名", "新板块")
+
+    storage.update_meta_batch([("600000", "新名", None)])
+    row = storage.list_watchlist()[0]
+    assert (row["name"], row["board"]) == ("新名", "新板块")
+
+
+def test_update_meta_batch_matches_row_by_row_semantics(isolated_db: Path) -> None:
+    """攒批的最终库状态必须与「在循环里逐条 update_meta」完全一致。
+
+    这是把 service.watchlist_board 的 N+1 写改成攒批的前提：调用方只是把
+    调用攒成列表，不允许出现任何行为差异（含同一行被回写两次的场景）。
+    """
+    _seed_watchlist(4)
+    # 同一行先回写名称、再回写板块——正是 watchlist_board 里会发生的情况
+    batched: list[tuple[str, str | None, str | None]] = [
+        ("600000", "名A", "板A"),
+        ("600000", None, "板A2"),
+        ("600001", "名B", None),
+        ("600003", None, "板D"),
+    ]
+    storage.update_meta_batch(batched)
+    batch_state = [(r["code"], r["name"], r["board"]) for r in storage.list_watchlist()]
+
+    # 换一个干净库，用老的逐条调用方式重放同一批更新
+    storage.remove_watch([r[0] for r in batch_state])
+    _seed_watchlist(4)
+    for code, name, board in batched:
+        storage.update_meta(code, name, board)
+    loop_state = [(r["code"], r["name"], r["board"]) for r in storage.list_watchlist()]
+
+    assert batch_state == loop_state
+
+
+class _CountingConn:
+    """统计 commit 次数的连接代理。
+
+    sqlite3.Connection.commit 是只读属性，monkeypatch 打不上去，只能整体代理
+    storage 的单例连接。除 commit 外一律透传给真实连接，不影响被测行为。
+    """
+
+    def __init__(self, real: sqlite3.Connection) -> None:
+        self._real = real
+        self.commits = 0
+
+    def commit(self) -> None:
+        self.commits += 1
+        self._real.commit()
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._real, name)
+
+
+def test_update_meta_batch_is_one_transaction(isolated_db: Path, monkeypatch) -> None:
+    """批量回写的收益就在这：50 行只 commit 1 次，而不是 50 次。
+
+    直接数 commit 次数——每次 commit 都要落一次 WAL，这才是逐行写的真实成本。
+    """
+    _seed_watchlist(50)
+    proxy = _CountingConn(storage._connect())
+    monkeypatch.setattr(storage, "_conn", proxy)
+
+    rows = [(f"{600000 + i:06d}", f"名{i}", None) for i in range(50)]
+    assert storage.update_meta_batch(rows) == 50
+    assert proxy.commits == 1, f"批量写应只 commit 1 次，实际 {proxy.commits} 次"
+
+    # 对照：同样 50 行逐条写，就是 50 次 commit（这就是被消除掉的开销）
+    proxy.commits = 0
+    for code, name, _board in rows:
+        storage.update_meta(code, None, f"板{name}")
+    assert proxy.commits == 50
+
+
+def test_update_meta_batch_empty_input_is_noop(isolated_db: Path) -> None:
+    """空列表不该报错也不该开事务——看板经常一只股票都不用回写。"""
+    _seed_watchlist(1)
+    assert storage.update_meta_batch([]) == 0
+    assert storage.update_meta_batch([("", "名", "板")]) == 0
+    assert storage.list_watchlist()[0]["name"] == "股票0"
+
+
+# ------------------------------------------------------------------ 异步封装
+
+def test_async_wrappers_are_coroutine_functions() -> None:
+    """调用点改成 await 之后如果忘了加 async，这里会先炸。"""
+    for name in ("a_list_watchlist", "a_add_watch", "a_update_meta_batch", "a_save_report"):
+        assert asyncio.iscoroutinefunction(getattr(storage, name)), name
+
+
+@pytest.mark.asyncio
+async def test_async_wrapper_runs_off_the_event_loop(isolated_db: Path, monkeypatch) -> None:
+    """a_xxx 必须真的把 DB 操作丢到别的线程，否则等于没解决阻塞问题。
+
+    直接记录同步函数实际运行在哪个线程：如果还在主线程（事件循环所在线程），
+    说明封装失效，sqlite 仍会阻塞整个 loop。
+    """
+    _seed_watchlist(2)
+    seen: list[str] = []
+    real = storage.list_watchlist
+
+    def spy() -> list[dict[str, object]]:
+        seen.append(threading.current_thread().name)
+        return real()
+
+    monkeypatch.setattr(storage, "list_watchlist", spy)
+
+    rows = await storage.a_list_watchlist()
+
+    assert len(rows) == 2
+    assert seen == ["asyncio_0"] or seen[0].startswith("asyncio"), (
+        f"DB 操作应跑在 asyncio 线程池里，实际线程：{seen}"
+    )
+    assert threading.current_thread().name != seen[0]
+
+
+@pytest.mark.asyncio
+async def test_async_wrappers_return_same_as_sync(isolated_db: Path) -> None:
+    """封装只是换线程，不能改变任何语义或返回值。"""
+    _seed_watchlist(2)
+
+    assert await storage.a_list_watchlist() == storage.list_watchlist()
+    assert await storage.a_watchlist_codes() == storage.watchlist_codes()
+    assert await storage.a_watched_codes() == storage.watched_codes()
+    assert await storage.a_is_watched("600000") is True
+    assert await storage.a_is_watched("999999") is False
+    assert await storage.a_add_watch("000001", "平安银行", "银行") is True
+    assert await storage.a_add_watch("000001") is False          # 已存在
+    assert await storage.a_get_kv("nope") is None
+
+    await storage.a_update_meta("600000", "改名", "改板块")
+    row = storage.list_watchlist()[0]
+    assert (row["name"], row["board"]) == ("改名", "改板块")
+
+    assert await storage.a_update_meta_batch([("600001", "批改名", None)]) == 1
+    assert storage.list_watchlist()[1]["name"] == "批改名"
+
+    await storage.a_save_report("600000", {"analysis": {"advice": {"action": "观望"}}})
+    assert await storage.a_get_kv("x") is None
+    cached = storage.get_report("600000")
+    assert cached is not None and cached["from_cache"] is True
+
+    assert await storage.a_remove_watch(["600000"]) == 1
+    assert "600000" not in await storage.a_watched_codes()
