@@ -647,18 +647,6 @@ import { App } from './app.js';
       // 静默：失败时卡片保留骨架态，按钮仍可用
     }
 
-    // 兜底路径取消：规则快算的接口与缓存读取共用 /api/ai/{code}，
-    // 上一步失败 = 无缓存 + LLM 不可用 = 保留骨架即可。
-      if (res.ok) {
-        const data = await res.json();
-        const advice = (data && data.advice) || {};
-        if (advice.action) {
-          _fillAiSummaryBody(body, advice, data);
-          return;
-        }
-      }
-    } catch (e) {}
-
     // 全部失败：保留骨架，按钮提示用户手动触发 LLM
     body.innerHTML = '';
     body.appendChild(U.el('div', 'ai-summary-empty',
