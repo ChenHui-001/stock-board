@@ -435,7 +435,7 @@ import { Settings } from './settings.js';
     const hostStats = state.meta.host_stats || {};
     const hostKeys = Object.keys(hostStats);
     if (hostKeys.length) {
-      parts.push('<div class="ds-sub">🐌 主机自适应限流：<br>' +
+      parts.push('<div class="ds-sub">' + U.iconHtml('clock', { size: 14 }) + ' 主机自适应限流：<br>' +
         hostKeys.map(function (h) {
           const s = hostStats[h];
           const cooling = s.cooling > 0 ? ' · 冷却 ' + Math.ceil(s.cooling) + 's' : '';
@@ -446,7 +446,7 @@ import { Settings } from './settings.js';
 
     const tkeys = Object.keys(throttled);
     if (tkeys.length) {
-      parts.push('<div class="ds-sub">⚠ 限流中的主机（已自动切换备用源）：<br>' +
+      parts.push('<div class="ds-sub">' + U.iconHtml('alert', { size: 14 }) + ' 限流中的主机（已自动切换备用源）：<br>' +
         tkeys.map(function (h) {
           const s = throttled[h];
           return U.escapeHtml(h) + (s > 0 ? '（剩余 ' + Math.ceil(s) + 's）' : '');

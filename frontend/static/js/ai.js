@@ -193,7 +193,12 @@ import { API } from './api.js';
     if (adv.reason) verdict.appendChild(U.el('div', 'ai-reason', adv.reason));
     if (adv.position) verdict.appendChild(U.el('div', 'ai-position', '仓位建议：' + adv.position));
     if (adv.action_note) {
-      verdict.appendChild(U.el('div', 'ai-position', '⚠ ' + adv.action_note));
+      if (adv.action_note) {
+        const posEl = U.el('div', 'ai-position');
+        posEl.appendChild(U.icon('alert', { size: 14 }));
+        posEl.appendChild(document.createTextNode(' ' + adv.action_note));
+        verdict.appendChild(posEl);
+      }
     }
 
     const levels = U.el('div', 'ai-levels');
@@ -237,7 +242,7 @@ import { API } from './api.js';
       const sig = adv.signal;
       if (sig) {
         const sigNode = U.el('span', 'ai-signal ' + sig,
-          sig === 'conflict' ? '⚠ 信号背离' : sig === 'aligned' ? '信号共振' : '信号中性');
+          sig === 'conflict' ? '[冲突] 信号背离' : sig === 'aligned' ? '信号共振' : '信号中性');
         sigNode.title = adv.signal_note || '';
         srow.appendChild(sigNode);
       }
@@ -459,7 +464,7 @@ import { API } from './api.js';
         + ' / 资金 ' + (sc.capital > 0 ? '+' : '') + sc.capital
         + ' / 消息 ' + (sc.news > 0 ? '+' : '') + sc.news
         + (sc.intraday != null && sc.intraday !== 0 ? ' / 盘口 ' + (sc.intraday > 0 ? '+' : '') + sc.intraday + '（计入技术面）' : '')
-        + (adv.signal === 'conflict' ? '（⚠ 信号背离，建议观望确认）' : ''));
+        + (adv.signal === 'conflict' ? '（信号背离，建议观望确认）' : ''));
     }
     lines.push('');
 

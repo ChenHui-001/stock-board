@@ -644,7 +644,7 @@ import { AI } from './ai.js';
   function renderAnalysisError(msg) {
     hsModalBody().innerHTML =
       '<div class="empty">'
-      + '<div class="empty-icon">⚠️</div>'
+      + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
       + '<div class="empty-title">分析失败</div>'
       + '<div class="empty-desc">' + U.escapeHtml(msg) + '</div>'
       + '</div>';
