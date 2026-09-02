@@ -46,6 +46,7 @@ class El {
   constructor(tag) {
     this.tagName = String(tag).toUpperCase();
     this.childNodes = [];
+    this.parentNode = null;
     this.style = {};
     this.dataset = {};
     this.attributes = {};
@@ -55,11 +56,14 @@ class El {
     this.hidden = false;
     this.classList = makeClassList(this);
   }
+  // id 走 attributes，让 getElementById / '#id' 选择器能找到直接赋值的 node.id
+  get id() { return this.attributes.id || ''; }
+  set id(v) { this.attributes.id = v; }
   get className() { return this._class; }
   set className(v) { this._class = String(v || ''); }
   set innerHTML(v) { this._innerHTML = v; if (v === '') this.childNodes.length = 0; }
   get innerHTML() { return this._innerHTML || ''; }
-  appendChild(c) { this.childNodes.push(c); return c; }
+  appendChild(c) { this.childNodes.push(c); if (c) c.parentNode = this; return c; }
   remove() { }
   setAttribute(k, v) { this.attributes[k] = v; if (k === 'class') this._class = String(v); }
   getAttribute(k) { return this.attributes[k]; }
@@ -77,9 +81,22 @@ class El {
       return this.tagName === p.toUpperCase();
     });
   }
+  // 支持逗号分组 + 后代选择器（'.a .b'）。不做完整 CSS 解析，够用即可：
+  // 末段必须匹配节点自身，其余段由近到远向上找祖先匹配（允许跨层，即后代语义）
+  _matchChain(parts) {
+    if (!this._matches(parts[parts.length - 1])) return false;
+    let idx = parts.length - 2;
+    let cur = this.parentNode;
+    while (idx >= 0) {
+      if (!cur) return false;
+      if (cur._matches && cur._matches(parts[idx])) idx--;
+      cur = cur.parentNode;
+    }
+    return true;
+  }
   querySelectorAll(sel) {
     const groups = String(sel).split(',').map((s) => s.trim()).filter(Boolean);
-    return this._all().filter((n) => n._matches && groups.some((g) => n._matches(g)));
+    return this._all().filter((n) => n._matches && groups.some((g) => n._matchChain(g.split(/\s+/))));
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
