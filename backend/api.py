@@ -274,7 +274,7 @@ async def remove_watchlist(body: CodesBody) -> dict[str, Any]:
 @router.post("/watchlist/order")
 async def order_watchlist(body: CodesBody) -> dict[str, Any]:
     """拖拽排序落库（需求 3.2.2）。"""
-    storage.reorder_watch(body.codes)
+    await storage.a_reorder_watch(body.codes)
     return {"ok": True}
 
 
@@ -485,7 +485,7 @@ async def ai_watchlist(refresh: bool = Query(False)) -> dict[str, Any]:
     行内信号丸与总览卡片使用。规则引擎快照标记 is_brief，不会替代单股的
     完整 LLM 分析。
     """
-    codes = storage.watchlist_codes()
+    codes = await storage.a_watchlist_codes()
     if not codes:
         return {"items": [], "total": 0, "analyzed": 0, "refresh": refresh}
 
@@ -601,7 +601,7 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
             ],
             "from_cache": False,
         }
-        storage.save_report(code, report)
+        await storage.a_save_report(code, report)
         return report
 
     # 每股票单飞：并发点击同一只股票只打一次 LLM/取数，其余请求等待复用
