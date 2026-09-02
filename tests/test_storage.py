@@ -1,16 +1,20 @@
-"""storage 的 schema 迁移机制。
+"""storage 的 schema 迁移机制 + 批量写 / 异步封装。
 
 为什么单独一个文件：迁移是会直接改库结构的操作，一旦写错就是毁数据，
 值得有一组专门的用例盯着「幂等 / 顺序 / 老库升级 / 失败可重试」这四件事。
+后半段的 update_meta_batch 与 a_xxx 封装是 P0-2（消除同步 sqlite 阻塞
+事件循环）的产物，与迁移同属 storage 的连接/锁设计，放一起便于维护。
 
-本文件不覆盖 storage 的常规增删改查，只覆盖迁移机制本身。
+本文件不覆盖 storage 的常规增删改查，只覆盖迁移机制与并发相关契约。
 
 隔离：所有用例都走 isolated_db fixture，库文件落在 tmp_path 下。
 conftest 已把 DATA_DIR 指向 mkdtemp，因此不会碰到真实的 data/board.db。
 """
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
