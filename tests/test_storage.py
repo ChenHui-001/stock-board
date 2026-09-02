@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -444,3 +445,140 @@ async def test_async_wrappers_return_same_as_sync(isolated_db: Path) -> None:
 
     assert await storage.a_remove_watch(["600000"]) == 1
     assert "600000" not in await storage.a_watched_codes()
+
+
+# a_xxx -> (被包装的同步函数名, 调用参数)。新增封装时同步补一行，漏补会在这里被抓出来。
+_ASYNC_WRAPPER_TABLE: list[tuple[str, str, tuple[object, ...]]] = [
+    ("a_list_watchlist", "list_watchlist", ()),
+    ("a_watchlist_codes", "watchlist_codes", ()),
+    ("a_add_watch", "add_watch", ("000001",)),
+    ("a_remove_watch", "remove_watch", (["000001"],)),
+    ("a_reorder_watch", "reorder_watch", (["000001"],)),
+    ("a_update_meta", "update_meta", ("000001", None, "板")),
+    ("a_update_meta_batch", "update_meta_batch", ([("000001", None, "板")],)),
+    ("a_is_watched", "is_watched", ("000001",)),
+    ("a_watched_codes", "watched_codes", ()),
+    ("a_get_kv", "get_kv", ("nope",)),
+    ("a_save_report", "save_report", ("000001", {"analysis": {}})),
+]
+
+
+@pytest.mark.asyncio
+async def test_every_async_wrapper_runs_off_the_event_loop(isolated_db: Path, monkeypatch) -> None:
+    """11 个 a_xxx 逐个验，不许有一个漏包 to_thread。
+
+    只抽查几个的话，剩下的封装哪怕忘了包 to_thread 也能蒙混过关——而它们一样会在
+    请求路径上阻塞整个 loop。做法是把对应的同步函数逐个换成探针，跑一遍 a_xxx，
+    要求同步函数确实被调用、且不在事件循环所在线程。
+    """
+    _seed_watchlist(1)
+    loop_thread = threading.current_thread().name
+
+    for aname, sname, args in _ASYNC_WRAPPER_TABLE:
+        seen: list[str] = []
+        real = getattr(storage, sname)
+
+        def spy(*a: object, _real: object = real, _seen: list[str] = seen) -> object:
+            _seen.append(threading.current_thread().name)
+            return _real(*a)  # type: ignore[operator]
+
+        monkeypatch.setattr(storage, sname, spy)
+        await getattr(storage, aname)(*args)
+
+        assert seen, f"{aname} 没有真正调用到 {sname}，封装的表对应关系可能已经变了"
+        assert seen[0] != loop_thread, f"{aname} 仍在事件循环线程执行，等于没解决问题"
+        assert seen[0].startswith("asyncio"), f"{aname} 跑在意外线程：{seen[0]}"
+
+
+@pytest.mark.asyncio
+async def test_async_wrapper_does_not_block_the_event_loop(isolated_db: Path, monkeypatch) -> None:
+    """a_xxx 执行期间事件循环必须还能调度别的协程——「不阻塞」的实质在这里。
+
+    光看线程名只能证明「跑在别的线程」，证明不了「那个线程卡住时 loop 不受影响」。
+    这里把同步函数换成会卡 0.3 秒的版本，同时放一个 ticker 协程在 loop 上数数：
+    真把阻塞挪出去了，ticker 能数到几十次；要是退化成直接同步调用，一次都数不到。
+    """
+    _seed_watchlist(1)
+    real = storage.list_watchlist
+
+    def slow() -> list[dict[str, object]]:
+        time.sleep(0.3)
+        return real()
+
+    monkeypatch.setattr(storage, "list_watchlist", slow)
+
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.005)
+            ticks += 1
+
+    tick_task = asyncio.create_task(ticker())
+    rows = await storage.a_list_watchlist()
+    tick_task.cancel()
+    try:
+        await tick_task
+    except asyncio.CancelledError:
+        pass
+
+    assert len(rows) == 1
+    # 0.3s / 0.005s ≈ 60 次。下限取 10：容得下慢机器，又远大于同步调用的 0 次
+    assert ticks >= 10, (
+        f"a_xxx 执行期间事件循环应能继续调度其他协程，实际只转了 {ticks} 次"
+    )
+
+
+class _CountingLock:
+    """统计「同一时刻有几个线程在锁内」的锁代理。
+
+    _lock 是模块级名字，同步函数里 `with _lock:` 每次都从模块全局现取，所以可以整体
+    换成一个代理：真锁照加，顺带数并发。数并发必须数在锁内而不是数在函数入口——
+    多个线程同时进函数是正常的，真正要求互斥的是 _lock 保护的那段临界区。
+    """
+
+    def __init__(self, real: threading.Lock) -> None:
+        self._real = real
+        self._guard = threading.Lock()
+        self.inside = 0
+        self.max = 0
+
+    def __enter__(self) -> "_CountingLock":
+        self._real.acquire()
+        with self._guard:
+            self.inside += 1
+            self.max = max(self.max, self.inside)
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        with self._guard:
+            self.inside -= 1
+        self._real.release()
+        return False
+
+
+@pytest.mark.asyncio
+async def test_concurrent_async_wrappers_stay_serialized(isolated_db: Path, monkeypatch) -> None:
+    """8 个协程并发打同一个 a_xxx：结果都要对，且 DB 临界区恒为单线程。
+
+    这是 to_thread 方案的核心风险点：_lock 是 threading.Lock（不可重入），一旦有人在
+    持锁期间 await、或者临界区里发生重入，就会永久卡死。这里在锁内数并发——
+    恒为 1 说明串行化没被多线程破坏；跑完能收敛回 0 说明没有调用卡在锁里出不来。
+    """
+    _seed_watchlist(5)
+    real = storage.list_watchlist
+
+    def slow() -> list[dict[str, object]]:
+        time.sleep(0.02)  # 放大竞态窗口，让并发问题有机会暴露
+        return real()
+
+    monkeypatch.setattr(storage, "list_watchlist", slow)
+    counting = _CountingLock(storage._lock)
+    monkeypatch.setattr(storage, "_lock", counting)
+
+    results = await asyncio.gather(*[storage.a_list_watchlist() for _ in range(8)])
+
+    assert all(len(r) == 5 for r in results), "并发读应各自拿到完整结果"
+    assert counting.max == 1, f"DB 临界区应被 _lock 串行化，实测最大并发 {counting.max}"
+    assert counting.inside == 0, "有调用没退出临界区，说明锁的释放路径有问题"
