@@ -36,6 +36,16 @@ def _clamp_llm_timeout(v: float) -> float:
     return max(v, 90.0)
 
 
+def _clamp_llm_total_timeout(v: float, single: float) -> float:
+    """多档案串行故障转移的总预算下限：至少要容得下一个档案跑满 LLM_TIMEOUT。
+
+    总预算小于单档案超时的话，连第一个档案都会被提前掐断，故障转移形同虚设
+    （表现为「永远是第一个源超时」，永远换不到备用源）。用户仍可调大，但不能
+    调得比单档案超时还小。
+    """
+    return max(v, single)
+
+
 def _list(name: str, default: list[str]) -> list[str]:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -115,6 +125,14 @@ class Settings:
     # 默认 120s 留足余量，且经 _clamp_llm_timeout 保底 ≥90s：旧 .env/compose
     # 里的 45s 等过小配置无法再生效。
     LLM_TIMEOUT = _clamp_llm_timeout(_float("LLM_TIMEOUT", 120.0))
+    # 多档案串行故障转移的「总预算」：chat_json 会依次尝试每个档案，单档案最坏
+    # 跑满 LLM_TIMEOUT(120s)，4 个档案串行就是 8 分钟——HTTP 请求早就断开了，
+    # 用户只看到转圈。180s = 单档案 120s + 约 60s 换源机会：主源超时后还能让
+    # 备用源跑一段，实在不行则由总预算兜底抛 LLMError 走规则引擎降级。
+    # 经 _clamp_llm_total_timeout 保底不低于 LLM_TIMEOUT，避免配成比单档案还小。
+    LLM_TOTAL_TIMEOUT = _clamp_llm_total_timeout(
+        _float("LLM_TOTAL_TIMEOUT", 180.0), LLM_TIMEOUT
+    )
     LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 4000)
     # 思考类模型（deepseek-reasoner / *-thinking / r1 等）的思考过程也占用输出配额，
     # 配额不足时正文 content 会为空；检测到思考型模型或空正文时自动放大到此值重试。
