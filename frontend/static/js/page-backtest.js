@@ -3,6 +3,9 @@ import { U } from './util.js';
 import { API } from './api.js';
 
 let viewEl = null;
+// 本页当前是否挂载在路由上。轮询是异步的：await 期间用户可能已经切走，
+// 回调回来时 #view 已被别的页面整块替换，此时任何渲染都是往别人的页面写内容。
+let active = false;
 
 const state = {
   strategies: [],
@@ -216,9 +219,13 @@ function stopPolling() {
 }
 
 async function pollOnce() {
+  // 已离开回测页：正常由 destroy() 停掉轮询，这里兜住「卸载被绕过」的情况
+  if (!active) { stopPolling(); return; }
   if (!state.running) { stopPolling(); return; }
   try {
     const meta = await API.backtestRunStatus(state.running);
+    // await 期间用户可能已切走：#view 已被替换，下面的渲染必须全部放弃
+    if (!active) { stopPolling(); return; }
     state.runMeta = meta;
     renderProgress(meta);
     if (meta.status === 'done') {
@@ -500,8 +507,18 @@ async function load() {
 export const PageBacktest = {
   mount: function () {
     viewEl = document.getElementById('view');
+    active = true;
     load();
   },
   refresh: function () { load(); },
   tick: function () { /* 回测是手动触发型，不做自动刷新 */ },
+  // 卸载钩子：由 app.js 在路由切换时统一调用（与 Charts.disposeAll 同层）。
+  // 不停掉的话 pollTimer 会每 1.5s 一直在后台跑，且回测完成后会把结果
+  // 渲染进已经被替换掉的 #view。
+  destroy: function () {
+    active = false;
+    stopPolling();
+    // 清 running：重新进入本页时由 load() 从服务端返回的 data.running 恢复
+    state.running = null;
+  },
 };

@@ -17,7 +17,9 @@ import { Settings } from './settings.js';
     // 上一个非 stock 路由,用于详情页「← 返回」导航到来源页面。
     // 只有在进入 stock 时才会更新;fallback 是 home。
     fromRoute: null, fromParam: null,
-    timer: null, session: null, meta: null
+    timer: null, session: null, meta: null,
+    // 当前挂载的页面模块。路由切换前用来调用它的 destroy() 卸载钩子
+    mounted: null
   };
 
   function parseHash() {
