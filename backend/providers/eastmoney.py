@@ -9,6 +9,7 @@ from typing import Any
 from ..utils import TZ, normalize_code, resolve_market, secid, to_float
 from .base import (
     Bar,
+    Board,
     FinancialPeriod,
     FlowDay,
     MarginDay,
@@ -35,7 +36,9 @@ REFERER = {"Referer": "https://quote.eastmoney.com/"}
 # f86 在 stock/get（单股）接口是标准 unix 时间戳，但在 ulist（批量）接口部分场景
 # 返回的是延迟秒数等非时间戳值；f124 是批量接口的备选更新时间字段，二者都无效时
 # trade_date 置空，由上层用 K 线日期回填（详情页已实现）。
-QUOTE_FIELDS = "f1,f2,f3,f4,f5,f6,f8,f10,f12,f13,f14,f15,f16,f17,f18,f86,f100,f124,f292"
+QUOTE_FIELDS = "f1,f2,f3,f4,f5,f6,f8,f10,f12,f13,f14,f15,f16,f17,f18,f62,f86,f100,f124,f184,f292"
+#                  现价 涨跌额 涨跌幅 涨跌额2 量 额 换手 量比 代 市 名 最 高 低 开 昨收 主力净流入 时间 行业 名称2 主力净占比 振幅
+# P0-2：f62/f184 扩字段零额外请求即可拿到盘中主力净流入/净占比；其他字段含义不变
 
 # A 股全市场（沪深主板+创业板+科创板+北交所）
 FS_ALL = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
@@ -177,6 +180,9 @@ class EastmoneyProvider(Provider):
                 amount=to_float(row.get("f6")),
                 turnover=to_float(row.get("f8")),
                 volume_ratio=to_float(row.get("f10")),
+                # P0-2：盘中主力资金扩字段。f62=主力净流入(元)，f184=主力净占比(%)
+                main_net_inflow=to_float(row.get("f62")),
+                main_net_pct=to_float(row.get("f184")),
                 trade_date=_ts_to_date(row.get("f86")) or _ts_to_date(row.get("f124")),
                 source=self.name,
             )
@@ -345,7 +351,11 @@ class EastmoneyProvider(Provider):
         return out
 
     # ------------------------------------------------------------ 板块
-    async def boards(self, code: str, market: str) -> list[str]:
+    async def boards(self, code: str, market: str) -> list[Board]:
+        """个股所属板块列表。P0-3：slist 响应已带 f12/f13/f14/f3，原实现只取 f14
+        把板块代码/市场/涨跌幅全丢掉了。现在改为返回结构化 Board，前端可走
+        secid=90.<code> 二次取板块行情，或直接读 change_pct 用于情绪周期判定。
+        """
         resp = await fetch(
             f"{PUSH}/slist/get",
             headers=REFERER,
@@ -364,8 +374,18 @@ class EastmoneyProvider(Provider):
         diff = ((resp.json() or {}).get("data") or {}).get("diff") or {}
         if isinstance(diff, dict):
             diff = list(diff.values())
-        names = [str(x.get("f14") or "").strip() for x in diff]
-        return [n for n in names if n]
+        out: list[Board] = []
+        for x in diff:
+            name = str(x.get("f14") or "").strip()
+            if not name:
+                continue
+            out.append(Board(
+                code=str(x.get("f12") or "").strip(),
+                market=str(x.get("f13") or "").strip(),
+                name=name,
+                change_pct=to_float(x.get("f3")),
+            ))
+        return out
 
     # ------------------------------------------------------------ 批量行业
     async def industry(self, keys: list[tuple[str, str]]) -> dict[str, str]:

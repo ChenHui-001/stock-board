@@ -241,6 +241,15 @@ class Quote:
     amount: float | None = None      # 成交额（元）
     turnover: float | None = None    # 换手率 %
     volume_ratio: float | None = None  # 量比
+    # P0-1: 分时均价 VWAP（amount / volume，盘中实时，零新增请求）
+    # 单位：元/股。volume=0 时为 None，由 service.py 在拿到 quote 后计算填充
+    vwap: float | None = None
+    # P0-1: 现价相对 VWAP 的偏离幅度（百分比，+ 表示在均价上方）
+    deviation_pct: float | None = None
+    # P0-2: 主力资金（f62=主力净流入元 / f184=主力净占比%）盘中实时可得
+    # 与历史日级 fund_flow 不同：此为当前盘口快照，由 QUOTE_FIELDS 扩 f62/f184 后带出
+    main_net_inflow: float | None = None
+    main_net_pct: float | None = None
     trade_date: str = ""
     # 数据新鲜度 / 延迟感知（由取源时填充，用于多源竞速择优）
     quote_time: str = ""             # 源给出的最新报价时间（HH:MM:SS 或完整时间）
@@ -267,6 +276,27 @@ class Bar:
     # ATR(14)：在 service.py 由 indicators.compute_atr 注入；数据不足或
     # 计算失败时为 None，便于上层判定是否启用 ATR 突破/归一化逻辑
     atr: float | None = None
+
+
+@dataclass
+class Board:
+    """个股所属板块条目。P0-3：slist 已带出 f12/f13/f14/f3，从原 list[str]
+    升级为带结构的对象，使详情页能拿到板块代码（用于走 stock/get 二次取行情）
+    与板块涨跌幅（情绪周期判定 + 相对强弱基准），不再丢弃这些已有字段。
+
+    字段语义：
+      code        板块代码（如 BK0475）；用作 secid=90.<code> 走 stock/get
+      market      市场标识（90=东财板块）；仅用于 secid 拼接
+      name        板块显示名（如「银行Ⅱ」）
+      change_pct  板块当日涨跌幅 %（来自 slist f3）；null 表示源未返回
+    """
+    code: str = ""
+    market: str = ""
+    name: str = ""
+    change_pct: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -377,7 +407,7 @@ class Provider:
     async def hot(self, limit: int = 10) -> dict[str, list[Quote]]:
         raise NotSupported
 
-    async def boards(self, code: str, market: str) -> list[str]:
+    async def boards(self, code: str, market: str) -> list[Board]:
         raise NotSupported
 
     async def industry(self, keys: list[tuple[str, str]]) -> dict[str, str]:
