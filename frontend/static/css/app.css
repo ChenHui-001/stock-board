@@ -2576,6 +2576,68 @@ main {
   border: 1px solid;
 }
 
+/* P0-7：详情页首屏 AI 结论卡片 */
+.ai-summary-card {
+  border-left: 3px solid var(--accent);
+}
+.ai-summary-body {
+  min-height: 96px;
+}
+.ai-summary-skeleton {
+  padding: 28px 0;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.ai-summary-empty {
+  padding: 22px 0;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.ai-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.ai-summary-action {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.ai-summary-head.act-buy    .ai-summary-action { color: var(--up, #f5465d); }
+.ai-summary-head.act-reduce .ai-summary-action { color: var(--down, #17b26a); }
+.ai-summary-head.act-hold   .ai-summary-action { color: var(--text-faint); }
+.ai-summary-source {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  margin-left: auto;
+}
+.ai-summary-triggers {
+  background: rgba(255,255,255,.04);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  line-height: 1.7;
+  font-size: 13px;
+}
+.ai-summary-trigger-row + .ai-summary-trigger-row {
+  margin-top: 4px;
+}
+.ai-summary-position {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.ai-summary-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
 .ai-verdict.act-buy {
   background: rgba(245, 70, 93, .1);
   border-color: rgba(245, 70, 93, .4);

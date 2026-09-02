@@ -72,6 +72,9 @@ import { App } from './app.js';
 
     root.appendChild(renderHead(d));
 
+    // P0-7：AI 结论卡片前置（异步填充，骨架先出，数据到后填充；默认只读缓存 + 规则快算）
+    root.appendChild(renderAiSummaryCard(d));
+
     if (d.quote.status && d.quote.status !== 'normal' && d.quote.status_text) {
       root.appendChild(notice(d.quote.status_text + '，页面数据可能非最新成交价。', ''));
     }
@@ -85,6 +88,9 @@ import { App } from './app.js';
     root.appendChild(section('资金与杠杆（30 天）', renderCapital(d), capitalSubtitle(d), 'capital'));
     root.appendChild(section('财报数据（季报 / 中报 / 三季报 / 年报）', renderFinancials(d), financialsSubtitle(d), 'financials'));
     root.appendChild(renderSourceFooter(d));
+
+    // P0-7：异步拉取 AI 结论（不阻塞首屏渲染）
+    requestAnimationFrame(function () { loadAiSummaryAsync(d); });
 
     // 图表要在 DOM 挂载后再初始化
     requestAnimationFrame(function () {
@@ -429,6 +435,159 @@ import { App } from './app.js';
   function amplitude(q) {
     if (!U.isNum(q.high) || !U.isNum(q.low) || !U.isNum(q.prev_close) || !q.prev_close) return U.NBSP;
     return ((q.high - q.low) / q.prev_close * 100).toFixed(2) + '%';
+  }
+
+  // ---------------------------------------------------------- P0-7 AI 结论卡片（前置 + 异步）
+  /**
+   * 卡片结构：
+   *   ▸ 头部：action 大字（如「加仓」红色 / 「减仓」绿色 / 「观望」灰色）
+   *   ▸ 副头：置信度档位（低/中/高 配色）+ 引擎来源（规则/LLM）+ 数据时间
+   *   ▸ 触发条件（triggers.text）：加仓/减仓具体价位 + 价格止损位 + 时间止损
+   *   ▸ 常驻免责说明（按 P0-8 同步落地）
+   *   ▸ 「查看完整 AI 报告 →」按钮，复用现有 ai.open() 弹窗
+   *
+   * 异步填充策略（PRD §Q6 建议默认不触发 LLM）：
+   *   1. 卡片先出骨架（loading）
+   *   2. 并行：① 读缓存（GET /api/analysis/{code}）② 规则快算（POST /api/analysis）
+   *      （规则永远比 LLM 快，先到先用）
+   *   3. 用户点「完整报告」才触发 LLM（POST /api/analysis?force=true）
+   */
+  function renderAiSummaryCard(d) {
+    const card = U.el('div', 'card ai-summary-card');
+    card.id = 'ai-summary-card';
+    card.dataset.code = d.quote.code;
+    card.dataset.name = d.quote.name || '';
+
+    const head = U.el('div', 'card-head');
+    head.appendChild(U.el('div', 'card-title', '🤖 AI 智能分析'));
+    head.appendChild(U.el('div', 'card-sub', '首屏直接给出三选一建议，点击下方展开完整 LLM 报告'));
+    card.appendChild(head);
+
+    const body = U.el('div', 'card-body ai-summary-body');
+    // 骨架：3 行占位（action + 置信 + triggers）
+    body.appendChild(U.el('div', 'ai-summary-skeleton', '分析中…'));
+    card.appendChild(body);
+
+    // 「查看完整报告」按钮
+    const actions = U.el('div', 'ai-summary-actions');
+    const btn = U.el('button', 'btn btn-sm btn-ghost', '查看完整 AI 报告 →');
+    btn.onclick = function () {
+      import('./ai.js').then(function (mod) {
+        mod.AI.open(d.quote.code, d.quote.name, btn);
+      });
+    };
+    actions.appendChild(btn);
+    card.appendChild(actions);
+
+    return card;
+  }
+
+  /**
+   * 异步拉取并填充 AI 结论：先打规则快算（有缓存就用缓存），永远不自动触发 LLM。
+   * 失败/超时 → 卡片显示「数据准备中，可点击下方按钮生成完整报告」并不再重试。
+   */
+  async function loadAiSummaryAsync(d) {
+    const card = document.getElementById('ai-summary-card');
+    if (!card) return;
+    const body = card.querySelector('.ai-summary-body');
+    if (!body) return;
+
+    try {
+      const res = await fetch('/api/analysis/' + encodeURIComponent(d.quote.code), {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      // 响应形状: { ok, advice: {...}, engine, model, data_time, ... }
+      const advice = (data && data.advice) || {};
+      if (advice.action) {
+        _fillAiSummaryBody(body, advice, data);
+        return;
+      }
+    } catch (e) {
+      // 静默：失败时卡片保留骨架态，按钮仍可用
+    }
+
+    // 兜底：规则快算（如果 /analysis/{code} 没缓存或失败，规则引擎也能给结论）
+    try {
+      const res = await fetch('/api/analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: d.quote.code, force_llm: false })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const advice = (data && data.advice) || {};
+        if (advice.action) {
+          _fillAiSummaryBody(body, advice, data);
+          return;
+        }
+      }
+    } catch (e) {}
+
+    // 全部失败：保留骨架，按钮提示用户手动触发 LLM
+    body.innerHTML = '';
+    body.appendChild(U.el('div', 'ai-summary-empty',
+      '数据准备中，可点击下方「查看完整 AI 报告 →」生成结论'));
+  }
+
+  /**
+   * 把 advice 渲染进卡片 body：
+   *   - action 大字 + 颜色（act-buy/red / act-reduce/green / act-hold/gray）
+   *   - 置信度档位 + 来源（规则引擎 / LLM）+ 数据时间
+   *   - 触发条件（含具体价格）+ 时间止损
+   *   - 常驻免责说明
+   */
+  function _fillAiSummaryBody(body, advice, meta) {
+    body.innerHTML = '';
+    const tone = { '加仓': 'act-buy', '减仓': 'act-reduce', '观望': 'act-hold' };
+    const cls = tone[advice.action] || 'act-hold';
+
+    // 头部一行：action 大字 + 置信度档位 + 引擎来源 + 数据时间
+    const head = U.el('div', 'ai-summary-head ' + cls);
+    head.appendChild(U.el('div', 'ai-summary-action', advice.action));
+
+    if (U.isNum(advice.confidence)) {
+      const c = advice.confidence;
+      const tier = c <= 45 ? { label: '低', cls: 'conf-low' }
+                : c <= 64 ? { label: '中', cls: 'conf-mid' }
+                :           { label: '高', cls: 'conf-high' };
+      const confNode = U.el('span', 'ai-conf ' + tier.cls,
+                            '置信度 ' + tier.label + '(' + c + '%)');
+      if (advice.confidence_reason) confNode.title = advice.confidence_reason;
+      head.appendChild(confNode);
+    }
+    const srcParts = [];
+    if (meta && meta.engine === 'llm') srcParts.push('LLM');
+    else srcParts.push('规则引擎');
+    if (meta && meta.data_time) srcParts.push('数据 ' + meta.data_time);
+    head.appendChild(U.el('div', 'ai-summary-source', srcParts.join(' · ')));
+    body.appendChild(head);
+
+    // 触发条件（具体价格 + 止损 + 时间止损）
+    const trig = advice.triggers || {};
+    const trigBox = U.el('div', 'ai-summary-triggers');
+    if (trig.text) {
+      trigBox.appendChild(U.el('div', 'ai-summary-trigger-row', trig.text));
+    }
+    if (advice.stop_loss_text) {
+      trigBox.appendChild(U.el('div', 'ai-summary-trigger-row', advice.stop_loss_text));
+    }
+    if (advice.time_stop) {
+      trigBox.appendChild(U.el('div', 'ai-summary-trigger-row',
+        '⏱ 时间止损：' + advice.time_stop));
+    }
+    body.appendChild(trigBox);
+
+    // 仓位建议（一句话）
+    if (advice.position) {
+      body.appendChild(U.el('div', 'ai-summary-position', advice.position));
+    }
+
+    // 常驻免责
+    body.appendChild(U.el('div', 'ai-disclaimer',
+      '⚠ 规则引擎评分方向性有限，置信度仅表示信号一致程度，不作收益承诺'));
   }
 
   // ---------------------------------------------------------- 状态标签
