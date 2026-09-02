@@ -264,3 +264,69 @@
     confirmAt: confirmAt,
     copyText: copyText
   };
+/* SVG 图标库：替代 emoji/Unicode 符号，避免精简容器里渲染成方块 */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const ICONS = {
+alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><polyline points="3 21 3 16 8 16"/>',
+x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.32.22.66.22 1.03s-.08.71-.22 1.03"/>',
+flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+diamond: '<path d="M6 5h12l3 5-8.5 9.5a.7.7 0 0 1-1 0L3 10z"/><path d="M3.7 10h16.6"/><path d="m11 5 1.5 5L11 15"/><path d="m13 5-1.5 5L13 15"/>',
+robot: '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 4v4"/><circle cx="9" cy="13" r="1"/><circle cx="15" cy="13" r="1"/><path d="M9 17h6"/>',
+chartBar: '<line x1="3" y1="3" x2="3" y2="21"/><line x1="21" y1="3" x2="21" y2="21"/><line x1="21" y1="3" x2="3" y2="3"/><rect x="7" y="13" width="3" height="5"/><rect x="12" y="9" width="3" height="9"/><rect x="17" y="5" width="3" height="13"/>',
+chartLine: '<path d="M3 3v18h18"/><polyline points="7 14 11 10 14 13 21 6"/>',
+search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+news: '<rect x="6" y="4" width="14" height="16" rx="1"/><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/><path d="M19 18a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"/>',
+fileText: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="14" y2="17"/>',
+inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+bolt: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+arrowUp: '<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
+arrowDown: '<line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/>',
+arrowRight: '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>',
+eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'
+};
+icon: icon,
+iconHtml: iconHtml,
+ICONS: ICONS
+
+/** 创建 SVG 图标 DOM 节点（返回 <svg>，可直接 appendChild）。 */
+function icon(name, opts) {
+const path = ICONS[name];
+const o = opts || {};
+const sz = o.size || 16;
+const cls = o.cls || 'svg-icon';
+const sw = o.stroke || 2;
+if (!path) return document.createTextNode('?');
+const svg = document.createElementNS(SVG_NS, 'svg');
+svg.setAttribute('class', cls);
+svg.setAttribute('viewBox', '0 0 24 24');
+svg.setAttribute('width', String(sz));
+svg.setAttribute('height', String(sz));
+svg.setAttribute('fill', 'none');
+svg.setAttribute('stroke', 'currentColor');
+svg.setAttribute('stroke-width', String(sw));
+svg.setAttribute('stroke-linecap', 'round');
+svg.setAttribute('stroke-linejoin', 'round');
+if (o.title) { svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', o.title); }
+else { svg.setAttribute('aria-hidden', 'true'); }
+svg.innerHTML = path;
+return svg;
+}
+
+/** 字符串版：用在内嵌 innerHTML 模板里。 */
+function iconHtml(name, opts) {
+const path = ICONS[name];
+const o = opts || {};
+if (!path) return escapeHtml(name || '?');
+const sz = o.size || 16;
+const cls = o.cls || 'svg-icon';
+const sw = o.stroke || 2;
+const a11y = o.title ? ' role="img" aria-label="' + escapeHtml(o.title) + '"' : ' aria-hidden="true"';
+const attrs = ' fill="none" stroke="currentColor" stroke-width="' + sw + '" stroke-linecap="round" stroke-linejoin="round"' + a11y;
+return '<svg class="' + cls + '" viewBox="0 0 24 24" width="' + sz + '" height="' + sz + attrs + '>' + path + '</svg>';
+}
