@@ -1,5 +1,6 @@
 """HTTP API 路由。"""
 from __future__ import annotations
+import re
 
 import asyncio
 import logging
@@ -383,8 +384,12 @@ async def value_weights_reset() -> dict[str, Any]:
 @router.get("/stock/{code}")
 async def stock_detail(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
     code = normalize_code(code)
-    if not code:
-        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    # 防御性：路径上 {code} 可能被路由到任意字符串（旧的注册顺序 bug，
+    # /ai/{code} 抢在 /ai/watchlist 前面），保证只接受 6 位数字股票代码，
+    # 否则直接 404，避免把 "watchlist" 这种字面量当股票去请求所有行情源，
+    # 触发「所有行情数据源均不可用」误报。
+    if not code or not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=404, detail=f"非法的股票代码：{code}")
     try:
         return await service.stock_detail(code, resolve_market(code), force=refresh)
     except ProviderError as exc:
@@ -395,8 +400,12 @@ async def stock_detail(code: str, refresh: bool = Query(False)) -> dict[str, Any
 async def stock_quote(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
     """轻量行情（详情页自动刷新用）：只返回单只报价，不携带 K线/资金/两融历史。"""
     code = normalize_code(code)
-    if not code:
-        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    # 防御性：路径上 {code} 可能被路由到任意字符串（旧的注册顺序 bug，
+    # /ai/{code} 抢在 /ai/watchlist 前面），保证只接受 6 位数字股票代码，
+    # 否则直接 404，避免把 "watchlist" 这种字面量当股票去请求所有行情源，
+    # 触发「所有行情数据源均不可用」误报。
+    if not code or not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=404, detail=f"非法的股票代码：{code}")
     try:
         quote = await service.get_quote(code, resolve_market(code), force=refresh)
     except ProviderError as exc:
@@ -417,8 +426,12 @@ async def stock_news(
     days 控制时间范围（近7天=7 / 近30天=30），资讯列表随范围联动。
     """
     code = normalize_code(code)
-    if not code:
-        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    # 防御性：路径上 {code} 可能被路由到任意字符串（旧的注册顺序 bug，
+    # /ai/{code} 抢在 /ai/watchlist 前面），保证只接受 6 位数字股票代码，
+    # 否则直接 404，避免把 "watchlist" 这种字面量当股票去请求所有行情源，
+    # 触发「所有行情数据源均不可用」误报。
+    if not code or not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=404, detail=f"非法的股票代码：{code}")
     if days not in (7, 30):
         raise HTTPException(status_code=400, detail="days 仅支持 7/30")
     name = ""
@@ -447,8 +460,12 @@ async def stock_reports(
     评级分布统计条与研报列表随范围联动。
     """
     code = normalize_code(code)
-    if not code:
-        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    # 防御性：路径上 {code} 可能被路由到任意字符串（旧的注册顺序 bug，
+    # /ai/{code} 抢在 /ai/watchlist 前面），保证只接受 6 位数字股票代码，
+    # 否则直接 404，避免把 "watchlist" 这种字面量当股票去请求所有行情源，
+    # 触发「所有行情数据源均不可用」误报。
+    if not code or not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=404, detail=f"非法的股票代码：{code}")
     if days not in (0, 30, 90, 365):
         raise HTTPException(status_code=400, detail="days 仅支持 0/30/90/365")
     try:
@@ -459,11 +476,63 @@ async def stock_reports(
 
 # ------------------------------------------------------------------ AI 分析
 
+@router.get("/ai/watchlist")
+@router.post("/ai/watchlist")
+async def ai_watchlist(refresh: bool = Query(False)) -> dict[str, Any]:
+    """自选股批量 AI 摘要：优先读缓存，refresh=1 时用规则引擎快速重算并写入缓存。
+
+    返回轻量摘要列表（action/confidence/reason/支撑压力/周期/引擎），供首页
+    行内信号丸与总览卡片使用。规则引擎快照标记 is_brief，不会替代单股的
+    完整 LLM 分析。
+    """
+    codes = storage.watchlist_codes()
+    if not codes:
+        return {"items": [], "total": 0, "analyzed": 0, "refresh": refresh}
+
+    summaries: list[dict[str, Any]] = []
+    missing: list[str] = []
+
+    # 先尽量读缓存，保证 GET 响应快
+    for code in codes:
+        cached = _cached_brief_report(code)
+        if cached:
+            summaries.append(_ai_summary_from_report(cached))
+        else:
+            missing.append(code)
+
+    if refresh and missing:
+        sem = asyncio.Semaphore(3)
+
+        async def _one(code: str) -> dict[str, Any] | None:
+            async with sem:
+                try:
+                    return await _generate_rule_summary(code)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("批量 AI 分析 %s 失败：%s", code, describe_exc(exc))
+                    return None
+
+        results = await asyncio.gather(*[_one(c) for c in missing], return_exceptions=True)
+        for res in results:
+            if isinstance(res, dict):
+                summaries.append(_ai_summary_from_report(res))
+
+    return {
+        "items": summaries,
+        "total": len(codes),
+        "analyzed": len(summaries),
+        "refresh": refresh,
+    }
+
+
 @router.post("/ai/{code}")
 async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
     code = normalize_code(code)
-    if not code:
-        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    # 防御性：路径上 {code} 可能被路由到任意字符串（旧的注册顺序 bug，
+    # /ai/{code} 抢在 /ai/watchlist 前面），保证只接受 6 位数字股票代码，
+    # 否则直接 404，避免把 "watchlist" 这种字面量当股票去请求所有行情源，
+    # 触发「所有行情数据源均不可用」误报。
+    if not code or not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=404, detail=f"非法的股票代码：{code}")
 
     async def _work() -> dict[str, Any]:
         # 等锁期间可能已被并发请求填充，二次检查缓存
@@ -569,49 +638,3 @@ async def _generate_rule_summary(code: str) -> dict[str, Any]:
     return report
 
 
-@router.get("/ai/watchlist")
-@router.post("/ai/watchlist")
-async def ai_watchlist(refresh: bool = Query(False)) -> dict[str, Any]:
-    """自选股批量 AI 摘要：优先读缓存，refresh=1 时用规则引擎快速重算并写入缓存。
-
-    返回轻量摘要列表（action/confidence/reason/支撑压力/周期/引擎），供首页
-    行内信号丸与总览卡片使用。规则引擎快照标记 is_brief，不会替代单股的
-    完整 LLM 分析。
-    """
-    codes = storage.watchlist_codes()
-    if not codes:
-        return {"items": [], "total": 0, "analyzed": 0, "refresh": refresh}
-
-    summaries: list[dict[str, Any]] = []
-    missing: list[str] = []
-
-    # 先尽量读缓存，保证 GET 响应快
-    for code in codes:
-        cached = _cached_brief_report(code)
-        if cached:
-            summaries.append(_ai_summary_from_report(cached))
-        else:
-            missing.append(code)
-
-    if refresh and missing:
-        sem = asyncio.Semaphore(3)
-
-        async def _one(code: str) -> dict[str, Any] | None:
-            async with sem:
-                try:
-                    return await _generate_rule_summary(code)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("批量 AI 分析 %s 失败：%s", code, describe_exc(exc))
-                    return None
-
-        results = await asyncio.gather(*[_one(c) for c in missing], return_exceptions=True)
-        for res in results:
-            if isinstance(res, dict):
-                summaries.append(_ai_summary_from_report(res))
-
-    return {
-        "items": summaries,
-        "total": len(codes),
-        "analyzed": len(summaries),
-        "refresh": refresh,
-    }
