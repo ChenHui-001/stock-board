@@ -1227,76 +1227,6 @@ main {
 }
 .sk-cell { height: 58px; }
 
-/* ---------- 首页快捷入口卡片 ---------- */
-.entry-card { padding: 4px; }
-.entry-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0;
-}
-.entry {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 18px 20px;
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: background .15s, transform .15s, box-shadow .15s;
-  text-decoration: none;
-  color: inherit;
-  outline: none;
-}
-.entry:hover, .entry:focus-visible {
-  background: var(--bg-elev-2);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
-}
-.entry:focus-visible {
-  box-shadow: 0 0 0 2px var(--accent);
-}
-.entry-icon {
-  font-size: 36px;
-  line-height: 1;
-  flex-shrink: 0;
-  filter: drop-shadow(0 2px 6px rgba(59, 130, 246, .25));
-}
-.entry-body {
-  flex: 1;
-  min-width: 0;
-}
-.entry-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 4px;
-}
-.entry-desc {
-  font-size: 13px;
-  color: var(--text-dim);
-  line-height: 1.5;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-.entry-cta {
-  color: var(--accent);
-  font-size: 14px;
-  font-weight: 500;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.entry:hover .entry-cta, .entry:focus-visible .entry-cta {
-  transform: translateX(2px);
-  transition: transform .15s;
-}
-@media (max-width: 600px) {
-  .entry { padding: 14px 16px; gap: 12px; }
-  .entry-icon { font-size: 30px; }
-  .entry-cta { display: none; }
-}
-
 @media (max-width: 720px) {
   .sk-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -5733,11 +5663,6 @@ a.hotspot-title:hover {
   height: 36px;
   opacity: 1;
 }
-.entry-icon .svg-icon {
-  width: 1em;
-  height: 1em;
-}
-
 /* spinner 状态下 svg 跟着转 */
 .spinning .refresh-icon {
   animation: spin .8s linear infinite;
