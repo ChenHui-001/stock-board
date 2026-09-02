@@ -41,7 +41,7 @@ import { App } from './app.js';
     } catch (err) {
       if (seq !== state.seq) return;      // 过期请求的失败不应覆盖当前页面
       view().innerHTML = '<div class="card"><div class="empty">'
-        + '<div class="empty-icon">⚠️</div>'
+        + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
         + '<div class="empty-title">详情加载失败</div>'
         + '<div class="empty-desc">' + U.escapeHtml(err.message) + '</div>'
         + '</div></div>';
@@ -140,7 +140,7 @@ import { App } from './app.js';
 
     const refreshBtn = U.el('button', 'btn btn-sm', '');
     refreshBtn.title = '强制刷新本股全部数据';
-    refreshBtn.appendChild(U.el('span', 'refresh-icon', '⟳'));
+    refreshBtn.appendChild(U.icon('refresh', { size: 14, cls: 'svg-icon refresh-icon' }));
     refreshBtn.appendChild(document.createTextNode(' 刷新'));
     refreshBtn.onclick = function () {
       if (refreshBtn.disabled) return;
@@ -595,7 +595,10 @@ import { App } from './app.js';
     card.dataset.name = d.quote.name || '';
 
     const head = U.el('div', 'card-head');
-    head.appendChild(U.el('div', 'card-title', '🤖 AI 智能分析'));
+    const aiTitle = U.el('div', 'card-title');
+    aiTitle.appendChild(U.icon('robot', { size: 16 }));
+    aiTitle.appendChild(document.createTextNode(' AI 智能分析'));
+    head.appendChild(aiTitle);
     head.appendChild(U.el('div', 'card-sub', '首屏直接给出三选一建议，点击下方展开完整 LLM 报告'));
     card.appendChild(head);
 
@@ -707,8 +710,10 @@ import { App } from './app.js';
     }
 
     // 常驻免责
-    body.appendChild(U.el('div', 'ai-disclaimer',
-      '⚠ 规则引擎评分方向性有限，置信度仅表示信号一致程度，不作收益承诺'));
+    const disclaimerEl = U.el('div', 'ai-disclaimer');
+    disclaimerEl.appendChild(U.icon('alert', { size: 14 }));
+    disclaimerEl.appendChild(document.createTextNode(' 规则引擎评分方向性有限，置信度仅表示信号一致程度，不作收益承诺'));
+    body.appendChild(disclaimerEl);
   }
 
   // ---------------------------------------------------------- 状态标签
