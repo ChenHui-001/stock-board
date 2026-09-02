@@ -198,7 +198,7 @@ async def score_weights_get() -> dict[str, Any]:
     return {
         **w,
         "range": [scorecfg._MIN, scorecfg._MAX],
-        "source": "db" if storage.get_kv("score_weights") else "env",
+        "source": "db" if await storage.a_get_kv("score_weights") else "env",
     }
 
 
@@ -260,14 +260,14 @@ async def add_watchlist(body: AddWatchBody) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 - 板块缺失不影响添加
             board = None
 
-    created = storage.add_watch(code, name, board)
+    created = await storage.a_add_watch(code, name, board)
     return {"ok": True, "created": created, "code": code, "name": name, "board": board}
 
 
 @router.post("/watchlist/remove")
 async def remove_watchlist(body: CodesBody) -> dict[str, Any]:
     """批量删除（需求 7.4）。"""
-    removed = storage.remove_watch(body.codes)
+    removed = await storage.a_remove_watch(body.codes)
     return {"ok": True, "removed": removed}
 
 
@@ -364,7 +364,7 @@ async def value_weights_get() -> dict[str, Any]:
     w = valuecfg.get_weights()
     return {**w, "range": [valuecfg._MIN, valuecfg._MAX],
             "maxes": valuecfg.DIM_MAXES, "base_total": valuecfg.BASE_TOTAL,
-            "source": "db" if storage.get_kv("value_weights") else "default"}
+            "source": "db" if await storage.a_get_kv("value_weights") else "default"}
 
 
 @router.post("/value/weights")
