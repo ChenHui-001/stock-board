@@ -494,7 +494,7 @@ def _limit_pct(market: str | None, code: str | None, name: str | None) -> float:
 
 
 async def watchlist_board(force: bool = False) -> dict[str, Any]:
-    rows = storage.list_watchlist()
+    rows = await storage.a_list_watchlist()
     if not rows:
         return {"items": [], "session": session_info()}
 

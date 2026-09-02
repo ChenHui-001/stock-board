@@ -346,3 +346,65 @@ def purge_old_reports(keep_days: int = 7) -> None:
             (f"-{keep_days} day",),
         )
         conn.commit()
+
+
+# ------------------------------------------------------------------ 异步封装
+
+# 本模块是同步 sqlite3，直接在 async 请求路径里调用会阻塞整个事件循环：一次查询
+# 再快，期间所有并发请求（包括正在 await 网络 IO 的取数协程）全部停摆。这里给请求
+# 路径实际用到的函数各配一个 a_ 前缀的薄封装，内部丢进线程执行。
+#
+# 为什么不用换连接模型（aiosqlite / 每线程一连接）：
+#   - _connect() 建连接时已传 check_same_thread=False，跨线程复用同一个连接是安全的；
+#   - 模块级 _lock 把所有 DB 操作串行化，同一时刻最多一个线程在碰 sqlite。
+#
+# 为什么不会死锁：_lock 只在 worker 线程内部、由同步函数短暂持有，拿到锁之后一路
+# 跑完就释放，中间没有任何 await。事件循环只是「等」这个线程，不参与抢锁。
+# 反过来说，绝不能在持有 _lock 时 await——所以 a_ 封装只包同步函数，不包异步逻辑。
+#
+# 同步原函数全部保留：启动路径（main.py 的 init_db / purge_old_reports）和同步上下文
+# （llmcfg / scorecfg / valuecfg 这类配置模块）继续走同步版本，改成 async 会牵连
+# 一批同步调用方，收益不抵风险。
+
+async def a_list_watchlist() -> list[dict[str, Any]]:
+    return await asyncio.to_thread(list_watchlist)
+
+
+async def a_watchlist_codes() -> list[str]:
+    return await asyncio.to_thread(watchlist_codes)
+
+
+async def a_add_watch(code: str, name: str | None = None, board: str | None = None) -> bool:
+    return await asyncio.to_thread(add_watch, code, name, board)
+
+
+async def a_remove_watch(codes: list[str]) -> int:
+    return await asyncio.to_thread(remove_watch, codes)
+
+
+async def a_reorder_watch(codes: list[str]) -> None:
+    return await asyncio.to_thread(reorder_watch, codes)
+
+
+async def a_update_meta(code: str, name: str | None, board: str | None) -> None:
+    return await asyncio.to_thread(update_meta, code, name, board)
+
+
+async def a_update_meta_batch(rows: list[tuple[str, str | None, str | None]]) -> int:
+    return await asyncio.to_thread(update_meta_batch, rows)
+
+
+async def a_is_watched(code: str) -> bool:
+    return await asyncio.to_thread(is_watched, code)
+
+
+async def a_watched_codes() -> set[str]:
+    return await asyncio.to_thread(watched_codes)
+
+
+async def a_get_kv(key: str) -> str | None:
+    return await asyncio.to_thread(get_kv, key)
+
+
+async def a_save_report(code: str, payload: dict[str, Any]) -> None:
+    return await asyncio.to_thread(save_report, code, payload)
