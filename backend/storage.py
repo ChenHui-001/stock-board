@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -215,6 +216,33 @@ def update_meta(code: str, name: str | None, board: str | None) -> None:
             (name, board, code),
         )
         conn.commit()
+
+
+def update_meta_batch(rows: list[tuple[str, str | None, str | None]]) -> int:
+    """批量回写自选股的名称/板块，返回实际改动的行数。
+
+    为什么单独开一个：看板刷新要逐行回写板块兜底结果，50 只自选股就是最多 100 次
+    UPDATE——每一次都要抢一次 _lock、开一次事务、commit 落一次 WAL。改成
+    executemany + 单次 _lock + 单次 commit 之后，全部压成 1 次事务。
+
+    语义与在循环里逐条调 update_meta 完全一致（同一条 UPDATE、同样的顺序、同样的
+    COALESCE 保留旧值逻辑），所以调用方只需把循环里的调用攒成列表再一次性传入。
+    """
+    updates = [
+        (normalize_code(code), name, board)
+        for code, name, board in rows
+        if normalize_code(code)
+    ]
+    if not updates:
+        return 0
+    with _lock:
+        conn = _connect()
+        cur = conn.executemany(
+            "UPDATE watchlist SET name=COALESCE(?,name), board=COALESCE(?,board) WHERE code=?",
+            [(name, board, code) for code, name, board in updates],
+        )
+        conn.commit()
+        return cur.rowcount
 
 
 def is_watched(code: str) -> bool:
