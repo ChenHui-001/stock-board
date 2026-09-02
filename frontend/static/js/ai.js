@@ -162,11 +162,30 @@ import { API } from './api.js';
     const vhead = U.el('div', 'ai-verdict-head');
     vhead.appendChild(U.el('div', 'ai-action', adv.action || '持有观望'));
     if (U.isNum(adv.confidence)) {
-      const confNode = U.el('div', 'ai-conf', '置信度 ' + adv.confidence + '%');
+      // P0-8：分档映射（≤45 低 / 46-64 中 / ≥65 高），比原始数字更易解读
+      const c = adv.confidence;
+      const tier = c <= 45 ? { label: '低', cls: 'conf-low' }
+                : c <= 64 ? { label: '中', cls: 'conf-mid' }
+                :           { label: '高', cls: 'conf-high' };
+      const confNode = U.el('div', 'ai-conf ' + tier.cls,
+                            '置信度 ' + tier.label + '(' + c + '%)');
       // 置信度说明（hover 显示）：让用户知道这个置信度是基于什么判定的
       if (adv.confidence_reason) confNode.title = adv.confidence_reason;
       vhead.appendChild(confNode);
     }
+    // P0-8：常驻免责说明——回测已证伪评分方向性，置信度只表示信号一致程度
+    if (adv.engine || adv.data_time) {
+      const src = U.el('div', 'ai-engine');
+      const parts = [];
+      if (adv.engine === 'rule' || adv.engine === 'rule_based') parts.push('规则引擎');
+      else if (adv.engine === 'llm') parts.push('LLM');
+      if (adv.data_time) parts.push('数据 ' + adv.data_time);
+      src.textContent = parts.join(' · ');
+      vhead.appendChild(src);
+    }
+    const disclaimer = U.el('div', 'ai-disclaimer',
+      '⚠ 规则引擎评分方向性有限，置信度仅表示信号一致程度，不作收益承诺');
+    vhead.appendChild(disclaimer);
     if (adv.horizon) vhead.appendChild(U.el('div', 'ai-conf', '周期 ' + adv.horizon));
     verdict.appendChild(vhead);
 

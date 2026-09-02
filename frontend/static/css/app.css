@@ -1389,6 +1389,27 @@ main {
   font-family: var(--mono);
 }
 
+/* P0-6：量比分层高亮（6 档）。背景透明度叠加避免覆盖文字色 */
+.quote-value.vol-extreme-shrink { background: rgba(245,70,93,.10);  color: var(--down); font-weight: 600; }
+.quote-value.vol-shrink         { background: rgba(245,70,93,.05);  color: var(--down); }
+.quote-value.vol-flat           { color: var(--text); }
+.quote-value.vol-mild-up        { background: rgba(245,70,93,.06);  color: var(--up); }
+.quote-value.vol-strong-up      { background: rgba(245,70,93,.14);  color: var(--up); font-weight: 600; }
+.quote-value.vol-huge-up        { background: rgba(245,70,93,.22);  color: var(--up); font-weight: 700; }
+
+/* P0-1/P0-2：VWAP 偏离 / 主力净比的 tone 与既有 up/down/flat 共用变量 */
+.quote-value.up   { color: var(--up); }
+.quote-value.down { color: var(--down); }
+.quote-value.flat { color: var(--text-faint); }
+
+/* P0-6：单元格副标题（量比「极度缩量/温和放量」等档位说明） */
+.quote-sub {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 2px;
+  line-height: 1.2;
+}
+
 .ma-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
