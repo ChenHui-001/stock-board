@@ -32,7 +32,16 @@ def _sanitize(result: dict[str, Any], fallback: dict[str, Any], price: float | N
     advice = out["advice"]
     action = str(advice.get("action") or "").strip()
     if action not in ACTIONS:
-        matched = next((a for a in ACTIONS if a[:2] in action), None)
+        # P0-5：先按语义关键词映射（处理「继续持有」「维持仓位」等 LLM 自由文本），
+        # 再按 ACTIONS 字面前缀兜底，最后回退规则引擎结论
+        sem = {
+            "观望": ("观望", "持有", "维持", "不变", "等待", "中性", "震荡", "不建议"),
+            "加仓": ("加仓", "买入", "建仓", "增持", "积极", "看多"),
+            "减仓": ("减仓", "卖出", "清仓", "减持", "退出", "看空", "规避"),
+        }
+        matched = next((a for a, kws in sem.items() if any(k in action for k in kws)), None)
+        if not matched:
+            matched = next((a for a in ACTIONS if a[:2] in action), None)
         advice["action"] = matched or fallback["advice"]["action"]
         if not matched:
             advice["action_note"] = f"模型返回的建议「{action}」不在规定选项内，已回退规则引擎结论"
@@ -56,15 +65,15 @@ def _sanitize(result: dict[str, Any], fallback: dict[str, Any], price: float | N
     except (TypeError, ValueError):
         advice["confidence"] = 70
 
-    # 低置信度撤销激进建议：模型自己都不确定（confidence < 50）却给出
-    # 「积极持仓/加仓」或「清仓离场」这类不可逆操作，是典型幻觉/过度自信，
-    # 撤销为「持有观望」并标注，避免用户依据低置信结论做出激进操作。
-    if advice["confidence"] < 50 and advice["action"] in (ACTIONS[0], ACTIONS[3]):
+    # P0-5：低置信度撤销激进建议——confidence < 50 且 action 为「加仓」或「减仓」，
+    # 撤销为「观望」。原 4 档逻辑保留撤销语义，但 3 档里「减仓」不可逆性比「加仓」低
+    # （清仓已合并到减仓），按 PRD §P0-5 验收「任何时刻面板只高亮一个动作」仍需保留撤销。
+    if advice["confidence"] < 50 and advice["action"] in ("加仓", "减仓"):
         advice["action_note"] = (
             f"模型置信度过低（{advice['confidence']}%），已撤销激进建议"
-            f"「{advice['action']}」，改为持有观望"
+            f"「{advice['action']}」，改为观望"
         )
-        advice["action"] = ACTIONS[1]
+        advice["action"] = "观望"
 
     risk = out["risk"]
     for key in ("opportunities", "risks"):

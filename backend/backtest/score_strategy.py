@@ -22,7 +22,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from ..analysis.rule_engine import (  # 与生产同口径，避免回测与线上脱节
-    FACTOR_WEIGHTS, TH_ADD, TH_HOLD, TH_REDUCE, _damp, _round_half_away,
+    FACTOR_WEIGHTS, TH_BUY, TH_SELL, _damp, _round_half_away,
 )
 from . import engine, render
 
@@ -58,15 +58,15 @@ PARAMS_SCHEMA: list[dict[str, Any]] = [
     },
     {
         "key": "th_add", "label": "加仓阈值", "type": "number",
-        "default": TH_ADD, "min": -60, "max": 120, "step": 1,
+        "default": TH_BUY, "min": -60, "max": 120, "step": 1,
     },
     {
         "key": "th_hold", "label": "观望阈值", "type": "number",
-        "default": TH_HOLD, "min": -60, "max": 120, "step": 1,
+        "default": 0.0, "min": -60, "max": 60, "step": 1,
     },
     {
         "key": "th_reduce", "label": "减仓阈值", "type": "number",
-        "default": TH_REDUCE, "min": -120, "max": 60, "step": 1,
+        "default": TH_SELL, "min": -120, "max": 60, "step": 1,
     },
 ]
 
@@ -321,9 +321,8 @@ async def run(params: dict[str, Any], on_progress: Callable[[float, str], None])
     limit = int(params.get("limit") or 800)
     limit = max(200, min(2000, limit))
     th = {
-        "add": float(params.get("th_add", TH_ADD)),
-        "hold": float(params.get("th_hold", TH_HOLD)),
-        "reduce": float(params.get("th_reduce", TH_REDUCE)),
+        "buy":  float(params.get("th_buy", TH_BUY)),
+        "sell": float(params.get("th_sell", TH_SELL)),
     }
 
     on_progress(0.02, f"准备 {len(codes)} 只标的 × {limit} 根日线")

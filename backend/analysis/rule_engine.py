@@ -20,7 +20,16 @@ from ..utils import confidence, describe_exc, round2
 
 log = logging.getLogger("analysis.rule_engine")
 
-ACTIONS = ["积极持仓/加仓", "持有观望", "减仓规避", "清仓离场"]
+ACTIONS = ["加仓", "减仓", "观望"]
+
+# 旧 action 名 → 新 action 名（用于 sanitize 与 prompts 解析旧 LLM 输出、迁移测试）
+# 注意：本映射仅在 sanitize / prompts 内部使用，业务面统一只认 3 档新名。
+LEGACY_ACTION_MAP: dict[str, str] = {
+    "积极持仓/加仓": "加仓",
+    "持有观望": "观望",
+    "减仓规避": "减仓",
+    "清仓离场": "观望",  # 清仓与减仓在「分时决策面板」口径下合并为减仓档
+}
 
 # ------------------------------------------------------------------ 因子权重（回测标定）
 #
@@ -59,9 +68,12 @@ FACTOR_WEIGHTS: dict[str, float] = {
 #   - 测试期（2025-01 起，未参与标定）：由 -1.7pct 改善到 +1.8pct，方向一致
 # 附带的分布变化：观望档占比 16.7% → 41.1%，清仓档 34.0% → 17.6%，
 # 在信号缺乏预测力的前提下，减少激进误动作本身即为收益。
-TH_ADD = 12.0      # >= 加仓
-TH_HOLD = -6.0     # >= 观望
-TH_REDUCE = -16.0  # >= 减仓，否则清仓
+# P0-5：4 档 → 3 档
+#   TH_BUY  ≥ 8.0   → 加仓（评分显著偏多）
+#   TH_SELL ≤ -8.0  → 减仓（评分显著偏空）
+#   else           → 观望（信号不明确，给双向触发价让用户自行判断）
+TH_BUY  =  8.0
+TH_SELL = -8.0
 
 # 置信度区间（原 45~92，基础值 68）：回测已证明评分方向性有限——总分 IC 在
 # 7 个半年期里 0/7 为正，加仓档胜率 48.4% 反而低于清仓档 50.7%。
@@ -120,7 +132,8 @@ def _confidence_reason_text(
         sample_bits.append("财报源不可用、参考上次缓存")
     if sample_bits:
         parts.append("、".join(sample_bits) + "拉低置信度")
-    if abs(score) >= TH_ADD:
+    # P0-5：阈值改名后用 TH_BUY（语义不变）
+    if abs(score) >= TH_BUY:
         parts.append("评分极端，进一步增强置信度")
     return "，".join(parts) if parts else "样本与信号均充足"
 
@@ -563,32 +576,78 @@ def rule_based(
     elif signal_aligned:
         signal_note = "技术面/资金面/消息面方向一致，信号共振增强"
 
-    if score >= TH_ADD:
-        action = ACTIONS[0]
-        position = "可持有 7 成以上仓位，回踩不破 MA10 可加仓"
-    elif score >= TH_HOLD:
-        action = ACTIONS[1]
-        position = "维持现有 5-7 成仓位，不加不减"
-    elif score >= TH_REDUCE:
-        action = ACTIONS[2]
-        position = "仓位降至 3 成以下，反弹至压力位分批减"
-    else:
-        action = ACTIONS[3]
-        position = "清空持仓，不留底仓"
-
-    # 信号冲突时激进操作降一档
-    if signal_conflict:
-        if action == ACTIONS[0]:
-            action = ACTIONS[1]
-            position = "技术/资金/消息面背离，暂不加仓，维持 5-7 成等待方向确认"
-        elif action == ACTIONS[3]:
-            action = ACTIONS[2]
-            position = "技术/资金/消息面背离，暂不清仓，先降至 3 成以下观察"
-
+    # 支撑/压力/止损/止盈（提前到这里以便 P0-5 触发价计算引用）
     support = sr.get("support") or (round2(price * 0.95) if price else None)
     resistance = sr.get("resistance") or (round2(price * 1.05) if price else None)
     stop_loss = round2(support * 0.97) if support else None
     take_profit = round2(resistance * 1.02) if resistance else None
+
+    # P0-5：4 档 → 3 档。
+    #   加仓 / 减仓 / 观望，有且仅有一个高亮，绝不输出「可加可减」「逢低关注」类模糊表述
+    if score >= TH_BUY:
+        action = ACTIONS[0]  # 加仓
+    elif score <= TH_SELL:
+        action = ACTIONS[1]  # 减仓
+    else:
+        action = ACTIONS[2]  # 观望
+
+    # P0-5：触发价计算（PRD §P0-5 验收：触发条件是具体数字，非形容词）
+    #   转加仓触发价：VWAP + 1% （盘中实时、零成本，PRD §Q8 选定主锚点）
+    #   转减仓触发价：主支撑 * 0.99 （跌破支撑位 -1% 视为失守）
+    #   价格止损位：主支撑 * 0.97 （现有逻辑沿用：跌破支撑 -3% 即止损）
+    #   时间止损：2 个交易日内未站上 VWAP 即触发（PRD §Q9 草案：2 日周期）
+    vwap_val = q.get("vwap")
+    add_trigger = round2(vwap_val * 1.01) if vwap_val else None
+    reduce_trigger = round2(support * 0.99) if support else None
+    time_stop = "2 个交易日内未站上 VWAP 即减仓"
+
+    if action == ACTIONS[0]:  # 加仓
+        position = "已具备加仓条件，建议分批建仓，仓位上限 7 成"
+        trigger_text = (
+            f"加仓触发：站上 VWAP {add_trigger} 且量比≥1.5"
+            if add_trigger else "加仓触发：量比≥1.5 且 主力净比>+2%"
+        )
+        stop_text = (
+            f"价格止损：{stop_loss}（跌破即减仓）"
+            if stop_loss else "价格止损：跌破主支撑 -3% 即减仓"
+        )
+    elif action == ACTIONS[1]:  # 减仓
+        position = "已具备减仓条件，建议降至 3 成以下"
+        trigger_text = (
+            f"减仓触发：跌破 {reduce_trigger}（主支撑 -1%）或 主力净比<-2%"
+            if reduce_trigger else "减仓触发：主力净比<-2% 或 跌破 MA20"
+        )
+        stop_text = (
+            f"价格止损：{stop_loss}（跌破即清仓）"
+            if stop_loss else "价格止损：当前价 -5% 即清仓"
+        )
+    else:  # 观望
+        position = "信号不明确，维持现有仓位观察"
+        trigger_text = (
+            f"▸ 加仓触发：站上 VWAP {add_trigger} 且量比≥1.5"
+            if add_trigger else "▸ 加仓触发：量比≥1.5 且 主力净比>+2%"
+        )
+        trigger_text += (
+            f"  ·  ▸ 减仓触发：跌破 {reduce_trigger} 或 主力净比<-2%"
+            if reduce_trigger else "  ·  ▸ 减仓触发：主力净比<-2% 或 跌破 MA20"
+        )
+        stop_text = (
+            f"价格止损：{stop_loss}（无论加/减仓，一旦跌破此位即离场）"
+            if stop_loss else "价格止损：当前价 -5% 即离场"
+        )
+
+    # 信号冲突时：加仓 → 观望（激进不押）；减仓 → 观望（避免恐慌误杀）
+    # 观望本身已是「不押方向」，冲突时不再降档
+    if signal_conflict and action != ACTIONS[2]:
+        old_action = action
+        action = ACTIONS[2]  # 观望
+        position = f"技术/资金/消息面背离，原 {old_action} 建议降为观望，等待方向确认"
+        trigger_text = (
+            "▸ 加仓触发：三面信号方向一致且总分≥8"
+            "  ·  ▸ 减仓触发：三面信号方向一致且总分≤-8"
+        )
+
+
 
     def zone(center: float | None, width: float = 0.015) -> str:
         if not center:
@@ -768,6 +827,14 @@ def rule_based(
             "stop_loss": stop_loss,
             "take_profit": take_profit,
             "horizon": "5-10 个交易日",
+            # P0-5：触发价 / 止损位 / 时间止损
+            "triggers": {
+                "add": add_trigger,
+                "reduce": reduce_trigger,
+                "text": trigger_text,
+            },
+            "stop_loss_text": stop_text,
+            "time_stop": time_stop,
             "score": score,
             "confidence_reason": _confidence_reason_text(
                 score, signal_aligned, signal_conflict,

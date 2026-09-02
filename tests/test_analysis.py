@@ -95,7 +95,7 @@ def test_rule_precision() -> None:
     fb_cf = analysis.rule_based(detail_cf, news_cf, reports_cf)
     assert (fb_cf["advice"]["signal"] == "conflict"), str(fb_cf["advice"]["signal"])
     assert ("背离" in fb_cf["advice"]["reason"]), fb_cf["advice"]["reason"]
-    assert (fb_cf["advice"]["action"] != "清仓离场"), fb_cf["advice"]["action"]
+    assert (fb_cf["advice"]["action"] != "减仓"), fb_cf["advice"]["action"]
     assert (fb_cf["advice"]["confidence"] < 60), str(fb_cf["advice"]["confidence"])
     # 5) 信号一致增强：技术/资金/消息同向 -> signal=aligned 且置信度上修
     detail_al = _mk_detail(
@@ -300,18 +300,20 @@ def test_ai_sanitize() -> None:
     assert (out_ok["advice"]["action"] == fb["advice"]["action"]), str(out_ok["advice"]["action"])
     assert (out_ok["advice"]["support"] == round(fb["advice"]["support"], 2)), str(out_ok["advice"]["support"])
 
-    # 2) action 子串模糊匹配：「继续持有」含「持有」→ 命中「持有观望」（ACTIONS = [积极持仓/加仓, 持有观望, 减仓规避, 清仓离场]）
+    # 2) action 子串模糊匹配（P0-5：3 档）：「继续持有」含「持」→ 命中 ACTIONS[2] =「观望」
     llm_substr = {**fb, "advice": {**fb["advice"], "action": "继续持有"}}
     out_substr = analysis._sanitize(llm_substr, fb, price)
-    assert (out_substr["advice"]["action"] == "持有观望"), str(out_substr["advice"]["action"])
+    assert (out_substr["advice"]["action"] == "观望"), str(out_substr["advice"]["action"])
     assert ("action_note" not in out_substr["advice"]), str(out_substr["advice"])
 
-    # 2.1) action 完全不在 4 选 1（前 2 字不在 ACTIONS 任何项里）：回退规则值 + action_note 标注
-    # 「减持规避」含「减持」但 ACTIONS 里只有「减仓」 → 模糊匹配失败
-    llm_no_match = {**fb, "advice": {**fb["advice"], "action": "减持规避"}}
+    # 2.1) action 真正不在 3 选 1 且无语义映射：回退规则值 + action_note 标注
+    # P0-5 后：sanitize 加了语义关键词匹配，「减持规避」含「减持」→ 自动映射到「减仓」，
+    # 不再需要回退（这才是正确语义：减持 = 减仓的同义词）。
+    # 这里改用一个完全无映射的测试串，确保 fallback + action_note 路径仍生效：
+    llm_no_match = {**fb, "advice": {**fb["advice"], "action": "完全看不懂的天书XYZ建议"}}
     out_nm = analysis._sanitize(llm_no_match, fb, price)
     assert (out_nm["advice"]["action"] == fb["advice"]["action"]), str(out_nm["advice"]["action"])
-    assert ("action_note" in out_nm["advice"] and "减持规避" in out_nm["advice"]["action_note"]), str(out_nm["advice"].get("action_note"))
+    assert ("action_note" in out_nm["advice"] and "完全看不懂" in out_nm["advice"]["action_note"]), str(out_nm["advice"].get("action_note"))
 
     # 3) 价位越界：support=1.0（现价 10 的 10%）→ 回退；resistance=50（5 倍现价）→ 回退
     llm_bad_levels = {**fb, "advice": {
@@ -383,22 +385,22 @@ def test_ai_sanitize() -> None:
     out_es = analysis._sanitize(llm_empty_summary, fb, price)
     assert (out_es["trend"]["summary"] == fb["trend"]["summary"]), str(out_es["trend"]["summary"])
 
-    # 7) 低置信度撤销激进建议：confidence<50 且 action 为积极/清仓 → 撤销为持有观望
-    llm_agg_low = {**fb, "advice": {**fb["advice"], "action": "积极持仓/加仓", "confidence": 40}}
+    # 7) 低置信度撤销激进建议（P0-5）：confidence<50 且 action 为加仓/减仓 → 撤销为观望
+    llm_agg_low = {**fb, "advice": {**fb["advice"], "action": "加仓", "confidence": 40}}
     out_al = analysis._sanitize(llm_agg_low, fb, price)
-    assert (out_al["advice"]["action"] == "持有观望"), str(out_al["advice"]["action"])
+    assert (out_al["advice"]["action"] == "观望"), str(out_al["advice"]["action"])
     assert ("action_note" in out_al["advice"] and "置信度过低" in out_al["advice"]["action_note"]), str(out_al["advice"].get("action_note"))
-    llm_liq_low = {**fb, "advice": {**fb["advice"], "action": "清仓离场", "confidence": 30}}
+    llm_liq_low = {**fb, "advice": {**fb["advice"], "action": "减仓", "confidence": 30}}
     out_ll = analysis._sanitize(llm_liq_low, fb, price)
-    assert (out_ll["advice"]["action"] == "持有观望"), str(out_ll["advice"]["action"])
+    assert (out_ll["advice"]["action"] == "观望"), str(out_ll["advice"]["action"])
 
     # 7.1) 非激进 action 低置信度不撤销；高置信度激进不撤销
-    llm_hold_low = {**fb, "advice": {**fb["advice"], "action": "持有观望", "confidence": 40}}
+    llm_hold_low = {**fb, "advice": {**fb["advice"], "action": "观望", "confidence": 40}}
     out_hl = analysis._sanitize(llm_hold_low, fb, price)
-    assert (out_hl["advice"]["action"] == "持有观望"), str(out_hl["advice"]["action"])
-    llm_agg_high = {**fb, "advice": {**fb["advice"], "action": "积极持仓/加仓", "confidence": 80}}
+    assert (out_hl["advice"]["action"] == "观望"), str(out_hl["advice"]["action"])
+    llm_agg_high = {**fb, "advice": {**fb["advice"], "action": "加仓", "confidence": 80}}
     out_ah = analysis._sanitize(llm_agg_high, fb, price)
-    assert (out_ah["advice"]["action"] == "积极持仓/加仓"), str(out_ah["advice"]["action"])
+    assert (out_ah["advice"]["action"] == "加仓"), str(out_ah["advice"]["action"])
 
     # 8) risk 列表按含数字条目优先：泛泛而谈的空话排后
     llm_risk_order = {**fb, "risk": {
