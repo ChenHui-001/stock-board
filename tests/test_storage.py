@@ -1,0 +1,269 @@
+"""storage 的 schema 迁移机制。
+
+为什么单独一个文件：迁移是会直接改库结构的操作，一旦写错就是毁数据，
+值得有一组专门的用例盯着「幂等 / 顺序 / 老库升级 / 失败可重试」这四件事。
+
+本文件不覆盖 storage 的常规增删改查，只覆盖迁移机制本身。
+
+隔离：所有用例都走 isolated_db fixture，库文件落在 tmp_path 下。
+conftest 已把 DATA_DIR 指向 mkdtemp，因此不会碰到真实的 data/board.db。
+"""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from backend import storage
+from backend.config import settings
+
+# version 1 的原始建表语句，抄自引入迁移机制之前的 storage._init()。
+# 这里手工抄一份而不是直接调 _init()：老库升级的用例要是拿被测代码来搭自己的
+# 前置条件，就成了「自己验自己」，测不出来真问题。
+LEGACY_V1_DDL = """
+CREATE TABLE IF NOT EXISTS watchlist (
+    code      TEXT PRIMARY KEY,
+    market    TEXT NOT NULL,
+    name      TEXT,
+    board     TEXT,
+    sort_no   INTEGER NOT NULL DEFAULT 0,
+    added_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS ai_report (
+    code        TEXT NOT NULL,
+    trade_date  TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (code, trade_date)
+);
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
+V1_WATCHLIST_COLUMNS = {"code", "market", "name", "board", "sort_no", "added_at"}
+
+
+def _pragma_version(conn: sqlite3.Connection) -> int:
+    """直读 PRAGMA user_version，不走 storage._user_version——
+
+    万一那个 helper 自己读错了，断言不该跟着一起被骗过去。
+    """
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
+@pytest.fixture
+def isolated_db(tmp_path: Path, monkeypatch) -> Path:
+    """把 storage 的全局连接指向 tmp_path 下的独立库文件，用完自动收摊。
+
+    storage._conn 是模块级单例，指向的是 settings.db_path；换库必须先把单例清掉，
+    否则 storage 会继续复用上一个测试打开的连接，用例之间互相串数据。
+    """
+    # 防御：DATA_DIR 必须是 conftest 建出来的临时目录，别把真实库改了
+    assert "board-pytest-" in str(settings.DATA_DIR), f"DATA_DIR 隔离失效：{settings.DATA_DIR}"
+
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    if storage._conn is not None:
+        storage._conn.close()
+        storage._conn = None
+    yield tmp_path / "board.db"
+    if storage._conn is not None:
+        storage._conn.close()
+        storage._conn = None
+
+
+def _make_legacy_db(db_path: Path) -> None:
+    """造一个「引入版本号之前」的库：v1 表结构 + 若干数据 + user_version 未写过(0)。"""
+    legacy = sqlite3.connect(db_path)
+    legacy.row_factory = sqlite3.Row
+    legacy.executescript(LEGACY_V1_DDL)
+    legacy.execute(
+        "INSERT INTO watchlist (code, market, name, board, sort_no) VALUES (?,?,?,?,?)",
+        ("600519", "SH", "贵州茅台", "主板", 1),
+    )
+    legacy.execute("INSERT INTO kv (key, value) VALUES (?,?)", ("llm_config", '{"model":"x"}'))
+    legacy.commit()
+    assert _pragma_version(legacy) == 0, "前置条件不成立：老库不应已有版本号"
+    legacy.close()
+
+
+# ------------------------------------------------------------------ 全新库
+
+def test_fresh_db_is_stamped_at_schema_version(isolated_db: Path) -> None:
+    conn = storage._connect()
+
+    assert _pragma_version(conn) == storage.SCHEMA_VERSION
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"watchlist", "ai_report", "kv"} <= tables
+    # 机制本身不引入任何业务字段，建出来的就是 version 1 的样子
+    assert _columns(conn, "watchlist") == V1_WATCHLIST_COLUMNS
+
+
+def test_run_migrations_is_idempotent(isolated_db: Path) -> None:
+    conn = storage._connect()
+    baseline = _pragma_version(conn)
+
+    # 同一条连接上反复跑：不报错、版本号不动
+    for _ in range(3):
+        assert storage.run_migrations(conn) == baseline
+    assert _pragma_version(conn) == baseline
+
+    # 走完整入口反复初始化（等价于进程反复重启）也不重复执行
+    for _ in range(3):
+        storage.init_db()
+    assert _pragma_version(conn) == baseline
+
+
+# ------------------------------------------------------------------ 老库升级
+
+def test_legacy_db_is_stamped_and_keeps_data(isolated_db: Path) -> None:
+    """存量老库（user_version=0）接上新版代码后能正确识别为 version 1，数据不丢。"""
+    _make_legacy_db(isolated_db)
+
+    conn = storage._connect()
+
+    assert _pragma_version(conn) == storage.SCHEMA_VERSION
+    assert _columns(conn, "watchlist") == V1_WATCHLIST_COLUMNS
+    row = conn.execute("SELECT code, name, sort_no FROM watchlist").fetchone()
+    assert dict(row) == {"code": "600519", "name": "贵州茅台", "sort_no": 1}
+    # 业务读路径照常工作（升级没把现有功能搞坏）
+    assert storage.get_kv("llm_config") == '{"model":"x"}'
+    assert storage.is_watched("600519") is True
+
+
+def test_legacy_db_upgrades_through_injected_migration(isolated_db: Path, monkeypatch) -> None:
+    """最接近真实场景的一条：老库文件 + 已带迁移的新代码，一次启动直接升到位。
+
+    把 MIGRATIONS 和 SCHEMA_VERSION 一起换成「未来」的版本，走 _connect() 的真实
+    调用链（_init -> run_migrations），也就是后续加持仓成本字段时线上会走的那条路。
+    只有这条能证明「老库升级」不是走过场——空迁移清单下升级只改了个版本号，
+    看不出执行器到底会不会执行 SQL。
+    """
+    _make_legacy_db(isolated_db)
+    monkeypatch.setattr(
+        storage, "MIGRATIONS", [(2, "ALTER TABLE watchlist ADD COLUMN note TEXT")]
+    )
+    monkeypatch.setattr(storage, "SCHEMA_VERSION", 2)
+
+    conn = storage._connect()
+
+    assert _pragma_version(conn) == 2
+    assert _columns(conn, "watchlist") == V1_WATCHLIST_COLUMNS | {"note"}
+    # 老数据还在，新字段是 NULL 而不是把表重建掉
+    row = conn.execute("SELECT code, name, note FROM watchlist").fetchone()
+    assert dict(row) == {"code": "600519", "name": "贵州茅台", "note": None}
+
+
+# ------------------------------------------------------------------ 执行器本身
+
+def test_migration_really_alters_table_structure(isolated_db: Path) -> None:
+    """注入一条真实 ALTER，验证执行器确实会改表结构，而不只是把版本号 +1。
+
+    用 run_migrations 的参数注入而非直接改 storage.MIGRATIONS，这样既验证了执行器，
+    又不会给生产库留下一个没人用的 note 字段。
+    """
+    conn = storage._connect()
+    assert "note" not in _columns(conn, "watchlist")
+    conn.execute(
+        "INSERT INTO watchlist (code, market, name, sort_no) VALUES (?,?,?,?)",
+        ("000001", "SZ", "平安银行", 1),
+    )
+    conn.commit()
+
+    storage.run_migrations(
+        conn,
+        migrations=[(2, "ALTER TABLE watchlist ADD COLUMN note TEXT")],
+        target_version=2,
+    )
+
+    # PRAGMA table_info 直读：列是真的加进去了
+    info = {r["name"]: r["type"] for r in conn.execute("PRAGMA table_info(watchlist)")}
+    assert info["note"] == "TEXT"
+    assert _pragma_version(conn) == 2
+
+    # 已有数据没被冲掉，且新字段能读写
+    assert storage.list_watchlist() == [
+        {"code": "000001", "market": "SZ", "name": "平安银行", "board": None, "sort_no": 1}
+    ]
+    conn.execute("UPDATE watchlist SET note=? WHERE code=?", ("观察仓", "000001"))
+    conn.commit()
+    assert conn.execute(
+        "SELECT note FROM watchlist WHERE code='000001'"
+    ).fetchone()["note"] == "观察仓"
+
+    # 升过之后再跑不会重复加列（重复 ADD COLUMN 会报 duplicate column name）
+    storage.run_migrations(
+        conn,
+        migrations=[(2, "ALTER TABLE watchlist ADD COLUMN note TEXT")],
+        target_version=2,
+    )
+    assert _pragma_version(conn) == 2
+    assert [c for c in _columns(conn, "watchlist") if c == "note"] == ["note"]
+
+
+def test_migrations_run_in_version_order(isolated_db: Path) -> None:
+    """乱序写进清单的迁移要按版本号升序执行，否则依赖关系会崩。"""
+    conn = storage._connect()
+
+    # 故意乱序：3 写在 2 前面；且 3 依赖 2 建出来的列（回填），顺序错了必然报错
+    storage.run_migrations(
+        conn,
+        migrations=[
+            (3, "UPDATE watchlist SET note = name"),
+            (2, "ALTER TABLE watchlist ADD COLUMN note TEXT"),
+        ],
+        target_version=3,
+    )
+
+    assert _pragma_version(conn) == 3
+    assert {"note"} <= _columns(conn, "watchlist")
+
+
+def test_failed_migration_reports_version_and_can_retry(isolated_db: Path) -> None:
+    """迁移挂了要能一眼看出是哪一条，且不能留下「跳过去」的假象。"""
+    conn = storage._connect()
+    baseline = _pragma_version(conn)
+
+    with pytest.raises(RuntimeError) as exc:
+        storage.run_migrations(
+            conn,
+            migrations=[(2, "ALTER TABLE nosuchtable ADD COLUMN x TEXT")],
+            target_version=2,
+        )
+    message = str(exc.value)
+    assert "version 1 -> 2" in message, message
+    assert "nosuchtable" in message, message
+
+    # 版本号没动 -> 下次启动会重试同一条，不会被当成「已执行」跳过
+    assert _pragma_version(conn) == baseline
+
+    # 修好 SQL 后重试能成功：说明失败确实没留下半成品
+    storage.run_migrations(
+        conn,
+        migrations=[(2, "ALTER TABLE watchlist ADD COLUMN note TEXT")],
+        target_version=2,
+    )
+    assert _pragma_version(conn) == 2
+    assert "note" in _columns(conn, "watchlist")
+
+
+def test_db_newer_than_code_is_left_alone(isolated_db: Path) -> None:
+    """代码回滚到旧版本时，不能把已经跑过的迁移再跑一遍。"""
+    conn = storage._connect()
+    conn.execute("PRAGMA user_version=99")   # 库比代码新
+    conn.commit()
+
+    storage.run_migrations(
+        conn,
+        migrations=[(2, "ALTER TABLE watchlist ADD COLUMN note TEXT")],
+        target_version=2,
+    )
+
+    assert _pragma_version(conn) == 99
+    assert "note" not in _columns(conn, "watchlist")
