@@ -345,9 +345,27 @@ import { App } from './app.js';
     return row;
   }
 
+  /**
+   * 量比分层（PRD §P0-6 验收）：
+   *   <0.5  极度缩量  /  0.5–0.8 缩量  /  0.8–1.2 正常
+   *   1.2–2.0 温和放量  /  2.0–5.0 显著放量  /  >5.0 巨量
+   * 返回 cell 类名 +  简短副标题，前端 CSS 给不同底色。
+   */
+  function volumeRatioTier(v) {
+    if (!U.isNum(v)) return { tone: '', hint: '' };
+    if (v < 0.5)  return { tone: 'vol-extreme-shrink', hint: '极度缩量' };
+    if (v < 0.8)  return { tone: 'vol-shrink',         hint: '缩量' };
+    if (v < 1.2)  return { tone: 'vol-flat',           hint: '正常' };
+    if (v < 2.0)  return { tone: 'vol-mild-up',        hint: '温和放量' };
+    if (v < 5.0)  return { tone: 'vol-strong-up',      hint: '显著放量' };
+    return        { tone: 'vol-huge-up',      hint: '巨量' };
+  }
+
   function renderQuoteGrid(d) {
     const q = d.quote;
     const grid = U.el('div', 'quote-grid');
+    const vr = q.volume_ratio;
+    const vrTier = volumeRatioTier(vr);
     const cells = [
       ['昨收', U.price(q.prev_close), ''],
       ['今开', U.price(q.open), toneVs(q.open, q.prev_close)],
@@ -364,6 +382,42 @@ import { App } from './app.js';
       cell.appendChild(U.el('div', 'quote-value ' + c[2], c[1]));
       grid.appendChild(cell);
     });
+
+    // P0-6：量比上详情页（独立一格，分层高亮 + 副标题）
+    const vrCell = U.el('div', 'quote-cell');
+    vrCell.appendChild(U.el('div', 'quote-label', '量比'));
+    const vrBox = U.el('div', 'quote-value ' + vrTier.tone,
+                       U.isNum(vr) ? vr.toFixed(2) : U.NBSP);
+    if (vrTier.hint) vrBox.appendChild(document.createTextNode(''));
+    vrCell.appendChild(vrBox);
+    if (vrTier.hint) {
+      vrCell.appendChild(U.el('div', 'quote-sub', vrTier.hint));
+    }
+    grid.appendChild(vrCell);
+
+    // P0-1：VWAP 偏离（amount/volume 盘中实时，前端已经在响应里，UI 早该上墙）
+    const dev = q.deviation_pct;
+    const devTone = !U.isNum(dev) ? '' : (dev > 0 ? 'up' : dev < 0 ? 'down' : 'flat');
+    const devCell = U.el('div', 'quote-cell');
+    devCell.appendChild(U.el('div', 'quote-label', 'VWAP 偏离'));
+    devCell.appendChild(U.el('div', 'quote-value ' + devTone,
+                             U.isNum(dev) ? (dev > 0 ? '+' : '') + dev.toFixed(2) + '%' : U.NBSP));
+    if (U.isNum(dev)) {
+      const tip = dev > 0 ? '现价在分时均价上方运行（强势）'
+                 : dev < 0 ? '现价在分时均价下方运行（弱势）' : '现价贴近均价';
+      devCell.title = tip;
+    }
+    grid.appendChild(devCell);
+
+    // P0-2：主力净比（f184）盘中实时可得，原页面没显示过
+    const mp = q.main_net_pct;
+    const mpTone = !U.isNum(mp) ? '' : (mp > 0 ? 'up' : mp < 0 ? 'down' : 'flat');
+    const mpCell = U.el('div', 'quote-cell');
+    mpCell.appendChild(U.el('div', 'quote-label', '主力净比'));
+    mpCell.appendChild(U.el('div', 'quote-value ' + mpTone,
+                            U.isNum(mp) ? (mp > 0 ? '+' : '') + mp.toFixed(2) + '%' : U.NBSP));
+    grid.appendChild(mpCell);
+
     return grid;
   }
 
