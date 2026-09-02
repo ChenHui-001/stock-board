@@ -73,6 +73,18 @@ import { App } from './app.js';
     });
   }
 
+  // render 调度器：把 render() 放到下一个动画帧执行，避免连续触发时阻塞输入。
+  // 同一帧内的多次 scheduleRender() 会合并为一次实际 render。
+  let _renderPending = false;
+  function scheduleRender() {
+    if (_renderPending) return;
+    _renderPending = true;
+    requestAnimationFrame(function () {
+      _renderPending = false;
+      try { render(); } catch (e) { console.error('[page-home] render error:', e); }
+    });
+  }
+
   function render() {
     const root = view();
     root.innerHTML = '';
@@ -92,12 +104,20 @@ import { App } from './app.js';
     const body = U.el('div', 'wl-table');
     body.id = 'wl-body';
     body.appendChild(renderHeadRow());
-    sortedItems().forEach(function (item) {
-      body.appendChild(renderRow(item));
+
+    // 关键优化：把 N 行先 append 进 DocumentFragment，再一次性挂到 DOM。
+    // 原来 forEach 内逐行 body.appendChild 会触发 N 次 reflow，
+    // 现在是 1 次 reflow，且浏览器解析 fragment 时不重排上层布局。
+    const frag = document.createDocumentFragment();
+    const items = sortedItems();
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      frag.appendChild(renderRow(item));
       if (state.aiExpanded === item.code) {
-        body.appendChild(renderAIInlinePanel(item));
+        frag.appendChild(renderAIInlinePanel(item));
       }
-    });
+    }
+    body.appendChild(frag);
     card.appendChild(body);
     root.appendChild(card);
 
@@ -369,7 +389,7 @@ import { App } from './app.js';
     closeBtn.onclick = function (e) {
       e.stopPropagation();
       state.aiExpanded = null;
-      render();
+      scheduleRender();
     };
     foot.appendChild(closeBtn);
     wrap.appendChild(foot);
@@ -391,7 +411,7 @@ import { App } from './app.js';
       cb.checked = state.selected.has(item.code);
       cb.onchange = function () {
         if (cb.checked) state.selected.add(item.code); else state.selected.delete(item.code);
-        render();
+        scheduleRender();
       };
       first.className = '';
       first.style.textAlign = 'center';
@@ -540,7 +560,7 @@ import { App } from './app.js';
       const [moved] = list.splice(fromIdx, 1);
       list.splice(toIdx, 0, moved);
       state.items = list;
-      render();
+      scheduleRender();
       API.reorder(list.map(function (i) { return i.code; })).catch(function (err) {
         U.toast('排序保存失败：' + err.message, 'err');
       });
@@ -609,7 +629,7 @@ import { App } from './app.js';
     if (state.ai.loading) return;
     state.ai.loading = true;
     state.ai.error = null;
-    if (!refresh) render();
+    if (!refresh) patchAIDashboard();
     try {
       const data = await API.aiWatchlist(refresh);
       const map = {};
@@ -622,8 +642,55 @@ import { App } from './app.js';
       U.toast('AI 摘要加载失败：' + state.ai.error, 'err');
     } finally {
       state.ai.loading = false;
-      render();
+      // 关键优化：AI 数据回来后只 patch AI 相关节点，不再重建整个表格。
+      // 原来这里是 render()，意味着每只股票都要重建 12+ DOM 节点，
+      // 30 只就是 360 个；现在只更新 .ai-cell 和顶部 AI 看板。
+      patchAIDashboard();
+      patchAIRowsOnly();
     }
+  }
+
+  /**
+   * 原地刷新首页顶部 AI 看板（counts + Top 关注）。
+   * 与 patchAIRowsOnly 一起让 loadAI() 不再触发整表 render()。
+   * 看板不存在时（用户从详情页切到首页、watchlist 还没加载完等场景）跳过。
+   */
+  function patchAIDashboard() {
+    const root = view();
+    const old = root.querySelector('.ai-dashboard');
+    if (!old) return;
+    const fresh = renderAIDashboard();
+    old.replaceWith(fresh);
+  }
+
+  /**
+   * 原地刷新每行的 AI 单元格（信号丸 / 「未分析」占位）。
+   * 表格不存在（用户还没看过 watchlist）时跳过。
+   */
+  function patchAIRowsOnly() {
+    const body = document.getElementById('wl-body');
+    if (!body) return;
+    state.items.forEach(function (item) {
+      const row = body.querySelector('.wl-row[data-code="' + item.code + '"]');
+      if (!row) return;
+      const old = row.querySelector('.ai-cell');
+      if (!old) return;
+      const summary = aiSummary(item);
+      const fresh = U.el('div', 'ai-cell');
+      if (summary) {
+        const pill = renderAIPill(summary, false);
+        pill.onclick = function (e) {
+          e.stopPropagation();
+          state.aiExpanded = state.aiExpanded === item.code ? null : item.code;
+          // 展开/收起还是要全量 render（要插入/移除 AI inline panel）
+          scheduleRender();
+        };
+        fresh.appendChild(pill);
+      } else {
+        fresh.appendChild(U.el('span', 'ai-pill ai-pill-none', '未分析'));
+      }
+      old.replaceWith(fresh);
+    });
   }
 
   async function batchAIRefresh(btn) {
@@ -653,7 +720,7 @@ import { App } from './app.js';
       const known = new Set(state.items.map(function (i) { return i.code; }));
       if (items.length !== state.items.length || items.some(function (i) { return !known.has(i.code); })) {
         state.items = items;
-        render();
+        scheduleRender();
         App.setSession(data.session);
         return;
       }
@@ -728,6 +795,6 @@ import { App } from './app.js';
       }
       state.manage = !state.manage;
       state.selected = new Set();
-      render();
+      scheduleRender();
     }
   };
