@@ -261,6 +261,142 @@ import { App } from './app.js';
     });
   }
 
+  // ---------------------------------------------------------- P0-4 分时决策面板
+  /**
+   * 5 格：VWAP / 量比 / 主力净比 / 板块情绪 / 相对板块
+   * 每格三层：label + value(主) + sub(辅助说明 tone)
+   * 盘中实时随 5s tick 局部更新（仅 patch 文本节点，不重渲整块）
+   * 数据缺失按 PRD §4.4 降级规则显示「—」+ 原因，不塌陷整块
+   *
+   * 板块情绪判定（PRD §6.2 草案 v1）：
+   *   退潮 / 高潮 / 发酵 / 启动 / 震荡（5 态）
+   *   阈值取自 PRD §6.2 草案，待用户校准（PRD §Q2）
+   */
+  function boardEmotionCycle(boardChgPct) {
+    if (!U.isNum(boardChgPct)) return { stage: '', tone: '' };
+    const v = boardChgPct;
+    if (v <= -1.5) return { stage: '退潮', tone: 'cycle-fout' };
+    if (v >= 3.0)  return { stage: '高潮', tone: 'cycle-peak' };
+    if (v >= 1.0)  return { stage: '发酵', tone: 'cycle-rise' };
+    if (v >= 0)    return { stage: '启动', tone: 'cycle-start' };
+    return          { stage: '震荡', tone: 'cycle-flat' };
+  }
+
+  /**
+   * 相对板块强弱：当前股涨跌幅 - 主板块涨跌幅
+   * 优先取第一个有 change_pct 的板块（sl 顺序：行业 → 概念 → 地域伪板块，详见 PRD §Q1）
+   */
+  function relativeStrength(quote, boards) {
+    const qChg = quote.change_pct;
+    if (!U.isNum(qChg) || !Array.isArray(boards)) return null;
+    const skipSuffix = ['板块', 'HS', '上证', '深证', 'MSCI', '富时'];
+    const real = boards.filter(function (b) {
+      if (!b || !U.isNum(b.change_pct)) return false;
+      const n = b.name || '';
+      return !skipSuffix.some(function (s) { return n.startsWith(s) || n.indexOf(s) >= 0; });
+    });
+    const refBoard = real[0] || boards.find(function (b) { return b && U.isNum(b.change_pct); });
+    if (!refBoard || !U.isNum(refBoard.change_pct)) return null;
+    return { diff: qChg - refBoard.change_pct, refName: refBoard.name || '' };
+  }
+
+  function renderIntradayPanel(d) {
+    const card = U.el('div', 'card intraday-panel');
+    card.id = 'intraday-panel';
+
+    const head = U.el('div', 'card-head');
+    head.appendChild(U.el('div', 'card-title', '分时决策面板'));
+    head.appendChild(U.el('div', 'card-sub', '盘中实时 · 数据空时显示「—」+ 原因，不塌陷整块'));
+    card.appendChild(head);
+
+    const grid = U.el('div', 'intraday-grid');
+
+    // 第 1 格：VWAP
+    const vwap = d.quote.vwap;
+    const dev = d.quote.deviation_pct;
+    const vwapCell = U.el('div', 'intraday-cell');
+    vwapCell.appendChild(U.el('div', 'intraday-label', 'VWAP 分时均价'));
+    vwapCell.appendChild(U.el('div', 'intraday-value',
+      U.isNum(vwap) ? '¥' + vwap.toFixed(2) : U.NBSP));
+    const vwapSub = U.el('div', 'intraday-sub');
+    if (U.isNum(dev)) {
+      const devCls = dev > 0.1 ? 'up' : dev < -0.1 ? 'down' : 'flat';
+      vwapSub.classList.add(devCls);
+      vwapSub.textContent = (dev > 0 ? '+' : '') + dev.toFixed(2) + '% · '
+        + (dev > 0 ? '均价上方' : dev < 0 ? '均价下方' : '贴近均价');
+    } else {
+      vwapSub.textContent = '数据缺失';
+    }
+    vwapCell.appendChild(vwapSub);
+    grid.appendChild(vwapCell);
+
+    // 第 2 格：量比
+    const vr = d.quote.volume_ratio;
+    const vrTier = volumeRatioTier(vr);
+    const vrCell = U.el('div', 'intraday-cell');
+    vrCell.appendChild(U.el('div', 'intraday-label', '量比'));
+    vrCell.appendChild(U.el('div', 'intraday-value ' + vrTier.tone,
+      U.isNum(vr) ? vr.toFixed(2) : U.NBSP));
+    vrCell.appendChild(U.el('div', 'intraday-sub', vrTier.hint || '—'));
+    grid.appendChild(vrCell);
+
+    // 第 3 格：主力净比
+    const mp = d.quote.main_net_pct;
+    let mpTone = '', mpLabel = '';
+    if (U.isNum(mp)) {
+      if (mp > 5)        { mpTone = 'mp-huge-up';  mpLabel = '大幅流入'; }
+      else if (mp > 2)   { mpTone = 'mp-strong-up'; mpLabel = '流入'; }
+      else if (mp > -2)  { mpTone = 'mp-flat';      mpLabel = '平衡'; }
+      else if (mp > -5)  { mpTone = 'mp-mild-dn';  mpLabel = '流出'; }
+      else               { mpTone = 'mp-huge-dn';  mpLabel = '大幅流出'; }
+    }
+    const mpCell = U.el('div', 'intraday-cell');
+    mpCell.appendChild(U.el('div', 'intraday-label', '主力净比'));
+    mpCell.appendChild(U.el('div', 'intraday-value ' + mpTone,
+      U.isNum(mp) ? (mp > 0 ? '+' : '') + mp.toFixed(2) + '%' : U.NBSP));
+    mpCell.appendChild(U.el('div', 'intraday-sub', mpLabel || '—'));
+    grid.appendChild(mpCell);
+
+    // 第 4 格：板块情绪
+    const boards = (d.boards_detail && d.boards_detail.length) ? d.boards_detail : [];
+    const firstBoardChg = boards.length && U.isNum(boards[0].change_pct) ? boards[0].change_pct : null;
+    const cycle = boardEmotionCycle(firstBoardChg);
+    const cycCell = U.el('div', 'intraday-cell');
+    cycCell.appendChild(U.el('div', 'intraday-label', '板块情绪'));
+    cycCell.appendChild(U.el('div', 'intraday-value ' + cycle.tone,
+      cycle.stage || U.NBSP));
+    const cycSub = U.el('div', 'intraday-sub');
+    if (boards[0]) {
+      const n = boards[0].name || '';
+      const chg = U.isNum(boards[0].change_pct) ? (boards[0].change_pct > 0 ? '+' : '') + boards[0].change_pct.toFixed(2) + '%' : '—';
+      cycSub.textContent = n + (chg !== '—' ? ' ' + chg : '');
+    } else {
+      cycSub.textContent = '板块数据缺失';
+    }
+    cycCell.appendChild(cycSub);
+    grid.appendChild(cycCell);
+
+    // 第 5 格：相对板块
+    const rs = relativeStrength(d.quote, boards);
+    const rsCell = U.el('div', 'intraday-cell');
+    rsCell.appendChild(U.el('div', 'intraday-label', '相对板块'));
+    let rsTone = '';
+    if (rs && U.isNum(rs.diff)) {
+      rsTone = rs.diff > 0.3 ? 'up' : rs.diff < -0.3 ? 'down' : 'flat';
+      rsCell.appendChild(U.el('div', 'intraday-value ' + rsTone,
+        (rs.diff > 0 ? '+' : '') + rs.diff.toFixed(2) + '%'));
+      rsCell.appendChild(U.el('div', 'intraday-sub',
+        (rs.diff > 0 ? '强于' : rs.diff < 0 ? '弱于' : '同步') + ' ' + (rs.refName || '板块')));
+    } else {
+      rsCell.appendChild(U.el('div', 'intraday-value flat', U.NBSP));
+      rsCell.appendChild(U.el('div', 'intraday-sub', '板块数据缺失'));
+    }
+    grid.appendChild(rsCell);
+
+    card.appendChild(grid);
+    return card;
+  }
+
   // ----- 数据时间戳：交易日期 + 服务端/客户端获取时间 + 5秒刷新倒计时 -----
   let _detailMountedAt = 0;
   let _detailIntervalMs = 0;

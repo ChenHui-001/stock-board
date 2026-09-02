@@ -2638,6 +2638,61 @@ main {
   margin-top: 10px;
 }
 
+/* P0-4：分时决策面板 5 格 UI */
+.intraday-panel {
+  border-left: 3px solid var(--accent);
+}
+.intraday-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  background: var(--line-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.intraday-cell {
+  background: var(--bg-elev);
+  padding: 12px 14px;
+  min-width: 0;
+}
+.intraday-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+.intraday-value {
+  font-size: 18px;
+  font-family: var(--mono);
+  font-weight: 600;
+  line-height: 1.2;
+  word-break: break-all;
+}
+.intraday-sub {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 4px;
+  line-height: 1.3;
+}
+/* 板块情绪 5 态配色 */
+.intraday-value.cycle-fout   { color: var(--down); }
+.intraday-value.cycle-flat   { color: var(--text-faint); }
+.intraday-value.cycle-start  { color: rgba(23,178,106,.85); }
+.intraday-value.cycle-rise   { color: rgba(245,158,11,.95); }
+.intraday-value.cycle-peak   { color: var(--up); font-weight: 700; }
+/* 主力净比 5 档配色（PRD §Q4 草案） */
+.intraday-value.mp-huge-up    { color: var(--up);   font-weight: 700; background: rgba(245,70,93,.10); }
+.intraday-value.mp-strong-up  { color: var(--up); }
+.intraday-value.mp-flat       { color: var(--text); }
+.intraday-value.mp-mild-dn    { color: var(--down); }
+.intraday-value.mp-huge-dn    { color: var(--down); font-weight: 700; background: rgba(23,178,106,.10); }
+/* 窄屏：<768px 自动 2 列换行 */
+@media (max-width: 768px) {
+  .intraday-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
 .ai-verdict.act-buy {
   background: rgba(245, 70, 93, .1);
   border-color: rgba(245, 70, 93, .4);
