@@ -37,12 +37,30 @@ if settings.DATA_DIR != Path(_tmp):
 
 
 # pytest 配置：让异步 fixture/test 可直接用 asyncio
+import inspect  # noqa: E402
+
 import pytest  # noqa: E402
+
+
+def _is_coroutine_fn(fn) -> bool:
+    # 常量别写错：CO_COROUTINE 是 0x80，0x100 是 CO_ITERABLE_COROUTINE。
+    # 曾用 `co_flags & 0x100` 判异步函数，恒为假（async def 的 co_flags 是 0x83），
+    # 导致这个钩子静默失效：异步用例不报错、直接被 pytest 以「no async plugin」
+    # 跳过，表现为测试数量莫名变少且没有任何告警。这里统一用 inspect，不写魔数。
+    if fn is None:
+        return False
+    if inspect.iscoroutinefunction(fn):
+        return True
+    # 被 functools.wraps 之类包过一层时，iscoroutinefunction 可能看不穿，
+    # 退回看底层 code 对象的标志位。
+    code = getattr(fn, "__code__", None)
+    return bool(code and code.co_flags & inspect.CO_COROUTINE)
+
 
 def pytest_collection_modifyitems(config, items):
     """自动给 async def test_xxx 加 asyncio 标记（无需 @pytest.mark.asyncio）。"""
     for item in items:
-        if item.get_closest_marker("asyncio") is None:
-            if isinstance(item, pytest.Function) and item.obj.__code__.co_flags & 0x100:
-                # CO_COROUTINE = 0x100, 见 Python inspect.iscoroutinefunction
-                item.add_marker(pytest.mark.asyncio)
+        if item.get_closest_marker("asyncio") is not None:
+            continue
+        if isinstance(item, pytest.Function) and _is_coroutine_fn(getattr(item, "obj", None)):
+            item.add_marker(pytest.mark.asyncio)
