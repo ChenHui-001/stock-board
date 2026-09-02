@@ -817,9 +817,12 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
 
     quote_dict = quote.to_dict()
     if not quote_dict.get("board") and boards:
-        quote_dict["board"] = boards[0]
+        # boards 是 list[Board]，P0-3 后已升级；quote_dict["board"] 保留纯名字
+        # （向下兼容：详情页 / watchlist 都按 str 处理），结构 走 boards_detail 字段
+        first_name = boards[0].name if hasattr(boards[0], "name") else str(boards[0])
+        quote_dict["board"] = first_name
         # 回写数据库，看板页从此不再依赖行情源是否携带行业字段
-        storage.update_meta(code, None, boards[0])
+        storage.update_meta(code, None, first_name)
 
     # 东财批量行情接口拿不到更新时间戳时（f86 语义异常），用 K 线最新日期回填，
     # 避免 trade_date 恒为空导致 delayed 判定与前端展示失效

@@ -49,6 +49,12 @@ class TTLCache:
         for key in [k for k in self._data if k.startswith(prefix)]:
             self._data.pop(key, None)
 
+    def clear(self) -> None:
+        """清空全部条目与单飞锁。生产代码不应调用（缓存复用可避免上游重读），
+        仅供测试 setup/teardown 强制重建上下文。"""
+        self._data.clear()
+        self._locks.clear()
+
     def stats(self) -> dict[str, int]:
         """条目数与在用锁数，用于诊断内存占用。"""
         return {"entries": len(self._data), "locks": len(self._locks)}
