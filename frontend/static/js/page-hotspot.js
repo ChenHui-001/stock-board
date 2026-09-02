@@ -76,7 +76,10 @@ import { AI } from './ai.js';
   function renderHead() {
     const head = U.el('div', 'card-head hotspot-head');
     const left = U.el('div');
-    left.appendChild(U.el('div', 'card-title', '🔥 热点追踪'));
+    const hsTitle = U.el('div', 'card-title');
+    hsTitle.appendChild(U.icon('flame', { size: 16 }));
+    hsTitle.appendChild(document.createTextNode(' 热点追踪'));
+    left.appendChild(hsTitle);
     const sub = U.el('div', 'card-sub');
     if (state.error) {
       sub.textContent = state.error;
@@ -92,7 +95,9 @@ import { AI } from './ai.js';
     left.appendChild(sub);
     head.appendChild(left);
 
-    const refresh = U.el('button', 'btn btn-sm', '⟳ 刷新');
+    const refresh = U.el('button', 'btn btn-sm');
+    refresh.appendChild(U.icon('refresh', { size: 14, cls: 'svg-icon' }));
+    refresh.appendChild(document.createTextNode(' 刷新'));
     refresh.onclick = function () { load(true); };
     head.appendChild(refresh);
     return head;
@@ -129,7 +134,9 @@ import { AI } from './ai.js';
     // 头部：标题 + 选中时显示「清除」
     const head = U.el('div', 'sector-heat-head');
     const titleWrap = U.el('div', 'sector-heat-title-wrap');
-    titleWrap.appendChild(U.el('span', 'sector-heat-icon', '🔥'));
+    const heatIcon = U.el('span', 'sector-heat-icon');
+    heatIcon.appendChild(U.icon('flame', { size: 14 }));
+    titleWrap.appendChild(heatIcon);
     titleWrap.appendChild(U.el('span', 'sector-heat-title', '热点概念'));
     titleWrap.appendChild(U.el('span', 'sector-heat-sub', heat.length ? '近 ' + state.minutes + ' 分钟提及趋势' : ''));
     head.appendChild(titleWrap);
@@ -334,7 +341,9 @@ import { AI } from './ai.js';
       };
       acts.appendChild(b);
     });
-    const clear = U.el('button', 'btn btn-xs', '× 清除搜索');
+    const clear = U.el('button', 'btn btn-xs');
+    clear.appendChild(U.icon('x', { size: 12 }));
+    clear.appendChild(document.createTextNode(' 清除搜索'));
     clear.title = '清除关键词，回到快讯流';
     clear.onclick = clearSearch;
     acts.appendChild(clear);
@@ -350,7 +359,9 @@ import { AI } from './ai.js';
 
     if (!items.length) {
       const empty = U.el('div', 'empty');
-      empty.appendChild(U.el('div', 'empty-icon', state.search.loading ? '⏳' : '🔍'));
+      const hsEmpty = U.el('div', 'empty-icon');
+      hsEmpty.appendChild(U.icon(state.search.loading ? 'clock' : 'search', { size: 40 }));
+      empty.appendChild(hsEmpty);
       if (state.search.loading) {
         empty.appendChild(U.el('div', 'empty-title', '正在检索…'));
         empty.appendChild(U.el('div', 'empty-desc', '当前快讯流内没有匹配「' + kw + '」的条目，正在向服务端检索。'));
@@ -380,7 +391,9 @@ import { AI } from './ai.js';
     }
     if (state.error && !state.items.length) {
       const empty = U.el('div', 'empty');
-      empty.appendChild(U.el('div', 'empty-icon', '📡'));
+      const hsNoSig = U.el('div', 'empty-icon');
+      hsNoSig.appendChild(U.icon('bolt', { size: 40 }));
+      empty.appendChild(hsNoSig);
       empty.appendChild(U.el('div', 'empty-title', '热点暂不可用'));
       empty.appendChild(U.el('div', 'empty-desc', state.error));
       host.appendChild(empty);
@@ -390,7 +403,9 @@ import { AI } from './ai.js';
     const items = filteredItems();
     if (!items.length) {
       const empty = U.el('div', 'empty');
-      empty.appendChild(U.el('div', 'empty-icon', '🕐'));
+      const hsNoTrd = U.el('div', 'empty-icon');
+      hsNoTrd.appendChild(U.icon('clock', { size: 40 }));
+      empty.appendChild(hsNoTrd);
       empty.appendChild(U.el('div', 'empty-title', '近 ' + (state.meta ? state.meta.window_minutes : state.minutes) + ' 分钟暂无热点'));
       empty.appendChild(U.el('div', 'empty-desc', '当前来源暂无新快讯，稍后会自动刷新。'));
       host.appendChild(empty);
@@ -439,7 +454,9 @@ import { AI } from './ai.js';
 
     // 操作按钮：AI 分析 + 相关股，统一放在右上角
     const actions = U.el('div', 'hotspot-actions');
-    const aiBtn = U.el('button', 'hotspot-action hotspot-action-primary', '🤖 AI 分析');
+    const aiBtn = U.el('button', 'hotspot-action hotspot-action-primary');
+    aiBtn.appendChild(U.icon('robot', { size: 14 }));
+    aiBtn.appendChild(document.createTextNode(' AI 分析'));
     aiBtn.title = '分析该快讯对行业的影响与关联度最高的股票';
     aiBtn.onclick = function () { openAnalysis(it); };
     actions.appendChild(aiBtn);

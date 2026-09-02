@@ -240,7 +240,10 @@ import { API } from './api.js';
     viewEl.innerHTML = '';
     const root = U.el('div', 'page-value');
     const head = U.el('div', 'val-head');
-    head.appendChild(U.el('h2', 'val-title', '💎 价值投资'));
+    const vTitle = U.el('h2', 'val-title');
+    vTitle.appendChild(U.icon('diamond', { size: 16 }));
+    vTitle.appendChild(document.createTextNode(' 价值投资'));
+    head.appendChild(vTitle);
     const right = U.el('div', 'val-head-right');
     const refresh = U.el('button', 'btn btn-sm btn-primary', '刷新数据');
     refresh.title = '强制重算候选池（API 调用较慢）';
@@ -264,14 +267,18 @@ import { API } from './api.js';
       }
     };
     // 权重调节按钮：折叠面板，展开 5 个维度滑块
-    const weightsBtn = U.el('button', 'btn btn-sm', '⚙ 权重');
+    const weightsBtn = U.el('button', 'btn btn-sm');
+    weightsBtn.appendChild(U.icon('settings', { size: 14 }));
+    weightsBtn.appendChild(document.createTextNode(' 权重'));
     weightsBtn.title = '调整基本面/板块/资金/量价/情绪 5 维度的相对权重';
     weightsBtn.onclick = function () {
       const panel = document.getElementById('val-weights-panel');
       if (!panel) return;
       const hidden = panel.style.display === 'none';
       panel.style.display = hidden ? '' : 'none';
-      weightsBtn.textContent = hidden ? '⚙ 权重 ▲' : '⚙ 权重 ▼';
+      weightsBtn.textContent = '';
+      weightsBtn.appendChild(U.icon('settings', { size: 14 }));
+      weightsBtn.appendChild(document.createTextNode(hidden ? ' 权重 ▲' : ' 权重 ▼'));
     };
     right.appendChild(weightsBtn);
 
@@ -443,7 +450,9 @@ import { API } from './api.js';
   function renderEmpty(data) {
     const mkt = data.market || {};
     const wrap = U.el('div', 'val-empty-card');
-    wrap.appendChild(U.el('div', 'val-empty-icon', '📭'));
+    const vEmpty = U.el('div', 'val-empty-icon');
+    vEmpty.appendChild(U.icon('inbox', { size: 36 }));
+    wrap.appendChild(vEmpty);
     const head = U.el('div', 'val-empty-title', '当前市场状态下暂无符合条件的候选');
     wrap.appendChild(head);
 
@@ -470,7 +479,11 @@ import { API } from './api.js';
     const tips = U.el('div', 'val-empty-tips');
     tips.appendChild(U.el('div', 'val-empty-tip-title', '建议'));
     tips.appendChild(U.el('div', '', '① 开盘 9:30~10:30 期间再来（候选池会更活跃）'));
-    tips.appendChild(U.el('div', '', '② 降低对资金/情绪维度的权重，单纯看估值（点 ⚙ 权重调整）'));
+    const tip2 = U.el('div', '');
+    tip2.appendChild(document.createTextNode('② 降低对资金/情绪维度的权重，单纯看估值（点 '));
+    tip2.appendChild(U.icon('settings', { size: 12 }));
+    tip2.appendChild(document.createTextNode(' 权重调整）'));
+    tips.appendChild(tip2);
     tips.appendChild(U.el('div', '', '③ 或点击右上「刷新数据」重算候选'));
     wrap.appendChild(tips);
 

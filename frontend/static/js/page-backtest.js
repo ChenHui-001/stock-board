@@ -102,7 +102,9 @@ function renderStrategies() {
     card.appendChild(U.el('div', 'bt-card-name', s.name));
     card.appendChild(U.el('div', 'bt-card-desc', s.desc));
     if (s.limits) {
-      const lim = U.el('div', 'bt-card-limits', '⚠ ' + s.limits);
+      const lim = U.el('div', 'bt-card-limits');
+      lim.appendChild(U.icon('alert', { size: 14 }));
+      lim.appendChild(document.createTextNode(' ' + s.limits));
       card.appendChild(lim);
     }
     const kind = U.el('span', 'bt-kind', s.kind === 'event_study' ? '事件研究' : '策略回测');

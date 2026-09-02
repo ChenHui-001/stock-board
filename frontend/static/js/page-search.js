@@ -13,7 +13,10 @@ import { API } from './api.js';
 
     // 搜索框
     const box = U.el('div', 'search-box');
-    box.innerHTML = '<span class="search-icon">🔍</span>';
+    const searchIcon = document.createElement('span');
+    searchIcon.className = 'search-icon';
+    searchIcon.appendChild(U.icon('search', { size: 16 }));
+    box.appendChild(searchIcon);
     const input = U.el('input', 'search-input');
     input.id = 'search-input';
     input.placeholder = '输入股票名称、6 位代码或拼音首字母，如：浦发银行 / 600000 / pfyh';
@@ -92,7 +95,9 @@ import { API } from './api.js';
       card.appendChild(U.el('div', 'loading-block', '正在匹配…'));
     } else if (!state.items.length) {
       const empty = U.el('div', 'empty');
-      empty.appendChild(U.el('div', 'empty-icon', '🔍'));
+      const sIcon = U.el('div', 'empty-icon');
+      sIcon.appendChild(U.icon('search', { size: 40 }));
+      empty.appendChild(sIcon);
       empty.appendChild(U.el('div', 'empty-title', '暂无匹配股票'));
       empty.appendChild(U.el('div', 'empty-desc', '换个名称、代码或拼音首字母试试。'));
       card.appendChild(empty);

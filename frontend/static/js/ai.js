@@ -141,7 +141,7 @@ import { API } from './api.js';
   function renderError(msg) {
     body().innerHTML =
       '<div class="empty">'
-      + '<div class="empty-icon">⚠️</div>'
+      + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
       + '<div class="empty-title">分析失败</div>'
       + '<div class="empty-desc">' + U.escapeHtml(msg) + '</div>'
       + '</div>';
@@ -184,7 +184,8 @@ import { API } from './api.js';
       vhead.appendChild(src);
     }
     const disclaimer = U.el('div', 'ai-disclaimer',
-      '⚠ 规则引擎评分方向性有限，置信度仅表示信号一致程度，不作收益承诺');
+      disclaimerEl.appendChild(U.icon('alert', { size: 14 }));
+    disclaimerEl.appendChild(document.createTextNode(' 规则引擎评分方向性有限，置信度仅表示信号一致程度，不作收益承诺'));
     vhead.appendChild(disclaimer);
     if (adv.horizon) vhead.appendChild(U.el('div', 'ai-conf', '周期 ' + adv.horizon));
     verdict.appendChild(vhead);
