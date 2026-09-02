@@ -664,7 +664,12 @@ async def _kline(code: str, market: str, force: bool) -> dict[str, Any]:
         bars, src = await registry().kline(code, market, settings.KLINE_LIMIT)
         return {"bars": bars, "source": src}
 
-    return await cached_pack(f"kline:{code}.{market}", history_ttl(), loader, force)
+    # 与 kline_min / flow 等保持一致：K 线源挂掉时只丢 K 线，不再拖垮整个详情页
+    # （空 bars 下游安全：build_ma / ATR / 支撑压力 / 震荡指标均按空序列处理）
+    return await cached_pack(
+        f"kline:{code}.{market}", history_ttl(), loader, force,
+        empty={"bars": [], "source": ""},
+    )
 
 
 def _kline_min_ttl() -> float:
@@ -885,6 +890,14 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
                 name for name, pack in
                 (("K线", kline_pack), ("资金流向", flow_pack), ("两融", margin_pack), ("财报", financial_pack))
                 if pack.get("stale")
+            ],
+            # 取数失败且无历史数据可回退（只能给空结果）的数据源。
+            # stale 分支前端已知「数据过期」，但 empty 分支连旧数据都没有且 stale=False，
+            # 失败信息会静默丢失，因此单独上报一份，让前端能明确提示「该模块无数据」。
+            "errors": [
+                name for name, pack in
+                (("K线", kline_pack), ("资金流向", flow_pack), ("两融", margin_pack), ("财报", financial_pack))
+                if pack.get("error") and not pack.get("stale")
             ],
         },
         # P2-7：60 分钟 K 线原始 bars（用于前端画当日实时走势）
