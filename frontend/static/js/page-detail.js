@@ -628,15 +628,17 @@ import { App } from './app.js';
     const body = card.querySelector('.ai-summary-body');
     if (!body) return;
 
+    // 先打 POST /api/ai/{code}（refresh=false 即只读缓存，不触发 LLM）
     try {
-      const res = await fetch('/api/analysis/' + encodeURIComponent(d.quote.code), {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' }
+      const res = await fetch('/api/ai/' + encodeURIComponent(d.quote.code), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({})  // refresh 默认 false
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
-      // 响应形状: { ok, advice: {...}, engine, model, data_time, ... }
-      const advice = (data && data.advice) || {};
+      // 响应形状: { analysis: { advice: {...}, ... }, engine, model, ... }
+      const advice = (data && data.analysis && data.analysis.advice) || (data && data.advice) || {};
       if (advice.action) {
         _fillAiSummaryBody(body, advice, data);
         return;
@@ -645,13 +647,8 @@ import { App } from './app.js';
       // 静默：失败时卡片保留骨架态，按钮仍可用
     }
 
-    // 兜底：规则快算（如果 /analysis/{code} 没缓存或失败，规则引擎也能给结论）
-    try {
-      const res = await fetch('/api/analysis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: d.quote.code, force_llm: false })
-      });
+    // 兜底路径取消：规则快算的接口与缓存读取共用 /api/ai/{code}，
+    // 上一步失败 = 无缓存 + LLM 不可用 = 保留骨架即可。
       if (res.ok) {
         const data = await res.json();
         const advice = (data && data.advice) || {};
