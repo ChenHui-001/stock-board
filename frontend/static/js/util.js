@@ -262,7 +262,9 @@
     debounce: debounce,
     toast: toast,
     confirmAt: confirmAt,
-    copyText: copyText
+    copyText: copyText,
+    icon: icon,
+    iconHtml: iconHtml
   };
 /* SVG 图标库：替代 emoji/Unicode 符号，避免精简容器里渲染成方块 */
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -290,9 +292,6 @@ eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy
 star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
 target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'
 };
-icon: icon,
-iconHtml: iconHtml,
-ICONS: ICONS
 
 /** 创建 SVG 图标 DOM 节点（返回 <svg>，可直接 appendChild）。 */
 function icon(name, opts) {
@@ -328,5 +327,5 @@ const cls = o.cls || 'svg-icon';
 const sw = o.stroke || 2;
 const a11y = o.title ? ' role="img" aria-label="' + escapeHtml(o.title) + '"' : ' aria-hidden="true"';
 const attrs = ' fill="none" stroke="currentColor" stroke-width="' + sw + '" stroke-linecap="round" stroke-linejoin="round"' + a11y;
-return '<svg class="' + cls + '" viewBox="0 0 24 24" width="' + sz + '" height="' + sz + attrs + '>' + path + '</svg>';
+return '<svg class="' + cls + '" viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '"' + attrs + '>' + path + '</svg>';
 }
