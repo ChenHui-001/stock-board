@@ -634,7 +634,7 @@ async def _generate_rule_summary(code: str) -> dict[str, Any]:
         "from_cache": False,
         "is_brief": True,
     }
-    storage.save_report(code, report)
+    await storage.a_save_report(code, report)
     return report
 
 

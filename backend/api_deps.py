@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import HTTPException
 
 from . import llmcfg, scorecfg
-from .storage import get_report, is_watched
+from .storage import get_report, watched_codes
 from .utils import describe_exc, is_trading_now
 
 
@@ -166,17 +166,24 @@ def _sentiment_stats(items: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def _mark_value_watched(result: dict[str, Any]) -> None:
-    """给选股结果补当前自选状态（pools 与 stocks 共用的股票对象）。"""
+def _mark_value_watched(result: dict[str, Any], watched: set[str] | None = None) -> None:
+    """给选股结果补当前自选状态（pools 与 stocks 共用的股票对象）。
+
+    watched 由调用方一次取回传入。原来在双层循环里逐行 is_watched，选股结果最多
+    40 只候选 + 3 个池各 10 只 = 70 次独立查询（每次都要抢一次 DB 锁）；改成集合
+    判定后只剩调用方那一次查询。不传时自行查询，兼容既有同步调用。
+    """
+    if watched is None:
+        watched = watched_codes()
     for s in (result.get("stocks") or []):
         code = s.get("code")
         if code:
-            s["watched"] = is_watched(code)
+            s["watched"] = code in watched
     for pool in (result.get("pools") or {}).values():
         for s in pool or []:
             code = s.get("code")
             if code:
-                s["watched"] = is_watched(code)
+                s["watched"] = code in watched
 
 
 def _ai_summary_from_report(report: dict[str, Any]) -> dict[str, Any]:
