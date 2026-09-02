@@ -66,7 +66,7 @@ api.py:384  参数校验（\d{6}）
 | 5 | **归因标定脚本未入库** | `tmp/factor_attrib.py`、`tmp/calibrate_threshold.py`（`tmp/` 被 gitignore） | 生产权重来自这两个脚本的结论，但**脚本本身没进版本库** → 权重无可复现路径，换机器即失传 |
 | 6 | **LLM 串行故障转移无外层超时** | `llm.py:195-201` / `analysis/__init__.py:95` | 4 档案串行遍历，单次 120s，最坏 **4×120s = 8 分钟**挂起，而 `analyze()` 无外层超时保护 |
 
-> **状态（2026-09-01 更新）：以上 6 项 P0 已全部修复并验证，详见 [`p0-fix-report.md`](./p0-fix-report.md)。**
+> **状态（2026-09-02 更新）：以上 6 项 P0 已全部修复并验证，详见 [`p0-fix-report.md`](./p0-fix-report.md)。**
 > 修复过程中另有两项计划外发现，量级不低于 P0-4，已一并处理：
 > - `tests/conftest.py` 的 `pytest_collection_modifyitems` 钩子用了错误常量（`0x100` 而非 `0x80`）判异步，
 >   **导致异步测试长期被静默跳过而不报错**。已删除钩子，改用 `pytest.ini` 的 `asyncio_mode = auto`。
