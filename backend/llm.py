@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -190,20 +191,40 @@ async def chat_json(system: str, user: str) -> tuple[dict[str, Any], dict[str, A
 
     多档案故障转移：主模型优先，调用失败（超时/报错/JSON 解析失败等）
     自动切换下一个可用档案；全部失败才抛错，错误信息汇总各档案原因。
+
+    整个遍历受 LLM_TOTAL_TIMEOUT 总预算约束：档案是串行的，单档案最坏跑满
+    LLM_TIMEOUT(120s)，4 个档案就是 8 分钟，而调用方（analysis）没有外层超时，
+    HTTP 请求早断开了用户还在转圈。总预算耗尽按 LLMError 抛出（而非裸的
+    asyncio.TimeoutError），让调用方既有的 except LLMError 降级分支直接接住。
     """
     profiles = ordered_profiles()
     if not profiles:
         raise LLMError("未配置 LLM_API_KEY")
 
+    # 放在闭包外：wait_for 取消协程后，已积累的失败原因仍要能拼进异常消息里排障
     errors: list[str] = []
-    for c in profiles:
-        label = c.get("name") or c.get("model") or ""
-        try:
-            return await _chat_one(c, system, user)
-        except LLMError as exc:
-            errors.append(f"{label}：{exc}")
-            log.warning("LLM 档案 %s 失败，尝试下一个：%s", label, exc)
-    raise LLMError("；".join(errors))
+
+    async def _failover() -> tuple[dict[str, Any], dict[str, Any]]:
+        for c in profiles:
+            label = c.get("name") or c.get("model") or ""
+            try:
+                return await _chat_one(c, system, user)
+            except LLMError as exc:
+                errors.append(f"{label}：{exc}")
+                log.warning("LLM 档案 %s 失败，尝试下一个：%s", label, exc)
+            except asyncio.CancelledError:
+                # 总预算耗尽被 wait_for 取消：记下卡在哪个档案再原样抛出，
+                # 由 wait_for 转成 TimeoutError、外层再转成 LLMError
+                errors.append(f"{label}：等待响应未果")
+                raise
+        raise LLMError("；".join(errors))
+
+    try:
+        return await asyncio.wait_for(_failover(), settings.LLM_TOTAL_TIMEOUT)
+    except asyncio.TimeoutError:
+        budget = f"{settings.LLM_TOTAL_TIMEOUT:.0f}s"
+        detail = f"（已失败：{'；'.join(errors)}）" if errors else ""
+        raise LLMError(f"LLM 总预算 {budget} 耗尽{detail}") from None
 
 
 async def _chat_one(c: dict[str, Any], system: str, user: str) -> tuple[dict[str, Any], dict[str, Any]]:
