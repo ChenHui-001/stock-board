@@ -3,11 +3,11 @@ import { U } from './util.js';
 import { API } from './api.js';
 
 
+  // P0-5：3 档 action → CSS class（沿用 4 档时期的颜色映射：加仓红/减仓绿/观望灰）
   const ACTION_CLASS = {
-    '积极持仓/加仓': 'act-buy',
-    '持有观望': 'act-hold',
-    '减仓规避': 'act-reduce',
-    '清仓离场': 'act-sell'
+    '加仓': 'act-buy',
+    '减仓': 'act-reduce',
+    '观望': 'act-hold',
   };
 
   const RATING_CLASS = {
