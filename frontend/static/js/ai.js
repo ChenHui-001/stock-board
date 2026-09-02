@@ -183,9 +183,9 @@ import { API } from './api.js';
       src.textContent = parts.join(' · ');
       vhead.appendChild(src);
     }
-    const disclaimer = U.el('div', 'ai-disclaimer',
-      disclaimerEl.appendChild(U.icon('alert', { size: 14 }));
-    disclaimerEl.appendChild(document.createTextNode(' 规则引擎评分方向性有限，置信度仅表示信号一致程度，不作收益承诺'));
+    const disclaimer = U.el('div', 'ai-disclaimer');
+    disclaimer.appendChild(U.icon('alert', { size: 14 }));
+    disclaimer.appendChild(document.createTextNode(' 规则引擎评分方向性有限，置信度仅表示信号一致程度，不作收益承诺'));
     vhead.appendChild(disclaimer);
     if (adv.horizon) vhead.appendChild(U.el('div', 'ai-conf', '周期 ' + adv.horizon));
     verdict.appendChild(vhead);

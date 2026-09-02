@@ -233,7 +233,7 @@ import { Settings } from './settings.js';
       return { ok: true, text: CAP_LABELS[cap] + ' ' + sample, title: dates ? '行情日期：' + dates : '行情正常' };
     }
     if (cap === 'kline') {
-      const flag = res.stale_flag ? ' ⚠延迟' : '';
+      const flag = res.stale_flag ? ' (延迟)' : '';
       return { ok: true, text: CAP_LABELS[cap] + ' ' + (res.bars || 0) + '根', title: res.first_date + ' ~ ' + res.last_date + flag };
     }
     if (cap === 'fund_flow') {
@@ -254,7 +254,7 @@ import { Settings } from './settings.js';
 
   function renderDsCheckLoading() {
     const pop = document.getElementById('ds-popover');
-    pop.innerHTML = '<div class="ds-head">🔍 数据源自检</div>' +
+    pop.innerHTML = '<div class="ds-head">' + U.iconHtml('search', { size: 14 }) + ' 数据源自检</div>' +
       '<div class="ds-checking"><div class="ds-spinner"></div>' +
       '正在逐源实测行情/K线/资金/两融/搜索/热门…<br>' +
       '<span class="ds-faint">约 10-30 秒，期间会真实请求数据源</span></div>' +
@@ -266,7 +266,7 @@ import { Settings } from './settings.js';
     const pop = document.getElementById('ds-popover');
     const parts = [];
     dsState.lastSample = result.sample || [];
-    parts.push('<div class="ds-head">🔍 数据源自检 <span class="ds-faint">' +
+    parts.push('<div class="ds-head">' + U.iconHtml('search', { size: 14 }) + ' 数据源自检 <span class="ds-faint">' +
       (result.time || '').slice(11, 19) + '</span></div>');
     (result.providers || []).forEach(function (p) {
       const okCaps = Object.keys(p.results).filter(function (c) { return p.results[c].ok; });
@@ -305,7 +305,7 @@ import { Settings } from './settings.js';
           return U.escapeHtml(h) + (s > 0 ? '（冷却剩余 ' + Math.ceil(s) + 's）' : '');
         }).join('、') + ' 冷却中');
       }
-      parts.push('<div class="ds-sub ds-bt-note warn">⚠ 数据源限流降级：' + tlist.join('；') +
+      parts.push('<div class="ds-sub ds-bt-note warn">' + U.iconHtml('alert', { size: 14 }) + ' 数据源限流降级：' + tlist.join('；') +
         '，行情已自动切换备用源，其余功能不受影响</div>');
     }
 
@@ -369,11 +369,11 @@ import { Settings } from './settings.js';
           return '<button class="ds-day ' + cls + '" data-days="' + d + '">' +
             (d === 30 ? '近1月' : d === 90 ? '近3月' : d === 120 ? '近半年' : '近1年') + '</button>';
         }).join('') +
-        '<div class="ds-actions"><button class="btn btn-sm" id="ds-bt-run">📊 补跑回测</button></div></div>');
+        '<div class="ds-actions"><button class="btn btn-sm" id="ds-bt-run">' + U.iconHtml('chartBar', { size: 14 }) + ' 补跑回测</button></div></div>');
     } else if (bt && bt.error) {
       // degraded：回测脚本未打包进镜像等环境问题——明确提示降级原因，其余自检正常
       if (bt.degraded) {
-        parts.push('<div class="ds-sub ds-bt-note warn">⚠ 盘口回测已降级：' +
+        parts.push('<div class="ds-sub ds-bt-note warn">' + U.iconHtml('alert', { size: 14 }) + ' 盘口回测已降级：' +
           U.escapeHtml(bt.error) +
           '<br><span class="ds-faint">其余数据源探测不受影响，如需回测功能请在镜像中打包 backtest_intraday.py</span></div>');
       } else {
@@ -383,7 +383,7 @@ import { Settings } from './settings.js';
 
     const issues = result.issues || [];
     if (issues.length) {
-      parts.push('<div class="ds-sub ds-issues">⚠ 发现 ' + issues.length + ' 个问题：<br>' +
+      parts.push('<div class="ds-sub ds-issues">' + U.iconHtml('alert', { size: 14 }) + ' 发现 ' + issues.length + ' 个问题：<br>' +
         issues.map(function (i) { return '· ' + U.escapeHtml(i); }).join('<br>'));
     } else {
       parts.push('<div class="ds-sub">✅ 未发现问题：各数据源可用，数据均为最新。</div>');
@@ -403,7 +403,7 @@ import { Settings } from './settings.js';
     const ai = state.meta.ai || {};
     const parts = [];
 
-    parts.push('<div class="ds-head">📡 数据源状态</div>');
+    parts.push('<div class="ds-head">' + U.iconHtml('bolt', { size: 14 }) + ' 数据源状态</div>');
     if (!providers.length) {
       parts.push('<div class="ds-row"><span class="ds-name err">无可用源</span>' +
         '<span class="ds-caps">请检查 PROVIDER_ORDER 配置</span></div>');
@@ -457,8 +457,8 @@ import { Settings } from './settings.js';
       '<br>刷新周期：行情 ' + (state.meta.refresh ? state.meta.refresh.quote_ttl : '--') + 's / 历史 ' +
       (state.meta.refresh ? state.meta.refresh.history_ttl : '--') + 's</div>');
     parts.push('<div class="ds-actions">' +
-      '<button class="btn btn-sm" id="ds-check">🔍 立即自检</button>' +
-      '<button class="btn btn-ghost btn-sm" id="ds-check-fast" title="跳过盘口回测，仅数据源健康检查（更快）">⚡ 仅数据源</button>' +
+      '<button class="btn btn-sm" id="ds-check">' + U.iconHtml('search', { size: 14 }) + ' 立即自检</button>' +
+      '<button class="btn btn-ghost btn-sm" id="ds-check-fast" title="跳过盘口回测，仅数据源健康检查（更快）">' + U.iconHtml('bolt', { size: 14 }) + ' 仅数据源</button>' +
       '</div>');
     pop.innerHTML = parts.join('');
     bindDsActions();
@@ -476,7 +476,7 @@ import { Settings } from './settings.js';
       renderDsCheckResult(result);
     } catch (err) {
       const pop = document.getElementById('ds-popover');
-      pop.innerHTML = '<div class="ds-head">🔍 数据源自检</div>' +
+      pop.innerHTML = '<div class="ds-head">' + U.iconHtml('search', { size: 14 }) + ' 数据源自检</div>' +
         '<div class="ds-sub ds-issues">自检失败：' + U.escapeHtml(err.message || String(err)) + '</div>' +
         '<div class="ds-actions"><button class="btn btn-sm" id="ds-recheck">重试</button>' +
         '<button class="btn btn-ghost btn-sm" id="ds-back">返回</button></div>';
@@ -557,7 +557,7 @@ import { Settings } from './settings.js';
     if (names.length) parts.push('数据源：' + names.join(' → '));
     const throttled = state.meta.throttled_hosts || {};
     const keys = Object.keys(throttled);
-    if (keys.length) parts.push('⚠ 限流中：' + keys.join('、') + '（已自动切换备用源）');
+    if (keys.length) parts.push('限流中：' + keys.join('、') + '（已自动切换备用源）');
     bar.textContent = parts.join('　·　');
   }
 
