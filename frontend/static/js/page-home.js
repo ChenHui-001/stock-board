@@ -122,7 +122,8 @@ import { App } from './app.js';
     entry.setAttribute('role', 'link');
     entry.setAttribute('aria-label', '跳转策略回测');
 
-    const icon = U.el('div', 'entry-icon', '📊');
+    const icon = U.el('div', 'entry-icon');
+    icon.appendChild(U.icon('chartBar', { size: 28, cls: 'svg-icon' }));
     const body = U.el('div', 'entry-body');
     body.appendChild(U.el('div', 'entry-title', '策略回测'));
     body.appendChild(U.el('div', 'entry-desc',
@@ -147,7 +148,9 @@ import { App } from './app.js';
   function renderEmpty() {
     const wrap = U.el('div', 'card');
     const box = U.el('div', 'empty');
-    box.appendChild(U.el('div', 'empty-icon', '📈'));
+    const emptyIcon = U.el('div', 'empty-icon');
+    emptyIcon.appendChild(U.icon('chartLine', { size: 40, cls: 'svg-icon' }));
+    box.appendChild(emptyIcon);
     box.appendChild(U.el('div', 'empty-title', '还没有自选股'));
     box.appendChild(U.el('div', 'empty-desc', '前往查询页搜索股票名称、代码或拼音首字母，添加到自选。'));
     const btn = U.el('button', 'btn btn-primary', '前往查询添加股票');
@@ -161,7 +164,10 @@ import { App } from './app.js';
   function renderAIDashboard() {
     const card = U.el('div', 'card ai-dashboard');
     const head = U.el('div', 'ai-dashboard-head');
-    head.appendChild(U.el('div', 'ai-dashboard-title', '🤖 AI 持仓总览'));
+    const aiTitle = U.el('div', 'ai-dashboard-title');
+    aiTitle.appendChild(U.icon('robot', { size: 16 }));
+    aiTitle.appendChild(document.createTextNode(' AI 持仓总览'));
+    head.appendChild(aiTitle);
 
     const refresh = U.el('button', 'btn btn-sm ai-batch-btn' + (state.ai.loading ? ' loading' : ''), state.ai.loading ? '分析中…' : '批量刷新 AI');
     refresh.disabled = state.ai.loading;
@@ -624,7 +630,7 @@ import { App } from './app.js';
       const root = view();
       if (!state.items.length) {
         root.innerHTML = '<div class="card"><div class="empty">'
-          + '<div class="empty-icon">⚠️</div>'
+          + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
           + '<div class="empty-title">数据加载失败</div>'
           + '<div class="empty-desc">' + U.escapeHtml(err.message) + '</div>'
           + '</div></div>';
