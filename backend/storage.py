@@ -5,12 +5,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from typing import Any
 
 from .config import settings
 from .utils import full_code, normalize_code, resolve_market, today_str
+
+log = logging.getLogger("storage")
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
@@ -23,6 +26,7 @@ def _connect() -> sqlite3.Connection:
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")
         _init(_conn)
+        run_migrations(_conn)
     return _conn
 
 
@@ -51,6 +55,86 @@ def _init(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
+
+
+# ------------------------------------------------------------------ schema 迁移
+
+# 为什么需要这套东西：_init 用的是 CREATE TABLE IF NOT EXISTS，表一旦存在就静默跳过，
+# 于是「给已有表加字段」在代码里没有任何执行入口——想加持仓成本只能人肉敲 ALTER。
+# 这里改用 SQLite 标准的 PRAGMA user_version 记录 schema 版本，配一份有序迁移清单，
+# 让建表之后的每次结构变更都有地方登记、有地方执行。
+#
+# 约定：
+#   - _init() 建出来的三张表 = version 1，同时也是所有存量老库的结构；
+#   - 每条迁移写成 (目标版本号, SQL)。SQL 可以是一条 ALTER，也可以是 executescript
+#     能跑的多语句（建索引 / 建表 / 回填数据）；
+#   - 只许往后追加，不许改或删已发布的迁移——线上库可能已经跑过它们，改了就对不上账。
+SCHEMA_VERSION = 1
+
+MIGRATIONS: list[tuple[int, str]] = [
+    # 加字段时按此格式追加，并把 SCHEMA_VERSION 同步 +1：
+    # (2, "ALTER TABLE watchlist ADD COLUMN cost_price REAL"),
+]
+
+
+def _user_version(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+
+def _set_user_version(conn: sqlite3.Connection, version: int) -> None:
+    # PRAGMA 不接受参数绑定，只能拼进字符串；version 全部来自本模块的迁移清单，
+    # 且过一遍 int() 收敛类型，不存在注入面。
+    conn.execute(f"PRAGMA user_version={int(version)}")
+
+
+def run_migrations(
+    conn: sqlite3.Connection,
+    migrations: list[tuple[int, str]] | None = None,
+    target_version: int | None = None,
+) -> int:
+    """把 schema 升到 target_version（默认 SCHEMA_VERSION），返回升级后的版本号。
+
+    幂等：只跑版本号 > 当前 user_version 的迁移，跑过的不重复执行。
+    migrations / target_version 两个参数平时不用，是留给测试注入迁移用的——
+    不注入就没法在不动生产 schema 的前提下端到端验证这套机制真的会改表。
+    """
+    steps = MIGRATIONS if migrations is None else migrations
+    target = SCHEMA_VERSION if target_version is None else target_version
+
+    current = _user_version(conn)
+    # user_version=0 说明这个库建于引入版本号之前，它的表结构正是 _init 建出来的
+    # version 1 的样子（_init 刚才已把它补齐），直接盖章，不必补建。
+    if current == 0:
+        _set_user_version(conn, 1)
+        current = 1
+    if current > target:
+        # 代码回滚到旧版本时会走到这里：库比代码新，硬跑会重复执行已应用的迁移。
+        # 只告警不动数据——用户数据比 schema 版本号重要。
+        log.warning(
+            "数据库 schema 版本(%s) 高于当前代码支持的最高版本(%s)，跳过迁移",
+            current, target,
+        )
+        return current
+
+    for version, sql in sorted(steps):
+        if version <= current or version > target:
+            continue
+        try:
+            conn.executescript(sql)
+        except sqlite3.Error as exc:
+            # 不吞异常：半途停下比带着残缺 schema 继续服务更安全。
+            # 此处 user_version 还没动，下次启动会重试同一条迁移；单条 ALTER 失败
+            # 不留残留（SQLite 单语句 DDL 自带事务），可以安全重试。写成多语句的
+            # 迁移则要自己保证可重入（如用 IF NOT EXISTS）。
+            conn.rollback()
+            raise RuntimeError(
+                f"数据库迁移失败：version {current} -> {version}，本次未提交。SQL: {sql.strip()}"
+            ) from exc
+        _set_user_version(conn, version)
+        log.info("数据库 schema 升级：%s -> %s", current, version)
+        current = version
+    conn.commit()
+    return current
 
 
 def init_db() -> None:

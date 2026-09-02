@@ -64,6 +64,13 @@ import { Settings } from './settings.js';
 
   async function route() {
     const next = parseHash();
+    // 卸载上一个页面：#view 是单容器，每次路由切换整块重建，页面里跨路由存活的
+    // 状态（定时器/轮询/观察器）必须在这里停掉，否则会一直在后台跑，还会往已被
+    // 替换掉的 DOM 里写内容。通用机制：页面模块只要导出 destroy，离开时就被调用。
+    if (state.mounted && typeof state.mounted.destroy === 'function') {
+      state.mounted.destroy();
+    }
+    state.mounted = null;
     // 记录「上一页」用于详情页返回:仅在进入 stock 时记录(从非 stock 跳入),
     // 这样 home→详情→返回→home→详情→返回 时 fromRoute 始终是 home;
     // 而 value→详情→返回 也能正确回到 value。
@@ -80,6 +87,7 @@ import { Settings } from './settings.js';
     const manageBtn = document.getElementById('btn-manage');
     manageBtn.style.display = state.route === 'home' ? '' : 'none';
 
+    state.mounted = currentPage();
     if (state.route === 'search') {
       PageSearch.mount();
     } else if (state.route === 'stock') {
