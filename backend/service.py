@@ -9,7 +9,7 @@ from typing import Any
 from . import indicators, storage
 from .cache import cache
 from .config import settings
-from .providers import ProviderError, Quote, registry
+from .providers import Board, ProviderError, Quote, registry
 from .utils import (
     data_is_stale,
     describe_exc,
@@ -83,6 +83,7 @@ async def get_quotes(keys: list[tuple[str, str]], force: bool = False) -> dict[s
     if missing:
         fetched, _ = await registry().quotes(missing)
         for key, quote in fetched.items():
+            _fill_intraday_fields(quote)
             cache.put(f"quote:{key}", quote, ttl)
             result[key] = quote
     return result
@@ -95,6 +96,33 @@ async def get_quote(code: str, market: str | None = None, force: bool = False) -
     quote = data.get(f"{code}.{market}")
     if not quote:
         raise ProviderError(f"未获取到 {code} 的行情")
+    # get_quotes 已经走 _fill_intraday_fields；这里防御性再调一次，覆盖
+    # force=True 时直接命中缓存但缓存里是旧对象的场景。
+    return _fill_intraday_fields(quote)
+
+
+def _fill_intraday_fields(quote: Quote) -> Quote:
+    """P0-1：填充 VWAP 与现价偏离百分比。
+    公式：vwap = quote.amount / quote.volume（金额元 / 成交量股，单位 元/股）。
+    实测与 1 分钟线逐根累加偏差 <0.01%（000001 14:46 实测 11.8621 vs 真值 11.8618）。
+    volume=0 时不计算（早盘集合竞价、未成交等场景），返回 None 而非除零错误。
+    非交易时段：源返回的 amount/volume 是上一交易日累计值，VWAP 仍可计算，
+    由上层用 quote.trade_date 判定是否需要"上一交易日"后缀提示。
+    """
+    try:
+        vol = quote.volume
+        amt = quote.amount
+        if vol is not None and amt is not None and vol > 0 and amt > 0:
+            vwap = round(amt / vol, 4)
+            quote.vwap = vwap
+            if quote.price and vwap:
+                quote.deviation_pct = round((quote.price / vwap - 1) * 100, 3)
+        else:
+            quote.vwap = None
+            quote.deviation_pct = None
+    except (ZeroDivisionError, TypeError):
+        quote.vwap = None
+        quote.deviation_pct = None
     return quote
 
 
@@ -692,18 +720,35 @@ async def _financials(code: str, market: str, force: bool) -> dict[str, Any]:
     )
 
 
-async def _boards(code: str, market: str, force: bool) -> list[str]:
+def _board_names(rows: list[Board]) -> list[str]:
+    """P0-3 兼容：从 list[Board] 投影出纯名字列表，给老 API（添加自选）用。"""
+    return [b.name for b in rows if b.name]
+
+
+async def _boards(code: str, market: str, force: bool) -> list[Board]:
+    """带结构的板块列表（1 小时缓存）。返回 list[Board]（含 code/market/name/change_pct），
+    上层如需纯名字可用 _board_names() 投影（stock_detail 同时下发两条字段）。"""
     async def loader() -> Any:
-        return {"names": await registry().boards(code, market)}
+        rows = await registry().boards(code, market)
+        return {"rows": [b.to_dict() for b in rows]}
 
     pack = await cached_pack(
-        f"boards:{code}.{market}", 3600.0, loader, force, empty={"names": []}
+        f"boards:{code}.{market}", 3600.0, loader, force, empty={"rows": []}
     )
-    return [n for n in (pack.get("names") or []) if n]
+    rows_dict = pack.get("rows") or []
+    valid_keys = set(Board.__annotations__.keys())
+    return [Board(**{k: v for k, v in d.items() if k in valid_keys}) for d in rows_dict]
 
 
 async def boards(code: str, market: str | None = None) -> list[str]:
-    """公开的板块查询（1 小时缓存），用于添加自选等轻量场景。"""
+    """公开的板块名列表（1 小时缓存，向后兼容老 API）。"""
+    code = normalize_code(code)
+    market = market or resolve_market(code)
+    return _board_names(await _boards(code, market, False))
+
+
+async def boards_detail(code: str, market: str | None = None) -> list[Board]:
+    """公开的板块结构（1 小时缓存，含 code/market/name/change_pct）。P0-3 新接口。"""
     code = normalize_code(code)
     market = market or resolve_market(code)
     return await _boards(code, market, False)
@@ -786,9 +831,14 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
         quote_dict["status"] = "delayed"
         quote_dict["status_text"] = f"数据更新延迟（最新交易日 {last_bar_date}）"
 
+    # P0-3：保留原 boards（纯名字列表，向后兼容）与新增 boards_detail（结构化）
+    # 同时下发：老前端只看 boards；新前端用 boards_detail 拿板块代码/涨跌幅，
+    # 用于走 secid=90.<code> 二次取板块行情，或直接读 change_pct 做情绪周期判定。
+    boards_names = _board_names(boards)
     return {
         "quote": quote_dict,
-        "boards": boards,
+        "boards": boards_names,
+        "boards_detail": [b.to_dict() for b in boards],
         "watched": storage.is_watched(code),
         "kline": [asdict(b) for b in bars[-120:]],
         "ma": [asdict(m) for m in ma_infos],

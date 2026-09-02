@@ -31,6 +31,7 @@ from .base import (
     Throttled,
     close_client,
     limiter,
+    Board,
 )
 from .eastmoney import EastmoneyProvider
 from .sina import SinaProvider
@@ -494,10 +495,13 @@ class Registry:
         )
         return rows or [], src
 
-    async def boards(self, code: str, market: str) -> list[str]:
+    async def boards(self, code: str, market: str) -> list[Board]:
+        """个股所属板块（带结构：code/market/name/change_pct）。
+        失败/源不支持 → []，与原 list[str] 行为一致（上层兜底）。
+        """
         try:
-            names, _ = await self._first("boards", lambda p: p.boards(code, market), empty_ok=True)
-            return names or []
+            rows, _ = await self._first("boards", lambda p: p.boards(code, market), empty_ok=True)
+            return rows or []
         except ProviderError:
             return []
 
