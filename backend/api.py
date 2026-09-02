@@ -352,7 +352,7 @@ async def value_screen(refresh: bool = Query(False)) -> dict[str, Any]:
     try:
         result = await value_screener.run_screen(force=refresh)
         # 补当前自选状态（在缓存外计算，保证每次查看都是最新）
-        _mark_value_watched(result)
+        _mark_value_watched(result, await storage.a_watched_codes())
         return result
     except Exception as exc:  # noqa: BLE001
         raise _fail(exc, "价值选股运行失败") from exc

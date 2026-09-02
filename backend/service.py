@@ -674,7 +674,10 @@ async def _kline(code: str, market: str, force: bool) -> dict[str, Any]:
 
     # 与 kline_min / flow 等保持一致：K 线源挂掉时只丢 K 线，不再拖垮整个详情页
     # （空 bars 下游安全：build_ma / ATR / 支撑压力 / 震荡指标均按空序列处理）
-    return await cached_pack(f"kline:{code}.{market}", history_ttl(), loader, force)
+    return await cached_pack(
+        f"kline:{code}.{market}", history_ttl(), loader, force,
+        empty={"bars": [], "source": ""},
+    )
 
 
 def _kline_min_ttl() -> float:

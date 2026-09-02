@@ -480,6 +480,9 @@ async function load() {
   state.loading = true;
   try {
     const data = await API.backtestStrategies();
+    // 用户可能就在这一个网络往返里切走了：#view 已被下一页整块替换，
+    // 这里的恢复轮询 / 渲染 / 请求全部放弃（重新进入本页时会重新 load）
+    if (!active) return;
     state.strategies = data.strategies || [];
     if (data.running) {
       state.running = data.running;
@@ -490,6 +493,7 @@ async function load() {
     }
   } catch (e) {
     state.strategies = [];
+    if (!active) return;   // 已切走：别把错误 toast 弹到别的页面上
     U.toast('策略清单加载失败：' + (e.message || e), 'warn');
   } finally {
     state.loading = false;

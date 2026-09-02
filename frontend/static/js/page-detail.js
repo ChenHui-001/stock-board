@@ -22,6 +22,7 @@ import { App } from './app.js';
   function view() { return document.getElementById('view'); }
 
   async function mount(code) {
+    _detailActive = true;
     state.code = code;
     state.data = null;
     state.seq += 1;
@@ -402,6 +403,10 @@ import { App } from './app.js';
   let _detailIntervalMs = 0;
   let _detailTimerHandle = null;
   let _detailLastFetchAt = 0;
+  // 本页当前是否挂在路由上。离开详情页后如果不清掉上面的倒计时定时器，
+  // 它会每 200ms 一直跑，其中每 5s 还会调 tick() 打一次行情接口——用户停在
+  // 任何页面都会持续消耗后端与数据源配额。卸载钩子 destroy() 会把它置 false。
+  let _detailActive = false;
   function renderDataStamp(d) {
     const wrap = U.el('div', 'detail-stamp');
     const sess = d.session || {};
@@ -422,6 +427,8 @@ import { App } from './app.js';
       wrap.appendChild(cd);
       if (_detailTimerHandle) clearInterval(_detailTimerHandle);
       _detailTimerHandle = setInterval(function () {
+        // 兜住销毁竞态：定时器回调可能已经在事件队列里排队，destroy() 之后才执行
+        if (!_detailActive) return;
         const elapsed = Date.now() - _detailLastFetchAt;
         const remain = Math.max(0, _detailIntervalMs - elapsed) / 1000;
         cd.textContent = '距下次刷新 ' + remain.toFixed(1) + 's';
@@ -1187,6 +1194,9 @@ import { App } from './app.js';
   // ---------------------------------------------------------- 局部刷新
   // 只拉轻量行情（单只报价），避免每 3 秒整包重传 K线/资金/两融历史数据
   async function tick() {
+    // 详情页已卸载：app.js 的全局刷新定时器仍会调 currentPage().tick()，
+    // 此时发请求是白打后端，patchHead() 也会往已被替换的 DOM 里写
+    if (!_detailActive) return;
     if (!state.data) return;
     // 盘后/节假日/用户手动停刷新时，session.auto_refresh=false，跳过本轮请求，
     // 避免每 5s 都打后端。session 由 API.quote 的响应持续同步，是权威来源。
@@ -1227,5 +1237,12 @@ import { App } from './app.js';
   export const PageDetail = {
     mount: mount,
     refresh: function () { return load(true); },
-    tick: tick
+    tick: tick,
+    // 卸载钩子：由 app.js 在路由切换时统一调用（与 Charts.disposeAll 同层）。
+    // 倒计时定时器只有在「再次渲染详情页数据戳」时才会被 clearInterval，
+    // 切到首页/查询/回测等页面后它会永久存活并每 5s 打一次行情接口。
+    destroy: function () {
+      _detailActive = false;
+      if (_detailTimerHandle) { clearInterval(_detailTimerHandle); _detailTimerHandle = null; }
+    }
   };
