@@ -236,7 +236,7 @@ import { App } from './app.js';
         state.selected = all.checked
           ? new Set(state.items.map(function (i) { return i.code; }))
           : new Set();
-        render();
+        scheduleRender();
       };
       bar.appendChild(all);
       bar.appendChild(U.el('span', 'wl-count', '已选 ' + state.selected.size + ' / ' + state.items.length));
@@ -250,7 +250,7 @@ import { App } from './app.js';
       done.onclick = function () {
         state.manage = false;
         state.selected = new Set();
-        render();
+        scheduleRender();
       };
       bar.appendChild(done);
     } else {
@@ -284,7 +284,7 @@ import { App } from './app.js';
           // AI 信号默认倒序：需要操作的股票排在前面
           if (opt.key === 'ai') state.sortAsc = false;
         }
-        render();
+        scheduleRender();
       };
       sorters.appendChild(btn);
     });
@@ -477,7 +477,7 @@ import { App } from './app.js';
       pill.onclick = function (e) {
         e.stopPropagation();
         state.aiExpanded = state.aiExpanded === item.code ? null : item.code;
-        render();
+        scheduleRender();
       };
       aiCell.appendChild(pill);
     } else {
