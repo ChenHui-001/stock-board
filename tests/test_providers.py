@@ -121,3 +121,100 @@ def test_registry() -> None:
     assert (ordered_news[:2] == ["ths", "eastmoney"] and ordered_reports[:2] == ["ths", "eastmoney"]), str((ordered_news, ordered_reports))
 
 
+# ============================================================
+# P0-1 / P0-2 / P0-3 新增字段单测（mock 数据，零网络）
+# ============================================================
+
+def test_quote_vwap_and_deviation_pct() -> None:
+    """P0-1：VWAP = amount / volume；deviation_pct = (price / vwap - 1) * 100。
+    实测基线（PRD 2026-09-01 平安银行 14:46）：VWAP 11.8621 vs 1 分钟线累加
+    真值 11.8618，偏差 +0.003%。本测试以同样的算法取一组代表性数据验证。
+    """
+    from backend.providers.base import Quote
+    from backend.service import _fill_intraday_fields
+
+    # 平安银行 2026-09-01 14:46 实测口径：amount≈1.18e9、volume≈1.0e8 → vwap≈11.86
+    q = Quote(code="000001", market="SZ",
+              price=11.92,
+              volume=100_000_000.0,
+              amount=1_186_210_000.0)
+    _fill_intraday_fields(q)
+    assert q.vwap is not None and abs(q.vwap - 11.8621) < 0.01, q.vwap
+    assert q.deviation_pct is not None and abs(q.deviation_pct - 0.49) < 0.05, q.deviation_pct
+
+    # volume=0：vwap 留空，不除零
+    q2 = Quote(code="000001", market="SZ", price=11.92, volume=0.0, amount=0.0)
+    _fill_intraday_fields(q2)
+    assert q2.vwap is None and q2.deviation_pct is None
+
+    # amount/volume 缺一：vwap 留空
+    q3 = Quote(code="000001", market="SZ", price=11.92, volume=100.0, amount=None)
+    _fill_intraday_fields(q3)
+    assert q3.vwap is None and q3.deviation_pct is None
+
+    # 现价远低于 VWAP：负偏离
+    q4 = Quote(code="000001", market="SZ", price=10.0, volume=100.0, amount=1200.0)
+    _fill_intraday_fields(q4)
+    assert q4.vwap == 12.0
+    assert q4.deviation_pct is not None and abs(q4.deviation_pct - (-16.667)) < 0.01
+
+
+def test_quote_main_net_fields() -> None:
+    """P0-2：Quote 持有 main_net_inflow / main_net_pct，构造时即可填。"""
+    from backend.providers.base import Quote
+    q = Quote(code="000001", market="SZ",
+              price=11.92,
+              main_net_inflow=60_196_496.0,
+              main_net_pct=3.51)
+    d = q.to_dict()
+    assert d["main_net_inflow"] == 60_196_496.0
+    assert d["main_net_pct"] == 3.51
+
+    # 缺字段：保持 None，不报错
+    q2 = Quote(code="000001", market="SZ")
+    d2 = q2.to_dict()
+    assert d2["main_net_inflow"] is None
+    assert d2["main_net_pct"] is None
+
+
+def test_board_dataclass_serialization() -> None:
+    """P0-3：Board dataclass 与 list[str] 投影可双向互转。"""
+    from backend.providers.base import Board
+    from backend.service import _board_names
+
+    rows = [
+        Board(code="BK0475", market="90", name="银行Ⅱ", change_pct=1.97),
+        Board(code="BK1610", market="90", name="股份制银行Ⅲ", change_pct=1.75),
+        Board(code="BK0153", market="90", name="广东板块", change_pct=-0.08),
+    ]
+    # to_dict 形状
+    d0 = rows[0].to_dict()
+    assert d0 == {"code": "BK0475", "market": "90", "name": "银行Ⅱ", "change_pct": 1.97}, d0
+
+    # 名字投影：保持与老 API list[str] 兼容
+    names = _board_names(rows)
+    assert names == ["银行Ⅱ", "股份制银行Ⅲ", "广东板块"], names
+
+    # 缺 name 的 Board 在投影里被过滤（与原 list[str] 行为一致）
+    rows2 = rows + [Board(code="BK0000", market="90", name="", change_pct=None)]
+    names2 = _board_names(rows2)
+    assert names2 == ["银行Ⅱ", "股份制银行Ⅲ", "广东板块"], names2
+
+
+def test_board_roundtrip_through_cache_pack() -> None:
+    """P0-3：_boards 缓存来回不丢字段。模拟 cache_pack 解码路径。"""
+    from backend.providers.base import Board
+    from backend.service import _board_names
+
+    original = [
+        Board(code="BK0475", market="90", name="银行Ⅱ", change_pct=1.97),
+        Board(code="BK1610", market="90", name="股份制银行Ⅲ", change_pct=1.75),
+    ]
+    # 序列化（进入缓存）
+    packed = {"rows": [b.to_dict() for b in original]}
+    # 反序列化（从缓存恢复）
+    valid_keys = set(Board.__annotations__.keys())
+    decoded = [Board(**{k: v for k, v in d.items() if k in valid_keys}) for d in packed["rows"]]
+    assert _board_names(decoded) == _board_names(original)
+    assert decoded[0].change_pct == 1.97
+    assert decoded[1].code == "BK1610"
