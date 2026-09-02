@@ -2612,6 +2612,32 @@ main {
 .ai-conf {
   font-size: 12px;
   color: var(--text-dim);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,.04);
+}
+
+/* P0-8：置信度三档配色（PRD §P0-8 验收：≤45 低 / 46-64 中 / ≥65 高） */
+.ai-conf.conf-low  { color: var(--down);    background: rgba(23,178,106,.10); }
+.ai-conf.conf-mid  { color: var(--warn);    background: rgba(245,158,11,.10); }
+.ai-conf.conf-high { color: var(--up);      background: rgba(245,70,93,.10); }
+
+/* P0-8：来源 + 数据时间（hover 即可看具体规则/LLM/时间） */
+.ai-engine {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+}
+
+/* P0-8：常驻免责 —— 回测 0/7 期方向性证伪，置信度只表示信号一致程度 */
+.ai-disclaimer {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.5;
+  width: 100%;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line-soft);
 }
 
 .ai-reason {
