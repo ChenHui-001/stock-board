@@ -902,6 +902,13 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
             # 取数失败且无历史数据可回退（只能给空结果）的数据源。
             # stale 分支前端已知「数据过期」，但 empty 分支连旧数据都没有且 stale=False，
             # 失败信息会静默丢失，因此单独上报一份，让前端能明确提示「该模块无数据」。
+            #
+            # 语义边界：这里只放「本该有数据、却连旧数据都没有」的源，不是「任何没取到的东西」。
+            # 刻意不纳入的两类：
+            #   - boards：板块为空常常是正常的（部分股票本就没有板块归类），进 errors 会误报；
+            #     且 _boards 返回 list[Board] 而非 pack，error 在转换时就丢了，接进来要动数据层。
+            #   - kline_min：P2-7 的增强项（60 分钟线画当日走势），缺了只是图表降级；
+            #     且 _kline 已占「K线」这个显示名，再加一条同名会让用户分不清是哪一路。
             "errors": [
                 name for name, pack in
                 (("K线", kline_pack), ("资金流向", flow_pack), ("两融", margin_pack), ("财报", financial_pack))
