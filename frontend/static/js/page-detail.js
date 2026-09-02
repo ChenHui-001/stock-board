@@ -1244,5 +1244,10 @@ import { App } from './app.js';
     destroy: function () {
       _detailActive = false;
       if (_detailTimerHandle) { clearInterval(_detailTimerHandle); _detailTimerHandle = null; }
+      // observer 不发请求，但会一直 observe 着已从文档摘掉的 section 节点，
+      // 持续持有 DOM 引用与闭包。destroy() 的契约是「卸载后本页是干净的」，
+      // 少清一个就会让后来按这个契约加逻辑的人踩坑。重建由 setupAnchorObserver
+      // 自己负责（它开头就会 disconnect 旧的），所以这里不用写恢复逻辑。
+      if (_anchorObserver) { _anchorObserver.disconnect(); _anchorObserver = null; }
     }
   };

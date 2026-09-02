@@ -60,11 +60,21 @@ api.py:384  参数校验（\d{6}）
 | # | 问题 | 位置 | 影响 |
 |---|---|---|---|
 | 1 | **K 线单点失败拖垮整页** | `service.py:667` `_kline` 未传 `empty=` | 7 路并发中只有 quote/kline 会抛异常，其余 5 路都有兜底。**K 线源一挂，整个详情页 503**，即使行情/资金/两融全部成功。降级粒度不一致 |
-| 2 | **同步 sqlite3 阻塞事件循环** | `storage.py` 全模块，async 路径 **34 处调用** | 全局单连接 + `threading.Lock`，含 N+1 写（`service.py:573/585/825`、`api_deps.py:174/179` 循环内调 DB）。高并发下事件循环阻塞、锁争抢 |
+| 2 | **同步 sqlite3 阻塞事件循环** | `storage.py` 全模块，async 路径 **33 处调用** | 全局单连接 + `threading.Lock`，含 N+1 写（`service.py:573/585/825`、`api_deps.py:174/179` 循环内调 DB）。高并发下事件循环阻塞、锁争抢 |
 | 3 | **DB 无 schema 迁移机制** | `storage.py:29-53` | 全仓库无 `ALTER TABLE`/`user_version`/migration。给 `watchlist` 加字段（如持仓成本）需手写 ALTER 且无执行入口。好消息：零 `SELECT *`，不会崩，但要同步改 3 处 |
 | 4 | **回测轮询跨页泄漏 + 污染当前页** | `page-backtest.js:210, 227-229` | `setInterval(pollOnce, 1500)` 的 `stopPolling` 只在内部调用，`PageBacktest` 无 destroy → 切页后轮询继续；完成后 `renderStrategies/renderForm/renderResult` 写入**已被替换的 `#view`**，会污染当前页面 |
 | 5 | **归因标定脚本未入库** | `tmp/factor_attrib.py`、`tmp/calibrate_threshold.py`（`tmp/` 被 gitignore） | 生产权重来自这两个脚本的结论，但**脚本本身没进版本库** → 权重无可复现路径，换机器即失传 |
 | 6 | **LLM 串行故障转移无外层超时** | `llm.py:195-201` / `analysis/__init__.py:95` | 4 档案串行遍历，单次 120s，最坏 **4×120s = 8 分钟**挂起，而 `analyze()` 无外层超时保护 |
+
+> **状态（2026-09-01 更新）：以上 6 项 P0 已全部修复并验证，详见 [`p0-fix-report.md`](./p0-fix-report.md)。**
+> 修复过程中另有两项计划外发现，量级不低于 P0-4，已一并处理：
+> - `tests/conftest.py` 的 `pytest_collection_modifyitems` 钩子用了错误常量（`0x100` 而非 `0x80`）判异步，
+>   **导致异步测试长期被静默跳过而不报错**。已删除钩子，改用 `pytest.ini` 的 `asyncio_mode = auto`。
+> - `page-detail.js` 的倒计时定时器（`setInterval` 200ms，每 5s 打一次行情接口）无卸载清理，
+>   切页后永久存活。比 P0-4 更严重，因为它不会自行终止。已补 `destroy()`。
+>
+> 遗留：P0-2 的 33 处调用中仍有 13 处未改异步，主要是冷路径；热点 `fingerprint()` 用缓存解决
+> 比异步化更划算，列为 P1 待办。
 
 ### P1
 
