@@ -5710,3 +5710,53 @@ a.hotspot-title:hover {
   .bt-table-wrap { overflow-x: auto; }
   .bt-table { display: block; overflow-x: auto; white-space: nowrap; }
 }
+
+/* ============================================================ SVG 图标
+   替代 emoji/Unicode 符号；.svg-icon 是默认基类，所有 U.icon() 产出的 svg
+   自动带这个类，inline-block + vertical-align:middle 让它能跟文本对齐。*/
+.svg-icon {
+  display: inline-block;
+  vertical-align: -0.18em;
+  flex-shrink: 0;
+  width: 1em;
+  height: 1em;
+}
+
+/* 详情页大空状态图标需要明确尺寸（不被 .empty-icon 的 font-size 限制） */
+.empty-icon .svg-icon {
+  width: 40px;
+  height: 40px;
+  opacity: 1;
+}
+.val-empty-icon .svg-icon {
+  width: 36px;
+  height: 36px;
+  opacity: 1;
+}
+.entry-icon .svg-icon {
+  width: 1em;
+  height: 1em;
+}
+
+/* spinner 状态下 svg 跟着转 */
+.spinning .refresh-icon {
+  animation: spin .8s linear infinite;
+}
+
+/* SVG 警告色：详情页 AI 免责说明 / 数据源告警 */
+.ai-disclaimer .svg-icon,
+.ds-sub.warn .svg-icon {
+  color: #f59e0b;
+}
+
+/* DS 自检里的 SVG 颜色跟着 .ds-bt-note / .ds-issues 走 */
+.ds-head .svg-icon { color: var(--accent); opacity: .9; }
+
+/* 让按钮里的 svg 跟文字保持行内基线对齐 */
+.btn .svg-icon { margin-right: 4px; }
+.btn .svg-icon:last-child { margin-right: 0; margin-left: 4px; }
+
+/* 列表项里的 SVG（如板块热度、card-title 里 AI/小图标） */
+.card-title .svg-icon { margin-right: 4px; color: var(--accent); }
+.sector-heat-icon .svg-icon { color: var(--up); }
+.modal-close .svg-icon { display: block; }
