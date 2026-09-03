@@ -492,13 +492,24 @@ async def ai_watchlist(refresh: bool = Query(False)) -> dict[str, Any]:
     summaries: list[dict[str, Any]] = []
     missing: list[str] = []
 
-    # 先尽量读缓存，保证 GET 响应快
-    for code in codes:
-        cached = _cached_brief_report(code)
-        if cached:
-            summaries.append(_ai_summary_from_report(cached))
-        else:
-            missing.append(code)
+    # 先尽量读缓存，保证 GET 响应快。
+    # _cached_brief_report 内部走的是同步 sqlite（storage.get_report），50 只自选股
+    # 逐行读时事件循环会被卡住，所有并发请求（含正在 await 网络 IO 的协程）全部停摆。
+    # 整段读缓存丢进线程池一次跑完，单次 to_thread 分发，循环期间不阻塞 loop。
+    def _read_brief_caches() -> tuple[list[dict[str, Any]], list[str]]:
+        hits: list[dict[str, Any]] = []
+        miss: list[str] = []
+        for c in codes:
+            cached = _cached_brief_report(c)
+            if cached:
+                hits.append(cached)
+            else:
+                miss.append(c)
+        return hits, miss
+
+    cached_hits, missing = await asyncio.to_thread(_read_brief_caches)
+    for cached in cached_hits:
+        summaries.append(_ai_summary_from_report(cached))
 
     if refresh and missing:
         sem = asyncio.Semaphore(3)
@@ -537,7 +548,7 @@ async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
     async def _work() -> dict[str, Any]:
         # 等锁期间可能已被并发请求填充，二次检查缓存
         if not refresh:
-            cached = _cached_report(code)
+            cached = await asyncio.to_thread(_cached_report, code)
             if cached:
                 return cached
 
