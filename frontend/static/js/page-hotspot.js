@@ -1,6 +1,7 @@
 /* page-hotspot（从 IIFE+global 转 ESM） */
 import { U } from './util.js';
 import { API } from './api.js';
+import * as M from './modal.js';
 import { AI } from './ai.js';
 
 
@@ -27,7 +28,6 @@ import { AI } from './ai.js';
     inline: { item: null, loading: false, data: null, error: null }
   };
 
-  function view() { return document.getElementById('view'); }
 
   function isCurrent() {
     // 异步加载返回时用户可能已切走页面：仅在仍停留在热点页时才重渲染，
@@ -60,7 +60,7 @@ import { AI } from './ai.js';
   }
 
   function render() {
-    const root = view();
+    const root = U.view();
     root.innerHTML = '';
     const card = U.el('div', 'card');
     card.appendChild(renderHead());
@@ -583,29 +583,15 @@ import { AI } from './ai.js';
   // 与股票 AI 分析不同：这是「快讯 → 行业影响 + 关联股」的独立分析。
   const HS_SENT_CLASS = { '利好': 'sent-bull', '利空': 'sent-bear', '中性': 'sent-flat' };
   const hsState = { item: null, loading: false };
-
-  function hsModalRoot() { return document.getElementById('modal-root'); }
-  function hsModalBody() { return document.getElementById('modal-body'); }
-  function hsModalTitle() { return document.getElementById('modal-title'); }
-  function hsModalActions() { return document.getElementById('modal-actions'); }
-
-  function hsShow() {
-    hsModalRoot().hidden = false;
-    document.body.style.overflow = 'hidden';
-  }
-  function hsClose() {
-    hsModalRoot().hidden = true;
-    document.body.style.overflow = '';
-    hsState.loading = false;
-  }
+  M.onClose(function () { hsState.loading = false; });
 
   async function openAnalysis(item) {
     if (hsState.loading) return;
     hsState.item = item;
-    hsModalTitle().textContent = '快讯 AI 分析 · 行业影响与关联股';
-    hsModalActions().innerHTML = '';
+    M.titleNode().textContent = '快讯 AI 分析 · 行业影响与关联股';
+    M.actionsNode().innerHTML = '';
     renderAnalysisLoading();
-    hsShow();
+    M.show();
     hsState.loading = true;
     try {
       const data = await API.hotspotAnalyze(item, false);
@@ -621,7 +607,7 @@ import { AI } from './ai.js';
     if (hsState.loading || !hsState.item) return;
     hsState.loading = true;
     renderAnalysisLoading();
-    hsModalActions().innerHTML = '';
+    M.actionsNode().innerHTML = '';
     try {
       const data = await API.hotspotAnalyze(hsState.item, true);
       renderAnalysis(data);
@@ -633,7 +619,7 @@ import { AI } from './ai.js';
   }
 
   function renderAnalysisLoading() {
-    hsModalBody().innerHTML =
+    M.body().innerHTML =
       '<div class="ai-loading">'
       + '<div class="ai-spinner"></div>'
       + '<div class="ai-loading-text">正在分析该快讯的行业影响…</div>'
@@ -642,7 +628,7 @@ import { AI } from './ai.js';
   }
 
   function renderAnalysisError(msg) {
-    hsModalBody().innerHTML =
+    M.body().innerHTML =
       '<div class="empty">'
       + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
       + '<div class="empty-title">分析失败</div>'
@@ -650,7 +636,7 @@ import { AI } from './ai.js';
       + '</div>';
     const retry = U.el('button', 'btn btn-sm btn-primary', '重试');
     retry.onclick = reanalyze;
-    const acts = hsModalActions();
+    const acts = M.actionsNode();
     acts.innerHTML = '';
     acts.appendChild(retry);
   }
@@ -662,7 +648,7 @@ import { AI } from './ai.js';
       renderAnalysisError((data.error || '分析失败，请重试') + '');
       return;
     }
-    const host = hsModalBody();
+    const host = M.body();
     host.innerHTML = '';
 
     // ---- 整体情绪结论
@@ -722,7 +708,7 @@ import { AI } from './ai.js';
         const card = U.el('div', 'hs-stock');
         card.title = '查看 ' + (s.name || '') + ' 详情';
         card.onclick = function () {
-          hsClose();
+          M.close();
           location.hash = '#/stock/' + s.code;
         };
         const head = U.el('div', 'hs-stock-head');
@@ -782,7 +768,7 @@ import { AI } from './ai.js';
       '本分析基于公开快讯与行情数据由程序自动生成，不构成投资建议。市场有风险，决策请自行判断。'));
 
     // ---- 操作按钮
-    const acts = hsModalActions();
+    const acts = M.actionsNode();
     acts.innerHTML = '';
     const again = U.el('button', 'btn btn-sm btn-primary', '重新分析');
     again.onclick = reanalyze;
@@ -805,14 +791,6 @@ import { AI } from './ai.js';
       U.toast('添加失败：' + err.message, 'err');
     }
   }
-
-  // 关闭交互：与 AI/资讯弹窗共用 modal-root 与 data-close 监听
-  document.addEventListener('click', function (e) {
-    if (e.target && e.target.getAttribute && e.target.getAttribute('data-close') === '1') hsClose();
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !hsModalRoot().hidden) hsClose();
-  });
 
   async function load(force) {
     if (state.loading) return;

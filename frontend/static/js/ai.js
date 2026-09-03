@@ -1,6 +1,7 @@
 /* ai（从 IIFE+global 转 ESM） */
 import { U } from './util.js';
 import { API } from './api.js';
+import * as M from './modal.js';
 
 
   // P0-5：3 档 action → CSS class（沿用 4 档时期的颜色映射：加仓红/减仓绿/观望灰）
@@ -64,22 +65,7 @@ import { API } from './api.js';
   }
 
   const state = { code: null, name: '', report: null, loading: false };
-
-  function root() { return document.getElementById('modal-root'); }
-  function body() { return document.getElementById('modal-body'); }
-  function titleNode() { return document.getElementById('modal-title'); }
-  function actionsNode() { return document.getElementById('modal-actions'); }
-
-  function show() {
-    root().hidden = false;
-    document.body.style.overflow = 'hidden';
-  }
-
-  function close() {
-    root().hidden = true;
-    document.body.style.overflow = '';
-    state.loading = false;
-  }
+  M.onClose(function () { state.loading = false; });
 
   async function open(code, name, triggerBtn) {
     if (state.loading) return;
@@ -87,10 +73,10 @@ import { API } from './api.js';
     state.name = name || code;
     state.report = null;
 
-    titleNode().textContent = 'AI 智能分析 · ' + state.name + ' (' + code + ')';
-    actionsNode().innerHTML = '';
+    M.titleNode().textContent = 'AI 智能分析 · ' + state.name + ' (' + code + ')';
+    M.actionsNode().innerHTML = '';
     renderLoading();
-    show();
+    M.show();
 
     if (triggerBtn) {
       triggerBtn.disabled = true;
@@ -117,7 +103,7 @@ import { API } from './api.js';
     if (state.loading) return;
     state.loading = true;
     renderLoading();
-    actionsNode().innerHTML = '';
+    M.actionsNode().innerHTML = '';
     try {
       const report = await API.aiAnalyze(state.code, true);
       state.report = report;
@@ -130,7 +116,7 @@ import { API } from './api.js';
   }
 
   function renderLoading() {
-    body().innerHTML =
+    M.body().innerHTML =
       '<div class="ai-loading">'
       + '<div class="ai-spinner"></div>'
       + '<div class="ai-loading-text">AI 智能分析中，请稍候</div>'
@@ -139,7 +125,7 @@ import { API } from './api.js';
   }
 
   function renderError(msg) {
-    body().innerHTML =
+    M.body().innerHTML =
       '<div class="empty">'
       + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
       + '<div class="empty-title">分析失败</div>'
@@ -147,14 +133,14 @@ import { API } from './api.js';
       + '</div>';
     const retry = U.el('button', 'btn btn-sm btn-primary', '重试');
     retry.onclick = reanalyze;
-    actionsNode().innerHTML = '';
-    actionsNode().appendChild(retry);
+    M.actionsNode().innerHTML = '';
+    M.actionsNode().appendChild(retry);
   }
 
   function renderReport(report) {
     const a = report.analysis || {};
     const adv = a.advice || {};
-    const host = body();
+    const host = M.body();
     host.innerHTML = '';
 
     // ---- 结论卡片（重中之重，放最上面）
@@ -357,7 +343,7 @@ import { API } from './api.js';
       '本分析基于公开行情数据由程序自动生成，不构成投资建议。市场有风险，决策请自行判断。'));
 
     // ---- 头部操作按钮
-    const acts = actionsNode();
+    const acts = M.actionsNode();
     acts.innerHTML = '';
     const copyBtn = U.el('button', 'btn btn-sm', '复制');
     copyBtn.onclick = async function () {
@@ -521,12 +507,4 @@ import { API } from './api.js';
     return lines.join('\n');
   }
 
-  // 关闭交互
-  document.addEventListener('click', function (e) {
-    if (e.target && e.target.getAttribute && e.target.getAttribute('data-close') === '1') close();
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !root().hidden) close();
-  });
-
-  export const AI = { open: open, close: close };
+  export const AI = { open: open, close: M.close };

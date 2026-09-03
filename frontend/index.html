@@ -107,9 +107,8 @@
 
   <div class="toast-root" id="toast-root"></div>
 
-  <!-- 普通脚本：echarts 作为 window.echarts 全局（Vite 从 publicDir 拷贝原样） -->
-  <script src="/vendor/echarts.min.js"></script>
   <!-- 单入口 ESM：app.js 内部 import 所有依赖模块；main.py 注入 ?v= 强刷 -->
+  <!-- echarts（约 1MB）不再全局预载：仅详情页画图，charts.js 在首个图表调用时按需注入 -->
   <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

@@ -12,6 +12,28 @@ import { U } from './util.js';
 
   const instances = [];
 
+  // ---------------- echarts 懒加载 ----------------
+  // echarts.min.js 约 1MB，此前在 index.html 无条件加载，但全站只有详情页画图。
+  // 现改为按需：首个图表调用时动态注入 <script>，就绪后补渲染挂起的图表。
+  let _echartsLoading = null;   // 单飞 promise
+  const _pending = [];          // 等待 echarts 就绪的 [dom, option, group]
+
+  function _loadEcharts() {
+    if (window.echarts) return Promise.resolve();
+    if (_echartsLoading) return _echartsLoading;
+    _echartsLoading = new Promise(function (resolve, reject) {
+      const s = document.createElement('script');
+      s.src = '/vendor/echarts.min.js';
+      s.onload = function () { resolve(); };
+      s.onerror = function () {
+        _echartsLoading = null;   // 允许下次重试
+        reject(new Error('图表库加载失败'));
+      };
+      document.head.appendChild(s);
+    });
+    return _echartsLoading;
+  }
+
   function baseOption() {
     return {
       backgroundColor: 'transparent',
@@ -52,7 +74,18 @@ import { U } from './util.js';
   function mount(dom, option, group) {
     if (!dom) return null;
     if (!window.echarts) {
-      dom.innerHTML = '<div class="loading-block">图表库未加载，无法渲染曲线</div>';
+      // 懒加载路径：占位提示 + 入队，脚本就绪后按序补渲染
+      dom.innerHTML = '<div class="loading-block">图表库加载中…</div>';
+      _pending.push([dom, option, group]);
+      _loadEcharts().then(function () {
+        while (_pending.length) {
+          const args = _pending.shift();
+          if (args[0].isConnected) mount(args[0], args[1], args[2]);
+        }
+      }).catch(function () {
+        _pending.length = 0;
+        dom.innerHTML = '<div class="loading-block">图表库未加载，无法渲染曲线</div>';
+      });
       return null;
     }
     const existing = window.echarts.getInstanceByDom(dom);
@@ -74,6 +107,7 @@ import { U } from './util.js';
   }
 
   function disposeAll() {
+    _pending.length = 0;   // 跨页离开时丢弃未就绪的挂起渲染，避免补画到已卸载 DOM
     while (instances.length) {
       const c = instances.pop();
       try { c.dispose(); } catch (e) { /* ignore */ }

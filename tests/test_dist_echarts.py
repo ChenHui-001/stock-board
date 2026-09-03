@@ -1,17 +1,19 @@
-"""Regression test: dist 产物必须包含 echarts vendor 文件，且 index.html 必须引用之。
+"""Regression test: dist 产物必须包含 echarts vendor 文件，但页面不得预载。
 
-历史：用户报告「股票详情页：图表库未加载，无法渲染曲线」。
-根因之一：构建后 frontend/static/dist/vendor/echarts.min.js 缺失或 index.html
-没有正确的 <script> 标签，导致 charts.js mount() 时 window.echarts 为 undefined，
-页面直接显示「图表库未加载」。
+历史一：用户报告「股票详情页：图表库未加载，无法渲染曲线」。
+根因之一：构建后 frontend/static/dist/vendor/echarts.min.js 缺失，导致
+charts.js mount() 时 window.echarts 为 undefined，页面直接显示「图表库未加载」。
+
+历史二（P2 #26 懒加载改造）：echarts 约 1MB 但全站只有详情页画图，
+index.html 已移除预载 <script>，由 charts.js 在首个图表调用时按需注入。
 
 本测试做三件事：
   1. 检查源 vendor 文件 frontend/static/public/vendor/echarts.min.js 存在（>= 500KB）
   2. 检查构建后 dist/vendor/echarts.min.js 存在且 SHA256 与源一致（vite publicDir 拷贝）
-  3. 检查 dist/index.html 里的 <script src=...echarts.min.js> 路径包含 vendor 段
+  3. 检查 index.html（源 + dist）不再预载 echarts，且 charts.js 保留懒加载注入逻辑
 
-第 2、3 项需要先跑 `npm run build`；如果跳过构建直接跑 pytest，本测试会
-跳过（不会失败），保证本地 dev 流程不会被本测试阻断。
+第 2、3 项的 dist 部分需要先跑 `npm run build`；如果跳过构建直接跑 pytest，
+dist 相关断言会跳过（不会失败），保证本地 dev 流程不会被本测试阻断。
 """
 from __future__ import annotations
 
@@ -59,35 +61,39 @@ def test_dist_vendor_matches_source_after_build() -> None:
     )
 
 
-def test_dist_index_html_references_echarts() -> None:
-    """dist/index.html 必须有 echarts vendor 的 <script> 标签，路径含 vendor 段。"""
+def test_dist_index_html_does_not_preload_echarts() -> None:
+    """dist/index.html 不得再预载 echarts（P2 #26 懒加载改造后由 charts.js 按需注入）。"""
     if not DIST_INDEX.exists():
         import pytest
 
         pytest.skip("dist/index.html 不存在；需先跑 `npm run build`")
 
     html = DIST_INDEX.read_text(encoding="utf-8")
-    # 必须有 echarts.min.js 的 script 引用
     matches = re.findall(
         r'<script[^>]*src=["\']([^"\']*echarts\.min\.js[^"\']*)["\']',
         html,
     )
-    assert matches, (
-        "dist/index.html 未引用 echarts.min.js；charts.js mount() 会判 window.echarts 为空。"
+    assert not matches, (
+        f"dist/index.html 仍预载 echarts（{matches}）；"
+        "懒加载改造后应删除该 <script>，由 charts.js 按需注入，"
+        "否则非图表页面白背 1MB。"
     )
-    # 路径必须含 vendor/ 段，避免 base 配置导致 404
-    for src in matches:
-        assert "/vendor/" in src or "vendor/" in src, (
-            f"echarts script 路径不含 vendor 段: {src}"
-        )
 
 
-def test_source_index_html_references_echarts_with_vendor_path() -> None:
-    """源 frontend/index.html 也必须引用 vendor 路径，保证 dev 模式同样能加载。"""
+def test_source_index_html_does_not_preload_echarts() -> None:
+    """源 frontend/index.html 不得预载 echarts；懒加载逻辑必须在 charts.js 内。"""
     src_index = ROOT / "frontend" / "index.html"
     assert src_index.exists()
     html = src_index.read_text(encoding="utf-8")
-    assert "/vendor/echarts.min.js" in html or "vendor/echarts.min.js" in html, (
-        "源 frontend/index.html 未引用 /vendor/echarts.min.js；"
-        "dev 模式 / Vite 都不会自动加载 echarts。"
+    assert "/vendor/echarts.min.js" not in html, (
+        "源 frontend/index.html 仍预载 /vendor/echarts.min.js；"
+        "懒加载改造后应由 charts.js 动态注入，非图表页面不应加载 1MB echarts。"
+    )
+
+    charts = ROOT / "frontend" / "static" / "js" / "charts.js"
+    assert charts.exists()
+    js = charts.read_text(encoding="utf-8")
+    assert "/vendor/echarts.min.js" in js and "_loadEcharts" in js, (
+        "charts.js 缺少懒加载注入逻辑（_loadEcharts + /vendor/echarts.min.js）；"
+        "index.html 已不再预载，删掉注入逻辑会导致详情页永远「图表库未加载」。"
     )

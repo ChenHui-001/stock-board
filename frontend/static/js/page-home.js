@@ -28,10 +28,6 @@ import { App } from './app.js';
     aiExpanded: null   // 当前行内展开 AI 面板的股票 code
   };
 
-  function view() {
-    return document.getElementById('view');
-  }
-
   // AI 信号优先级：需要操作的股票排在前面（加仓 > 减仓 > 清仓 > 观望）
   const AI_ACTION_RANK = {
     '积极持仓/加仓': 3,
@@ -86,7 +82,7 @@ import { App } from './app.js';
   }
 
   function render() {
-    const root = view();
+    const root = U.view();
     root.innerHTML = '';
 
     if (!state.items.length) {
@@ -601,7 +597,7 @@ import { App } from './app.js';
   }
 
   // ---------------------------------------------------------- 数据加载
-  // 防竞态守卫：load 在 await 期间用户可能切页，返回后 view() 拿到的是当前页的
+  // 防竞态守卫：load 在 await 期间用户可能切页，返回后 U.view() 拿到的是当前页的
   // #view，直接 render 会把首页表格画到别的页面；destroy/新加载都会使旧号失效。
   const pageGuard = U.createPageGuard();
 
@@ -618,7 +614,7 @@ import { App } from './app.js';
       App.setSession(data.session);
     } catch (err) {
       if (!pageGuard.ok(my)) return;   // 错误提示同样不追到别的页面
-      const root = view();
+      const root = U.view();
       if (!state.items.length) {
         root.innerHTML = '<div class="card"><div class="empty">'
           + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
@@ -669,7 +665,7 @@ import { App } from './app.js';
    * 看板不存在时（用户从详情页切到首页、watchlist 还没加载完等场景）跳过。
    */
   function patchAIDashboard() {
-    const root = view();
+    const root = U.view();
     const old = root.querySelector('.ai-dashboard');
     if (!old) return;
     const fresh = renderAIDashboard();
@@ -791,7 +787,7 @@ import { App } from './app.js';
       state.manage = false;
       state.selected = new Set();
       state.aiExpanded = null;
-      view().innerHTML = '<div class="card"><div class="loading-block">加载自选股…</div></div>';
+      U.view().innerHTML = '<div class="card"><div class="loading-block">加载自选股…</div></div>';
       return load(false).then(function () {
         // 自选加载完成后再加载 AI 摘要（不阻塞首屏）
         return loadAI(false);

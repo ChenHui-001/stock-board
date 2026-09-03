@@ -19,7 +19,6 @@ import { App } from './app.js';
     60: '中长期·季线'
   };
 
-  function view() { return document.getElementById('view'); }
 
   async function mount(code) {
     _detailActive = true;
@@ -27,7 +26,7 @@ import { App } from './app.js';
     state.data = null;
     state.seq += 1;
     Charts.disposeAll();
-    view().innerHTML = renderSkeleton();
+    U.view().innerHTML = renderSkeleton();
     await load(false);
   }
 
@@ -41,7 +40,7 @@ import { App } from './app.js';
       App.setSession(state.data.session);
     } catch (err) {
       if (seq !== state.seq) return;      // 过期请求的失败不应覆盖当前页面
-      view().innerHTML = '<div class="card"><div class="empty">'
+      U.view().innerHTML = '<div class="card"><div class="empty">'
         + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
         + '<div class="empty-title">详情加载失败</div>'
         + '<div class="empty-desc">' + U.escapeHtml(err.message) + '</div>'
@@ -67,7 +66,7 @@ import { App } from './app.js';
 
   function render() {
     const d = state.data;
-    const root = view();
+    const root = U.view();
     Charts.disposeAll();
     root.innerHTML = '';
 

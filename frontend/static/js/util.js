@@ -264,6 +264,7 @@
 
   export const U = {
     NBSP: NBSP,
+    view: function () { return document.getElementById('view'); },
     createPageGuard: createPageGuard,
     isNum: isNum,
     price: price,

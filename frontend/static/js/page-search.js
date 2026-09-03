@@ -5,10 +5,9 @@ import { API } from './api.js';
 
   const state = { keyword: '', items: [], hot: null, loading: false };
 
-  function view() { return document.getElementById('view'); }
 
   function render() {
-    const root = view();
+    const root = U.view();
     root.innerHTML = '';
 
     // 搜索框

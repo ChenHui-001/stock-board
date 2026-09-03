@@ -1,6 +1,7 @@
 /* news（从 IIFE+global 转 ESM） */
 import { U } from './util.js';
 import { API } from './api.js';
+import * as M from './modal.js';
 import { AI } from './ai.js';
 
 
@@ -19,28 +20,13 @@ import { AI } from './ai.js';
   };
 
   const state = { code: null, name: '', loading: false, tab: 'news', days: 365, newsDays: 30 };
+  M.onClose(function () { state.loading = false; });
 
   // 时间范围筛选：资讯（近7天/近30天）+ 研报（近1月/近3月/近1年/全部）
   const NEWS_RANGE_OPTS = [['近7天', 7], ['近30天', 30]];
   const REPORT_RANGE_OPTS = [
     ['近1月', 30], ['近3月', 90], ['近1年', 365], ['全部', 0]
   ];
-
-  function root() { return document.getElementById('modal-root'); }
-  function body() { return document.getElementById('modal-body'); }
-  function titleNode() { return document.getElementById('modal-title'); }
-  function actionsNode() { return document.getElementById('modal-actions'); }
-
-  function show() {
-    root().hidden = false;
-    document.body.style.overflow = 'hidden';
-  }
-
-  function close() {
-    root().hidden = true;
-    document.body.style.overflow = '';
-    state.loading = false;
-  }
 
   async function open(code, name, triggerBtn) {
     if (state.loading) return;
@@ -50,10 +36,10 @@ import { AI } from './ai.js';
     state.days = 365;
     state.newsDays = 30;
 
-    titleNode().textContent = '股票资讯 · ' + state.name + ' (' + code + ')';
-    actionsNode().innerHTML = '';
+    M.titleNode().textContent = '股票资讯 · ' + state.name + ' (' + code + ')';
+    M.actionsNode().innerHTML = '';
     renderLoading('news');
-    show();
+    M.show();
 
     if (triggerBtn) {
       triggerBtn.disabled = true;
@@ -79,7 +65,7 @@ import { AI } from './ai.js';
     if (state.loading) return;
     state.loading = true;
     renderLoading(state.tab);
-    actionsNode().innerHTML = '';
+    M.actionsNode().innerHTML = '';
     try {
       if (state.tab === 'reports') {
         const data = await API.reports(state.code, true, state.days);
@@ -96,7 +82,7 @@ import { AI } from './ai.js';
   }
 
   function renderLoading(tab) {
-    body().innerHTML =
+    M.body().innerHTML =
       '<div class="ai-loading">'
       + '<div class="ai-spinner"></div>'
       + '<div class="ai-loading-text">' + (tab === 'reports' ? '正在获取券商研报…' : '正在获取近一个月相关资讯…') + '</div>'
@@ -105,7 +91,7 @@ import { AI } from './ai.js';
   }
 
   function renderError(msg, tab) {
-    body().innerHTML =
+    M.body().innerHTML =
       '<div class="empty">'
       + '<div class="empty-icon">' + U.iconHtml('alert', { size: 40 }) + '</div>'
       + '<div class="empty-title">' + (tab === 'reports' ? '研报获取失败' : '资讯获取失败') + '</div>'
@@ -113,8 +99,8 @@ import { AI } from './ai.js';
       + '</div>';
     const retry = U.el('button', 'btn btn-sm btn-primary', '重试');
     retry.onclick = refresh;
-    actionsNode().innerHTML = '';
-    actionsNode().appendChild(retry);
+    M.actionsNode().innerHTML = '';
+    M.actionsNode().appendChild(retry);
   }
 
   // ---------------------------------------------------------- 页签
@@ -125,7 +111,7 @@ import { AI } from './ai.js';
       btn.onclick = function () {
         if (state.loading || state.tab === t[0]) return;
         state.tab = t[0];
-        actionsNode().innerHTML = '';
+        M.actionsNode().innerHTML = '';
         renderLoading(t[0]);
         loadTab(t[0]);
       };
@@ -173,7 +159,7 @@ import { AI } from './ai.js';
   function renderNews(data) {
     const meta = data.meta || {};
     const items = data.items || [];
-    const host = body();
+    const host = M.body();
     host.innerHTML = '';
     host.appendChild(renderTabs());
     host.appendChild(renderRangeFilter('news'));
@@ -288,7 +274,7 @@ import { AI } from './ai.js';
   function renderReports(data) {
     const meta = data.meta || {};
     const items = data.items || [];
-    const host = body();
+    const host = M.body();
     host.innerHTML = '';
     host.appendChild(renderTabs());
     host.appendChild(renderRangeFilter('reports'));
@@ -363,7 +349,7 @@ import { AI } from './ai.js';
   }
 
   function appendActions(kind) {
-    const acts = actionsNode();
+    const acts = M.actionsNode();
     acts.innerHTML = '';
     if (kind === 'refresh') {
       const againBtn = U.el('button', 'btn btn-sm btn-primary', '刷新');
@@ -387,15 +373,7 @@ import { AI } from './ai.js';
     }
     m.appendChild(U.el('span', '', '获取时间：' + (meta.fetched_at || '--')));
     if (meta.total != null) m.appendChild(U.el('span', '', '共 ' + meta.total + ' 条'));
-    body().appendChild(m);
+    M.body().appendChild(m);
   }
 
-  // 关闭交互（与 AI 弹窗共用 modal-root 的 data-close / Esc 监听）
-  document.addEventListener('click', function (e) {
-    if (e.target && e.target.getAttribute && e.target.getAttribute('data-close') === '1') close();
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !root().hidden) close();
-  });
-
-  export const News = { open: open, close: close };
+  export const News = { open: open, close: M.close };
