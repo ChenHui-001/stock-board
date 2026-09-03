@@ -1,7 +1,11 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  监听 backend/ 和 frontend/static/ 变更,自动跑 smoke_test,通过则 commit + push 到 main。
+  监听 backend/ 和 frontend/static/ 变更,自动跑 smoke_test,通过则本地 commit 到 main。
+  注意(2026-09-03 策略变更):本脚本不再自动 push。推送改为人工统一执行——
+  watcher 自动 push 与手工 git fetch/checkout 等操作并发,曾触发 auto-gc 裁剪
+  in-flight 对象导致 "bad tree object" 仓库损坏(已恢复)。仓库已另配
+  git config gc.auto 0 双保险。
 
 .PARAMETER PollSeconds
   轮询间隔秒数,默认 3 秒。
@@ -14,9 +18,9 @@
   powershell -File auto-commit-watch.ps1 -PollSeconds 3 -DebounceSeconds 5
 
 .NOTES
-  GitHub PAT 不得入库。本脚本按下列顺序查找:
-    1) $env:STOCK_BOARD_GITHUB_TOKEN  环境变量
-    2) <repo>/.credentials            gitignore 文件,内容: GITHUB_TOKEN=ghp_xxx
+  本脚本只做本地 commit,不需要 GitHub PAT。
+  统一推送时沿用既定 inline-URL 流程(从 wincred 取 token):
+    git push "https://x-access-token:<TOKEN>@github.com/ChenHui-001/stock-board.git" main
 #>
 [CmdletBinding()]
 param(
@@ -67,23 +71,8 @@ function Get-CommitMessage {
     return "auto-commit: smoke_test passed | changes: $Files"
 }
 
-function Get-GitHubToken {
-    param([string]$RepoRoot)
-    $envTok = $env:STOCK_BOARD_GITHUB_TOKEN
-    if ($envTok) { return $envTok }
-    $credFile = Join-Path $RepoRoot ".credentials"
-    if (Test-Path $credFile) {
-        $line = Get-Content $credFile -ErrorAction SilentlyContinue | Select-String -Pattern "^GITHUB_TOKEN="
-        if ($line) {
-            $tok = ($line -split "=", 2)[1].Trim()
-            if ($tok) { return $tok }
-        }
-    }
-    throw '未找到 GITHUB_TOKEN。请设置环境变量 STOCK_BOARD_GITHUB_TOKEN,或在仓库根目录创建 .credentials 文件(已在 .gitignore 中)。'
-}
-
-$githubToken = Get-GitHubToken -RepoRoot $projectRoot
-$remoteUrl = "https://x-access-token:$githubToken@github.com/ChenHui-001/stock-board.git"
+$githubToken = $null  # 只本地提交,不再需要 PAT
+$remoteUrl = $null
 
 # 启动时先轮转日志，避免单文件无限增长
 Rotate-LogFile -Path $logFile -MaxBytes $maxLogBytes -Keep $maxLogArchives
@@ -129,15 +118,12 @@ function Invoke-AutoCommit {
         return
     }
 
-    Write-Log "git push origin main..."
-    $env:GIT_TERMINAL_PROMPT = "0"
-    $pushOutput = git push $remoteUrl main 2>&1
-    foreach ($line in $pushOutput) { Write-Log "  $line" }
-    if ($LASTEXITCODE -eq 0) {
-        Write-Log "push OK"
-    } else {
-        Write-Log "push failed (exit=$LASTEXITCODE)" "ERROR"
-    }
+    # 只提交不推送(2026-09-03 策略变更):推送由人工统一执行,避免与手工 git
+    # 操作并发写仓库。origin/main..main 的计数仅供参考——inline-URL push 不会
+    # 更新 origin/main 跟踪引用,数字可能偏大,统一推之前先 git fetch 校准。
+    $ahead = git rev-list --count "origin/main..main" 2>$null
+    if (-not $ahead) { $ahead = "?" }
+    Write-Log "commit OK(不自动推送): 本地领先 origin/main 约 $ahead 个提交,待统一推送"
 }
 
 Write-Log "========== auto-commit-watch start (polling mode) =========="
