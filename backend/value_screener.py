@@ -411,7 +411,8 @@ async def _stock_profile(
                 "turnover": q.turnover, "volume_ratio": q.volume_ratio,
                 "amount": q.amount, "board": profile["board"] or q.board,
             })
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.warning("%s 异常，按空数据继续: %s", "_stock_profile", exc)
         pass
     # 腾讯补充字段：优先用预取的批量结果，缺失时才单独补一次
     if extra is None:
@@ -431,14 +432,16 @@ async def _stock_profile(
                 }
                 for f in fin
             ]
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s 异常，按空数据继续: %s", "_fin", exc)
             return []
 
     async def _flow() -> list[dict[str, Any]]:
         try:
             flow, _src = await registry().fund_flow(code, market, 30)
             return [{"date": d.date, "main": d.main, "main_pct": d.main_pct} for d in flow]
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s 异常，按空数据继续: %s", "_flow", exc)
             return []
 
     async def _kline() -> list[dict[str, Any]]:
@@ -450,7 +453,8 @@ async def _stock_profile(
                  "volume": b.volume, "high": b.high, "low": b.low}
                 for b in bars
             ]
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s 异常，按空数据继续: %s", "_kline", exc)
             return []
 
     # 三路并发：财务 / 资金 / K线互不依赖

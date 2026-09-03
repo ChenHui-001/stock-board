@@ -402,7 +402,8 @@ class Registry:
             for task in done:
                 try:
                     provider_name, part = await task
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("%s 异常，按空数据继续: %s", "quotes", exc)
                     continue
                 self._merge_quotes(part, result, stash, wanted, used, provider_name)
                 missing = [k for k in wanted if k not in result]
@@ -480,7 +481,8 @@ class Registry:
                 empty_ok=True,
             )
             return bars or [], src or ""
-        except ProviderError:
+        except ProviderError as exc:
+            log.warning("%s 异常，按空数据继续: %s", "kline_min", exc)
             return [], ""
 
     async def fund_flow(self, code: str, market: str, days: int) -> tuple[list[FlowDay], str]:
@@ -502,7 +504,8 @@ class Registry:
         try:
             rows, _ = await self._first("boards", lambda p: p.boards(code, market), empty_ok=True)
             return rows or []
-        except ProviderError:
+        except ProviderError as exc:
+            log.warning("%s 异常，按空数据继续: %s", "boards", exc)
             return []
 
     async def industry(self, keys: list[tuple[str, str]]) -> dict[str, str]:

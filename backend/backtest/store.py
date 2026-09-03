@@ -20,6 +20,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+import logging
+log = logging.getLogger("backtest.store")
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = ROOT / "data" / "backtest_runs"
@@ -144,7 +146,8 @@ def _load_meta(run_id: str) -> dict[str, Any] | None:
         return None
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.warning("%s 异常，按空数据继续: %s", "_load_meta", exc)
         return None
 
 
@@ -162,7 +165,8 @@ def _refresh_index(run_id: str, meta: dict[str, Any], summary: dict[str, Any]) -
         if INDEX_FILE.exists():
             try:
                 items = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                log.warning("%s 异常，按空数据继续: %s", "_refresh_index", exc)
                 items = []
         items = [it for it in items if it.get("run_id") != run_id]
         items.insert(0, {
@@ -188,7 +192,8 @@ def list_runs(limit: int = 20) -> list[dict[str, Any]]:
         return []
     try:
         items = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.warning("%s 异常，按空数据继续: %s", "list_runs", exc)
         return []
     return items[:limit]
 
@@ -201,14 +206,16 @@ def load_result(run_id: str) -> dict[str, Any] | None:
         return None
     try:
         summary = json.loads(summary_p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.warning("%s 异常，按空数据继续: %s", "load_result", exc)
         return None
     tables: dict[str, Any] = {}
     tp = d / "tables.json"
     if tp.exists():
         try:
             tables = json.loads(tp.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s 异常，按空数据继续: %s", "load_result", exc)
             tables = {}
     # summary.json 存的是「full_summary」（可能含 meta/buckets 等嵌套），
     # 而 API / 前端要的是扁平的事件级统计；两者都在返回里给全。
@@ -248,7 +255,8 @@ def delete_run(run_id: str) -> bool:
         if INDEX_FILE.exists():
             try:
                 items = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                log.warning("%s 异常，按空数据继续: %s", "delete_run", exc)
                 items = []
             items = [it for it in items if it.get("run_id") != run_id]
             INDEX_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2),

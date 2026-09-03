@@ -228,6 +228,7 @@ async def get_reports(
     try:
         all_items, src_name = await cache.get_or_set(raw_key, REPORT_TTL, load_raw, force=force)
     except ProviderError as exc:
+        log.debug("%s 降级: %s", "get_reports", exc)
         return {"items": [], "meta": {"error": f"研报获取失败：{exc}", "engine": "none", "total": 0, "source": ""}}
 
     # 按时间范围过滤（days<=0 表示全部）

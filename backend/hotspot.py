@@ -680,6 +680,7 @@ async def get_hotspot(minutes: int = HOTSPOT_MINUTES, force: bool = False) -> di
     try:
         return await cache.get_or_set(key, TTL, lambda: _load(minutes), force=force)
     except ProviderError as exc:
+        log.debug("%s 降级: %s", "get_hotspot", exc)
         result = {
             "items": [],
             "meta": {

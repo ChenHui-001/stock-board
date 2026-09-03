@@ -36,8 +36,40 @@ REFERER = {"Referer": "https://quote.eastmoney.com/"}
 # f86 在 stock/get（单股）接口是标准 unix 时间戳，但在 ulist（批量）接口部分场景
 # 返回的是延迟秒数等非时间戳值；f124 是批量接口的备选更新时间字段，二者都无效时
 # trade_date 置空，由上层用 K 线日期回填（详情页已实现）。
-QUOTE_FIELDS = "f1,f2,f3,f4,f5,f6,f8,f10,f12,f13,f14,f15,f16,f17,f18,f62,f86,f100,f124,f184,f292"
-#                  现价 涨跌额 涨跌幅 涨跌额2 量 额 换手 量比 代 市 名 最 高 低 开 昨收 主力净流入 时间 行业 名称2 主力净占比 振幅
+#
+# ---- ulist 字段语义映射（唯一事实来源，QUOTE_FIELDS 由它拼出）----
+# 此前 40+ 处 row.get("fXX") 裸写魔法字段，含义全靠这行注释倒查；现在解析点一律
+# 用语义常量，新增/换字段只改这里。
+F_PRICE = "f2"          # 现价
+F_CHANGE = "f4"         # 涨跌额
+F_CHANGE_PCT = "f3"     # 涨跌幅 %
+F_OPEN = "f17"          # 今开
+F_HIGH = "f15"          # 最高
+F_LOW = "f16"           # 最低
+F_PREV_CLOSE = "f18"    # 昨收
+F_VOLUME = "f5"         # 成交量（手，×100 转股）
+F_AMOUNT = "f6"         # 成交额（元）
+F_TURNOVER = "f8"       # 换手率 %
+F_VOLUME_RATIO = "f10"  # 量比
+F_CODE = "f12"          # 代码
+F_MARKET = "f13"        # 市场（1=SH，0=SZ/BJ）
+F_NAME = "f14"          # 名称
+F_INDUSTRY = "f100"     # 行业/板块名
+F_MAIN_INFLOW = "f62"   # 主力净流入（元）
+F_MAIN_PCT = "f184"     # 主力净占比（%）
+F_TS = "f86"            # 行情更新时间戳（单股标准）
+F_TS_ALT = "f124"       # 批量接口备选更新时间戳
+F_STATUS = "f292"       # 交易状态码（请求保留，解析暂未消费）
+
+_F_LEGACY_1 = "f1"      # 历史遗留请求字段，解析从未消费；保留以维持请求串不变
+
+QUOTE_FIELDS = ",".join((
+    _F_LEGACY_1, F_PRICE, F_CHANGE_PCT, F_CHANGE, F_VOLUME, F_AMOUNT,
+    F_TURNOVER, F_VOLUME_RATIO, F_CODE, F_MARKET, F_NAME, F_HIGH, F_LOW,
+    F_OPEN, F_PREV_CLOSE, F_MAIN_INFLOW, F_TS, F_INDUSTRY, F_TS_ALT,
+    F_MAIN_PCT, F_STATUS,
+))
+# 拼出结果与历史字面量逐字符一致（f1,f2,...,f292），升级前后请求 diff 为零。
 # P0-2：f62/f184 扩字段零额外请求即可拿到盘中主力净流入/净占比；其他字段含义不变
 
 # A 股全市场（沪深主板+创业板+科创板+北交所）
@@ -160,30 +192,30 @@ class EastmoneyProvider(Provider):
 
         out: dict[str, Quote] = {}
         for row in diff:
-            code = normalize_code(str(row.get("f12") or ""))
+            code = normalize_code(str(row.get(F_CODE) or ""))
             if not code:
                 continue
-            market = _market_from_f13(row.get("f13"), code)
+            market = _market_from_f13(row.get(F_MARKET), code)
             quote = Quote(
                 code=code,
                 market=market,
-                name=str(row.get("f14") or ""),
-                board=str(row.get("f100") or "").strip("-") or "",
-                price=to_float(row.get("f2")),
-                prev_close=to_float(row.get("f18")),
-                change=to_float(row.get("f4")),
-                change_pct=to_float(row.get("f3")),
-                open=to_float(row.get("f17")),
-                high=to_float(row.get("f15")),
-                low=to_float(row.get("f16")),
-                volume=(to_float(row.get("f5"), 0.0) or 0.0) * 100,  # 手 -> 股
-                amount=to_float(row.get("f6")),
-                turnover=to_float(row.get("f8")),
-                volume_ratio=to_float(row.get("f10")),
+                name=str(row.get(F_NAME) or ""),
+                board=str(row.get(F_INDUSTRY) or "").strip("-") or "",
+                price=to_float(row.get(F_PRICE)),
+                prev_close=to_float(row.get(F_PREV_CLOSE)),
+                change=to_float(row.get(F_CHANGE)),
+                change_pct=to_float(row.get(F_CHANGE_PCT)),
+                open=to_float(row.get(F_OPEN)),
+                high=to_float(row.get(F_HIGH)),
+                low=to_float(row.get(F_LOW)),
+                volume=(to_float(row.get(F_VOLUME), 0.0) or 0.0) * 100,  # 手 -> 股
+                amount=to_float(row.get(F_AMOUNT)),
+                turnover=to_float(row.get(F_TURNOVER)),
+                volume_ratio=to_float(row.get(F_VOLUME_RATIO)),
                 # P0-2：盘中主力资金扩字段。f62=主力净流入(元)，f184=主力净占比(%)
-                main_net_inflow=to_float(row.get("f62")),
-                main_net_pct=to_float(row.get("f184")),
-                trade_date=_ts_to_date(row.get("f86")) or _ts_to_date(row.get("f124")),
+                main_net_inflow=to_float(row.get(F_MAIN_INFLOW)),
+                main_net_pct=to_float(row.get(F_MAIN_PCT)),
+                trade_date=_ts_to_date(row.get(F_TS)) or _ts_to_date(row.get(F_TS_ALT)),
                 source=self.name,
             )
             out[f"{code}.{market}"] = quote
@@ -362,7 +394,7 @@ class EastmoneyProvider(Provider):
             params={
                 "fltt": 2,
                 "invt": 2,
-                "fields": "f12,f13,f14,f3",
+                "fields": f"{F_CODE},{F_MARKET},{F_NAME},{F_CHANGE_PCT}",
                 "secid": secid(code, market),
                 "pn": 1,
                 "pz": 30,
@@ -376,14 +408,14 @@ class EastmoneyProvider(Provider):
             diff = list(diff.values())
         out: list[Board] = []
         for x in diff:
-            name = str(x.get("f14") or "").strip()
+            name = str(x.get(F_NAME) or "").strip()
             if not name:
                 continue
             out.append(Board(
-                code=str(x.get("f12") or "").strip(),
-                market=str(x.get("f13") or "").strip(),
+                code=str(x.get(F_CODE) or "").strip(),
+                market=str(x.get(F_MARKET) or "").strip(),
                 name=name,
-                change_pct=to_float(x.get("f3")),
+                change_pct=to_float(x.get(F_CHANGE_PCT)),
             ))
         return out
 
@@ -402,7 +434,7 @@ class EastmoneyProvider(Provider):
             params={
                 "fltt": 2,
                 "invt": 2,
-                "fields": "f12,f13,f14,f100",
+                "fields": f"{F_CODE},{F_MARKET},{F_NAME},{F_INDUSTRY}",
                 "secids": secids,
                 "ut": "fa5fd1943c7b386f172d6893dbfba10b",
             },
@@ -412,11 +444,11 @@ class EastmoneyProvider(Provider):
             diff = list(diff.values())
         out: dict[str, str] = {}
         for row in diff:
-            code = normalize_code(str(row.get("f12") or ""))
+            code = normalize_code(str(row.get(F_CODE) or ""))
             if not code:
                 continue
-            market = _market_from_f13(row.get("f13"), code)
-            name = str(row.get("f100") or "").strip(" -")
+            market = _market_from_f13(row.get(F_MARKET), code)
+            name = str(row.get(F_INDUSTRY) or "").strip(" -")
             if name:
                 out[f"{code}.{market}"] = name
         return out
@@ -533,7 +565,7 @@ class EastmoneyProvider(Provider):
                     "invt": 2,
                     "fid": fid,
                     "fs": FS_ALL,
-                    "fields": "f2,f3,f6,f12,f13,f14,f18,f100",
+                    "fields": f"{F_PRICE},{F_CHANGE_PCT},{F_AMOUNT},{F_CODE},{F_MARKET},{F_NAME},{F_PREV_CLOSE},{F_INDUSTRY}",
                     "ut": "bd1d9ddb04089700cf9c27f6f7426281",
                 },
             )
@@ -542,28 +574,28 @@ class EastmoneyProvider(Provider):
                 diff = list(diff.values())
             out: list[Quote] = []
             for row in diff:
-                code = normalize_code(str(row.get("f12") or ""))
+                code = normalize_code(str(row.get(F_CODE) or ""))
                 if not code:
                     continue
-                market = _market_from_f13(row.get("f13"), code)
-                price = to_float(row.get("f2"))
-                prev = to_float(row.get("f18"))
+                market = _market_from_f13(row.get(F_MARKET), code)
+                price = to_float(row.get(F_PRICE))
+                prev = to_float(row.get(F_PREV_CLOSE))
                 out.append(
                     Quote(
                         code=code,
                         market=market,
-                        name=str(row.get("f14") or ""),
-                        board=str(row.get("f100") or "").strip("-") or "",
+                        name=str(row.get(F_NAME) or ""),
+                        board=str(row.get(F_INDUSTRY) or "").strip("-") or "",
                         price=price if price else prev,   # 盘前无成交价时展示昨收
                         prev_close=prev,
-                        change_pct=to_float(row.get("f3"), 0.0),
-                        amount=to_float(row.get("f6")),
+                        change_pct=to_float(row.get(F_CHANGE_PCT), 0.0),
+                        amount=to_float(row.get(F_AMOUNT)),
                         source=self.name,
                     )
                 )
             return out
 
-        gainers = await rank("f3", 1)   # 涨幅榜
-        losers = await rank("f3", 0)    # 跌幅榜
-        actives = await rank("f6", 1)   # 成交额榜
+        gainers = await rank(F_CHANGE_PCT, 1)   # 涨幅榜
+        losers = await rank(F_CHANGE_PCT, 0)    # 跌幅榜
+        actives = await rank(F_AMOUNT, 1)   # 成交额榜
         return {"gainers": gainers, "losers": losers, "actives": actives}

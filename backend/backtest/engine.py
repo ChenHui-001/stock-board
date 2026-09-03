@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import logging
+log = logging.getLogger("backtest.engine")
 
 # backend/backtest/ → 仓库根
 ROOT = Path(__file__).resolve().parents[2]
@@ -105,7 +107,8 @@ def load_kline(code: str, limit: int) -> pd.DataFrame:
     if cache.exists():
         try:
             return pd.read_csv(cache)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s 异常，按空数据继续: %s", "load_kline", exc)
             cache.unlink(missing_ok=True)
     out = run_cli([
         "kline", code, "--period", "day", "--limit", str(limit), "--fq", "qfq",
@@ -139,7 +142,8 @@ def load_fundamentals(code: str) -> list[dict[str, Any]]:
     if cache.exists():
         try:
             return json.loads(cache.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s 异常，按空数据继续: %s", "load_fundamentals", exc)
             cache.unlink(missing_ok=True)
     raw = run_cli(["finance", code, "--num", "12"])
     df = parse_md_table(raw)

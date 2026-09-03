@@ -257,7 +257,8 @@ async def add_watchlist(body: AddWatchBody) -> dict[str, Any]:
         try:
             names = await service.boards(code)
             board = names[0] if names else None
-        except Exception:  # noqa: BLE001 - 板块缺失不影响添加
+        except Exception as exc:  # noqa: BLE001 - 板块缺失不影响添加
+            log.debug("%s 降级: %s", "add_watchlist", exc)
             board = None
 
     created = await storage.a_add_watch(code, name, board)
@@ -438,7 +439,8 @@ async def stock_news(
     try:
         quote = await service.get_quote(code, resolve_market(code))
         name = quote.name or ""
-    except ProviderError:
+    except ProviderError as exc:
+        log.debug("%s 降级: %s", "stock_news", exc)
         pass  # 资讯检索不依赖名称，拿不到也能按代码搜
     try:
         return await news_mod.get_stock_news(code, name, days=days, force=refresh)

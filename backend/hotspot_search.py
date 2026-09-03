@@ -253,6 +253,7 @@ async def search(q: str, days: int = 7, limit: int = 30, force: bool = False) ->
                 fallback["meta"]["fallback_reason"] = str(exc)
                 return fallback
             except ProviderError as exc2:
+                log.debug("%s 降级: %s", "search", exc2)
                 exc = exc2
         result: dict[str, Any] = {
             "items": [],

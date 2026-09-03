@@ -175,7 +175,8 @@ async def collect_samples(
             if ths is not None:
                 day_bars_all = await ths.kline(code, market, days + 10)
                 day_src = "ths"
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.debug("%s 降级: %s", "collect_samples", exc)
             day_bars_all = []
         if not day_bars_all:
             try:
@@ -194,14 +195,16 @@ async def collect_samples(
                     minute_bars_all = await em.kline(code, market, 1024, klt=5)
                     minute_src = "eastmoney"
                     break
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("%s 降级: %s", "collect_samples", exc)
                     if attempt < 2:
                         await asyncio.sleep(7 * (attempt + 1))
         if not minute_bars_all:
             try:
                 minute_bars_all = await _tencent_minutes(code, market, MINUTE_LIMIT, MINUTE_PAGES)
                 minute_src = "tencent"
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                log.debug("%s 降级: %s", "collect_samples", exc)
                 minute_src = ""
 
         day_by_date: dict[str, list[Bar]] = defaultdict(list)

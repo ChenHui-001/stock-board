@@ -25,6 +25,8 @@ from ..analysis.rule_engine import (  # 与生产同口径，避免回测与线�
     FACTOR_WEIGHTS, TH_BUY, TH_SELL, _damp, _round_half_away,
 )
 from . import engine, render
+import logging
+log = logging.getLogger("backtest.score_strategy")
 
 STRATEGY_ID = "score_threshold"
 STRATEGY_NAME = "AI 评分阈值检验"
@@ -247,7 +249,8 @@ def build_events(
             continue
         try:
             fins = engine.load_fundamentals(code)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s 异常，按空数据继续: %s", "build_events", exc)
             fins = []
         d = compute_tech(df)
         n = len(d)

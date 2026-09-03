@@ -126,6 +126,29 @@ def _fill_intraday_fields(quote: Quote) -> Quote:
     return quote
 
 
+# ---- 自选股监测(watch_monitor)策略阈值 ----
+# 此前 9 类阈值散落在 16 个 if 里全是魔法数，调参要全文倒查；现在集中登记。
+# 正文 reason 文案不内嵌具体数值（只回显实际读数），改这里不会造成文案失真。
+WM_DIVERGENCE_DEADZONE = 0.5    # 量价背离死区：|涨跌幅| 低于此值不判背离(%)
+WM_DIVERGENCE_FLOW = 5e5        # 背离确认资金门槛：主力净流出入超 50 万元
+WM_PROTECT_DROP = -1.0          # 主力护盘：跌幅达到此值且当日净流入即提示承接(%)
+WM_FLOW_STREAK = 3              # 持续流入/流出：连续同向最少天数
+WM_LIMIT_TOLERANCE = 0.3        # 涨跌停判定抖动容忍(%)
+WM_REDUCE_DROP = -3.0           # 应减仓/缩量阴跌的跌幅线(%)
+WM_REDUCE_MIN_VR = 0.8          # 应减仓量比下限（低于视为缩量阴跌不触发）
+WM_ADDUP_MIN_RISE = 1.0         # 可加仓(ATR 分支)最低涨幅(%)
+WM_ADDUP_ATR_MULT = 1.5         # 可加仓 ATR 倍数门槛
+WM_ADDUP_MIN_VR = 1.5           # 可加仓量比门槛（无量拉升不算）
+WM_ADDUP_RISE = 3.0             # 可加仓固定涨幅兜底线(%)
+WM_SWING_UP_VR = 2.0            # 放量上行量比门槛
+WM_ANOMALY_VR = 3.0             # 异动放量量比线
+WM_ANOMALY_BAND = 2.0           # 异动放量方向不明带宽：|涨跌幅| 低于此值(%)
+WM_HOT_TURNOVER = 10.0          # 高换手线(%)
+WM_MILD_DROP_HI = -1.5          # 温和回调/偏弱趋势的跌幅上界(%)
+WM_MILD_MIN_VR = 1.0            # 温和回调量比门槛（低于即偏弱趋势）
+WM_ILLIQUID_TURNOVER = 0.3      # 流动性低换手线(%)
+
+
 def _watch_monitor_flow(data: dict[str, Any], change: float,
                         flow: dict[str, Any] | None) -> dict[str, str] | None:
     """资金流驱动的监测信号(优先级高于量比信号)。
@@ -198,7 +221,7 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
 
     # ---- 主力护盘: 价跌 ≥ 1% 但当日资金净流入(单日级别,不要求连续) ----
     # 优先于下面的「量价背离(洗盘)」——同样的条件,「护盘」是更积极正面描述。
-    if has_main and change <= -1.0 and main_last > 0:
+    if has_main and change <= WM_PROTECT_DROP and main_last > 0:
         return {
             "action": "主力护盘",
             "tone": "up",
@@ -212,8 +235,8 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
     # 用 0.5% 死区过滤极弱波动,避免把横盘误判成背离。
     # 必须放在 主力抢筹/出货/护盘 之后,否则价跌+资金流入/价涨+资金流出会被
     # 上面的强信号抢先命中(逻辑虽对但提示优先级不对)。
-    if has_main and abs(change) >= 0.5:
-        if change > 0 and main_last < -5e5:   # 价↑资金净流出 > 50 万
+    if has_main and abs(change) >= WM_DIVERGENCE_DEADZONE:
+        if change > 0 and main_last < -WM_DIVERGENCE_FLOW:   # 价↑资金净流出超门槛
             return {
                 "action": "量价背离",
                 "tone": "warn",
@@ -222,7 +245,7 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
                     "拉高出货风险"
                 ),
             }
-        if change < 0 and main_last > 5e5:    # 价↓资金净流入 > 50 万
+        if change < 0 and main_last > WM_DIVERGENCE_FLOW:    # 价↓资金净流入超门槛
             return {
                 "action": "量价背离",
                 "tone": "warn",
@@ -235,7 +258,7 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
     # ---- 持续流入 / 持续流出: 连 3 日同向(已经包含在抢筹/出逃里则不重复) ----
     # 仅对 state_grade 为 inflow/outflow 但 state 不是「抢筹/出逃」的中间档触发,
     # 比如「主力净流入」/「主力净流出」连续 3 日以上,说明趋势稳定。
-    if streak >= 3 and state_grade == "inflow" and "抢筹" not in state:
+    if streak >= WM_FLOW_STREAK and state_grade == "inflow" and "抢筹" not in state:
         last5_wan = flow.get("main_last5", 0) / 1e4 if isinstance(flow.get("main_last5"), (int, float)) else 0
         return {
             "action": "持续流入",
@@ -245,7 +268,7 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
                 f"近 5 日合计 {last5_wan:+.0f}万"
             ),
         }
-    if streak >= 3 and state_grade == "outflow" and "出逃" not in state:
+    if streak >= WM_FLOW_STREAK and state_grade == "outflow" and "出逃" not in state:
         last5_wan = flow.get("main_last5", 0) / 1e4 if isinstance(flow.get("main_last5"), (int, float)) else 0
         return {
             "action": "持续流出",
@@ -312,7 +335,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
 
     # ---- 1. 涨跌停：板块差异化 + ±0.3% 抖动容忍
     limit_pct = _limit_pct(data.get("market"), data.get("code"), data.get("name"))
-    near_limit = limit_pct - 0.3
+    near_limit = limit_pct - WM_LIMIT_TOLERANCE
     if change >= near_limit:
         return {
             "action": "涨停关注",
@@ -340,7 +363,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
         return flow_signal
 
     # ---- 2. 应减仓：跌幅 ≤ -3% 且量比 ≥ 0.8（缩量阴跌属空头衰竭，不触发减仓）
-    if change <= -3 and (not has_vr or vr >= 0.8):
+    if change <= WM_REDUCE_DROP and (not has_vr or vr >= WM_REDUCE_MIN_VR):
         return {
             "action": "应减仓",
             "tone": "down",
@@ -353,7 +376,8 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
             and isinstance(price, (int, float)) and price > 0:
         atr_pct = atr / price * 100
         unit_atr = abs(change) / atr_pct if atr_pct > 0 else 0
-        if change >= 1 and unit_atr >= 1.5 and has_vr and vr >= 1.5:
+        if change >= WM_ADDUP_MIN_RISE and unit_atr >= WM_ADDUP_ATR_MULT \
+            and has_vr and vr >= WM_ADDUP_MIN_VR:
             return {
                 "action": "可加仓",
                 "tone": "up",
@@ -362,7 +386,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
                     f"量比 {vr:.2f}，动能较强"
                 ),
             }
-    elif change >= 3 and has_vr and vr >= 1.5:
+    elif change >= WM_ADDUP_RISE and has_vr and vr >= WM_ADDUP_MIN_VR:
         return {
             "action": "可加仓",
             "tone": "up",
@@ -372,7 +396,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
     # ---- 3.5. 放量上行：涨幅 1% ≤ x < 3% 且量比 ≥ 2.0
     # 与「可加仓」(≥3% / ATR≥1.5) 错开 —— 中等涨幅配合显著量能,
     # 属于价量齐升但还没到加仓门槛的强势阶段。给绿色 vs 默认 flat 提高辨识度。
-    if 1.0 <= change < 3.0 and has_vr and vr >= 2.0:
+    if WM_ADDUP_MIN_RISE <= change < WM_ADDUP_RISE and has_vr and vr >= WM_SWING_UP_VR:
         return {
             "action": "放量上行",
             "tone": "up",
@@ -383,7 +407,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
         }
 
     # ---- 4. 异动放量：量比 ≥ 3 但方向不明(|change| < 2%)
-    if has_vr and vr >= 3 and abs(change) < 2:
+    if has_vr and vr >= WM_ANOMALY_VR and abs(change) < WM_ANOMALY_BAND:
         return {
             "action": "异动放量",
             "tone": "warn",
@@ -394,7 +418,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
         }
 
     # ---- 5. 高换手(≥ 10%)：按方向区分出货 / 活跃
-    if has_to and turnover >= 10:
+    if has_to and turnover >= WM_HOT_TURNOVER:
         if change < 0:
             return {
                 "action": "高换手出货",
@@ -417,7 +441,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
     # 与「应减仓」(≤-3%) 和「谨慎持有」(量比<1.0) 错开 —— 量能未萎缩的浅回调
     # 往往只是洗盘而非趋势走坏,给一个温和告警避免被「应减仓」一刀切。
     # 优先级低于「异动放量」和「高换手」,后两者代表更紧迫的市场状态。
-    if -3 < change <= -1.5 and has_vr and vr >= 1.0:
+    if WM_REDUCE_DROP < change <= WM_MILD_DROP_HI and has_vr and vr >= WM_MILD_MIN_VR:
         return {
             "action": "温和回调",
             "tone": "warn",
@@ -428,7 +452,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
         }
 
     # ---- 6. 流动性极低：换手 < 0.3%（数据缺失时 is_num 为 False，不会误报）
-    if has_to and turnover < 0.3:
+    if has_to and turnover < WM_ILLIQUID_TURNOVER:
         return {
             "action": "流动性低",
             "tone": "warn",
@@ -439,7 +463,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
         }
 
     # ---- 7. 缩量阴跌：跌幅 ≤ -3% 但量比 < 0.8（地量阴跌 → 关注企稳）
-    if change <= -3 and has_vr and vr < 0.8:
+    if change <= WM_REDUCE_DROP and has_vr and vr < WM_REDUCE_MIN_VR:
         return {
             "action": "继续观察",
             "tone": "flat",
@@ -450,7 +474,7 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
         }
 
     # ---- 8. 偏弱趋势：跌幅 ≤ -1.5% 且量能不足（未触发减仓）
-    if change <= -1.5 and (not has_vr or vr < 1.0):
+    if change <= WM_MILD_DROP_HI and (not has_vr or vr < WM_MILD_MIN_VR):
         return {
             "action": "谨慎持有",
             "tone": "flat",
@@ -942,7 +966,8 @@ async def search(keyword: str, limit: int = 15) -> list[dict[str, Any]]:
     keys = [(i.code, i.market) for i in items]
     try:
         quotes = await get_quotes(keys)
-    except ProviderError:
+    except ProviderError as exc:
+        log.debug("%s 降级: %s", "search", exc)
         quotes = {}
 
     out: list[dict[str, Any]] = []

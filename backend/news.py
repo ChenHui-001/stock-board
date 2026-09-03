@@ -197,6 +197,7 @@ async def get_stock_news(
     try:
         all_items, src_name = await cache.get_or_set(raw_key, RAW_TTL, load_raw, force=force)
     except ProviderError as exc:
+        log.debug("%s 降级: %s", "get_stock_news", exc)
         return {"items": [], "meta": {"error": f"资讯获取失败：{exc}", "engine": "none", "total": 0, "source": ""}}
 
     # 按时间范围过滤（days 为展示窗口；<=0 或 >=NEWS_DAYS 时不过滤）
