@@ -25,6 +25,7 @@ _with_ai_lock,
 )
 from .config import settings
 from .providers import ProviderError, registry
+from . import schemas
 from .utils import describe_exc, is_trading_now, normalize_code, resolve_market
 
 log = logging.getLogger("api")
@@ -74,7 +75,7 @@ class HotspotAnalyzeBody(BaseModel):
 _health_lock = asyncio.Lock()
 
 
-@router.get("/health/check")
+@router.get("/health/check", response_model=schemas.HealthCheckResp)
 async def health_check(with_backtest: int = 1, backtest_days: int = 120) -> dict[str, Any]:
     """数据源健康自检。with_backtest=0 时跳过盘口回测段（更快）；
     backtest_days 控制回测样本深度（30-250 交易日）。"""
@@ -105,7 +106,7 @@ async def health_check(with_backtest: int = 1, backtest_days: int = 120) -> dict
 
 # ------------------------------------------------------------------ 元信息
 
-@router.get("/meta")
+@router.get("/meta", response_model=schemas.MetaResp)
 async def meta() -> dict[str, Any]:
     cfg = llmcfg.get_config()
     return {
@@ -129,7 +130,7 @@ async def meta() -> dict[str, Any]:
 
 # ------------------------------------------------------------------ LLM 配置
 
-@router.get("/llm/config")
+@router.get("/llm/config", response_model=schemas.LLMConfigResp)
 async def llm_config_get() -> dict[str, Any]:
     profiles = llmcfg.get_profiles()
     return {
@@ -157,7 +158,7 @@ async def llm_config_get() -> dict[str, Any]:
     }
 
 
-@router.post("/llm/config")
+@router.post("/llm/config", response_model=schemas.LLMConfigSaveResp)
 async def llm_config_save(body: LLMConfigBody) -> dict[str, Any]:
     profiles = [p.model_dump() for p in body.profiles]
     clean = llmcfg.save_profiles(profiles)
@@ -181,7 +182,7 @@ async def llm_config_save(body: LLMConfigBody) -> dict[str, Any]:
     }
 
 
-@router.post("/llm/test")
+@router.post("/llm/test", response_model=schemas.LLMTestResp)
 async def llm_config_test(body: LLMProfileBody) -> dict[str, Any]:
     """用某份档案（界面未保存的表单）做一次最小调用。"""
     cfg = llmcfg.merge_pending(body.model_dump(exclude_unset=True))
@@ -191,7 +192,7 @@ async def llm_config_test(body: LLMProfileBody) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ AI 评分权重
 
-@router.get("/score/weights")
+@router.get("/score/weights", response_model=schemas.ScoreWeightsResp)
 async def score_weights_get() -> dict[str, Any]:
     """当前生效的三维分面权重（DB 覆盖优先，环境变量兜底）。"""
     w = scorecfg.get_weights()
@@ -202,21 +203,21 @@ async def score_weights_get() -> dict[str, Any]:
     }
 
 
-@router.post("/score/weights")
+@router.post("/score/weights", response_model=schemas.ScoreWeightsResp)
 async def score_weights_save(body: dict[str, Any]) -> dict[str, Any]:
     """保存权重（自动 clamp 到合法范围），保存后 AI 当日缓存作废。"""
     w = scorecfg.save_weights(body)
     return {"ok": True, **w}
 
 
-@router.post("/score/weights/reset")
+@router.post("/score/weights/reset", response_model=schemas.ScoreWeightsResp)
 async def score_weights_reset() -> dict[str, Any]:
     """清除界面配置，回退到环境变量权重。"""
     w = scorecfg.reset_weights()
     return {"ok": True, **w}
 
 
-@router.post("/llm/models")
+@router.post("/llm/models", response_model=schemas.LLMModelsResp)
 async def llm_config_models(body: LLMProfileBody) -> dict[str, Any]:
     """用某份档案从云端拉取模型列表（OpenAI 兼容 GET /models）。"""
     cfg = llmcfg.merge_pending(body.model_dump(exclude_unset=True))
@@ -224,7 +225,7 @@ async def llm_config_models(body: LLMProfileBody) -> dict[str, Any]:
     return {"ok": ok, "models": models, "message": message}
 
 
-@router.post("/llm/reset")
+@router.post("/llm/reset", response_model=schemas.OkResp)
 async def llm_config_reset() -> dict[str, Any]:
     """清除界面保存的配置，回退到环境变量。"""
     llmcfg.reset_config()
@@ -233,12 +234,12 @@ async def llm_config_reset() -> dict[str, Any]:
 
 # ------------------------------------------------------------------ 自选股
 
-@router.get("/watchlist")
+@router.get("/watchlist", response_model=schemas.WatchlistResp)
 async def get_watchlist(refresh: bool = Query(False)) -> dict[str, Any]:
     return await service.watchlist_board(force=refresh)
 
 
-@router.post("/watchlist")
+@router.post("/watchlist", response_model=schemas.AddWatchResp)
 async def add_watchlist(body: AddWatchBody) -> dict[str, Any]:
     code = normalize_code(body.code)
     if not code or len(code) != 6 or not code.isdigit():
@@ -265,14 +266,14 @@ async def add_watchlist(body: AddWatchBody) -> dict[str, Any]:
     return {"ok": True, "created": created, "code": code, "name": name, "board": board}
 
 
-@router.post("/watchlist/remove")
+@router.post("/watchlist/remove", response_model=schemas.RemoveWatchResp)
 async def remove_watchlist(body: CodesBody) -> dict[str, Any]:
     """批量删除（需求 7.4）。"""
     removed = await storage.a_remove_watch(body.codes)
     return {"ok": True, "removed": removed}
 
 
-@router.post("/watchlist/order")
+@router.post("/watchlist/order", response_model=schemas.OkResp)
 async def order_watchlist(body: CodesBody) -> dict[str, Any]:
     """拖拽排序落库（需求 3.2.2）。"""
     await storage.a_reorder_watch(body.codes)
@@ -281,7 +282,7 @@ async def order_watchlist(body: CodesBody) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ 查询
 
-@router.get("/search")
+@router.get("/search", response_model=schemas.SearchResp)
 async def search(
     # 关键词进入缓存 key（service.search），限长以收敛 key 基数；
     # 股票名称/6 位代码/拼音首字母都远短于此，前端输入框同样限制在 32 字符。
@@ -292,14 +293,14 @@ async def search(
     return {"keyword": q, "items": items}
 
 
-@router.get("/hot")
+@router.get("/hot", response_model=schemas.HotResp)
 async def hot(limit: int = Query(8, ge=1, le=20)) -> dict[str, Any]:
     return await service.hot(limit)
 
 
 # ------------------------------------------------------------------ 市场热点追踪
 
-@router.get("/hotspot")
+@router.get("/hotspot", response_model=schemas.HotspotResp)
 async def hotspot(
     minutes: int = Query(30, ge=5, le=120, description="时间窗（分钟）：默认 30"),
     refresh: bool = Query(False),
@@ -312,7 +313,7 @@ async def hotspot(
     return await hotspot_mod.get_hotspot(minutes=minutes, force=refresh)
 
 
-@router.get("/hotspot/search")
+@router.get("/hotspot/search", response_model=schemas.HotspotResp)
 async def hotspot_search_api(
     # 关键词进入缓存 key，限长以收敛 key 基数（与 /api/search 同口径，前端同样限 32 字符）
     q: str = Query("", min_length=0, max_length=32),
@@ -329,7 +330,7 @@ async def hotspot_search_api(
     return await hotspot_search.search(q, days=days, limit=limit, force=refresh)
 
 
-@router.post("/hotspot/analyze")
+@router.post("/hotspot/analyze", response_model=schemas.HotspotAnalyzeResp)
 async def hotspot_analyze(
     body: HotspotAnalyzeBody, refresh: bool = Query(False)
 ) -> dict[str, Any]:
@@ -344,7 +345,7 @@ async def hotspot_analyze(
 
 # ------------------------------------------------------------------ 价值投资选股
 
-@router.get("/value/screen")
+@router.get("/value/screen", response_model=schemas.ValueScreenResp)
 async def value_screen(refresh: bool = Query(False)) -> dict[str, Any]:
     """A 股快速轮动量化选股：市场环境 + 板块强度 + 多维度评分 + 分级池。
 
@@ -359,7 +360,7 @@ async def value_screen(refresh: bool = Query(False)) -> dict[str, Any]:
         raise _fail(exc, "价值选股运行失败") from exc
 
 
-@router.get("/value/weights")
+@router.get("/value/weights", response_model=schemas.ValueWeightsResp)
 async def value_weights_get() -> dict[str, Any]:
     """当前生效的价值选股各维度权重（DB 覆盖优先，默认 1.0）。"""
     w = valuecfg.get_weights()
@@ -368,21 +369,21 @@ async def value_weights_get() -> dict[str, Any]:
             "source": "db" if await storage.a_get_kv("value_weights") else "default"}
 
 
-@router.post("/value/weights")
+@router.post("/value/weights", response_model=schemas.ValueWeightsResp)
 async def value_weights_save(body: dict[str, Any]) -> dict[str, Any]:
     """保存权重（自动 clamp 到合法范围），权重变化后选股缓存作废。"""
     w = valuecfg.save_weights(body)
     return {"ok": True, **w}
 
 
-@router.post("/value/weights/reset")
+@router.post("/value/weights/reset", response_model=schemas.ValueWeightsResp)
 async def value_weights_reset() -> dict[str, Any]:
     """清除界面权重配置，回退默认 1.0。"""
     w = valuecfg.reset_weights()
     return {"ok": True, **w}
 
 
-@router.get("/stock/{code}")
+@router.get("/stock/{code}", response_model=schemas.StockDetailResp)
 async def stock_detail(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
     code = normalize_code(code)
     # 防御性：路径上 {code} 可能被路由到任意字符串（旧的注册顺序 bug，
@@ -397,7 +398,7 @@ async def stock_detail(code: str, refresh: bool = Query(False)) -> dict[str, Any
         raise _fail(exc, "获取股票详情失败") from exc
 
 
-@router.get("/quote/{code}")
+@router.get("/quote/{code}", response_model=schemas.QuoteResp)
 async def stock_quote(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
     """轻量行情（详情页自动刷新用）：只返回单只报价，不携带 K线/资金/两融历史。"""
     code = normalize_code(code)
@@ -416,7 +417,7 @@ async def stock_quote(code: str, refresh: bool = Query(False)) -> dict[str, Any]
 
 # ------------------------------------------------------------------ 个股资讯
 
-@router.get("/news/{code}")
+@router.get("/news/{code}", response_model=schemas.StockNewsResp)
 async def stock_news(
     code: str,
     days: int = Query(30, description="时间范围（天）：7/30"),
@@ -450,7 +451,7 @@ async def stock_news(
 
 # ------------------------------------------------------------------ 券商研报
 
-@router.get("/reports/{code}")
+@router.get("/reports/{code}", response_model=schemas.StockReportsResp)
 async def stock_reports(
     code: str,
     days: int = Query(365, description="时间范围（天）：30/90/365，0=全部"),
@@ -478,8 +479,8 @@ async def stock_reports(
 
 # ------------------------------------------------------------------ AI 分析
 
-@router.get("/ai/watchlist")
-@router.post("/ai/watchlist")
+@router.get("/ai/watchlist", response_model=schemas.AIWatchlistResp)
+@router.post("/ai/watchlist", response_model=schemas.AIWatchlistResp)
 async def ai_watchlist(refresh: bool = Query(False)) -> dict[str, Any]:
     """自选股批量 AI 摘要：优先读缓存，refresh=1 时用规则引擎快速重算并写入缓存。
 
@@ -537,7 +538,7 @@ async def ai_watchlist(refresh: bool = Query(False)) -> dict[str, Any]:
     }
 
 
-@router.post("/ai/{code}")
+@router.post("/ai/{code}", response_model=schemas.AIReportResp)
 async def ai_analyze(code: str, refresh: bool = Query(False)) -> dict[str, Any]:
     code = normalize_code(code)
     # 防御性：路径上 {code} 可能被路由到任意字符串（旧的注册顺序 bug，

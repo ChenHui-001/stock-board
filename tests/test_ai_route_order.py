@@ -15,9 +15,10 @@ def test_ai_watchlist_route_registered_before_ai_code() -> None:
     text = api_path.read_text(encoding='utf-8')
 
     # Find decorator positions (each takes one line)
-    watchlist_get = text.find('@router.get("/ai/watchlist")')
-    watchlist_post = text.find('@router.post("/ai/watchlist")')
-    code_post = text.find('@router.post("/ai/{code}")')
+    # P2 #18 后装饰器带 response_model 参数，这里按路径前缀匹配而非全文精确匹配
+    watchlist_get = text.find('@router.get("/ai/watchlist"')
+    watchlist_post = text.find('@router.post("/ai/watchlist"')
+    code_post = text.find('@router.post("/ai/{code}"')
 
     assert watchlist_get != -1, '/ai/watchlist GET route not found'
     assert watchlist_post != -1, '/ai/watchlist POST route not found'

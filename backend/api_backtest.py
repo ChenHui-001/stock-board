@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from . import backtest as bt
+from . import schemas
 
 log = logging.getLogger("api.backtest")
 
@@ -33,7 +34,7 @@ class RunBody(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
-@router.get("/strategies")
+@router.get("/strategies", response_model=schemas.StrategiesResp)
 async def strategies() -> dict[str, Any]:
     """策略清单：id / 名称 / 说明 / 参数 schema / 口径限制。
 
@@ -43,7 +44,7 @@ async def strategies() -> dict[str, Any]:
     return {"strategies": items, "running": bt.busy_run()}
 
 
-@router.post("/run")
+@router.post("/run", response_model=schemas.BacktestMetaResp)
 async def submit_run(body: RunBody) -> dict[str, Any]:
     """提交一次回测。回测在后台任务执行，立即返回 run_id 供轮询。
 
@@ -59,13 +60,13 @@ async def submit_run(body: RunBody) -> dict[str, Any]:
     return meta
 
 
-@router.get("/runs")
+@router.get("/runs", response_model=schemas.RunsListResp)
 async def list_runs(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
     """历史运行列表（最近 N 次，从索引文件读）。"""
     return {"runs": bt.list_runs(limit), "running": bt.busy_run()}
 
 
-@router.get("/run/{run_id}")
+@router.get("/run/{run_id}", response_model=schemas.BacktestMetaResp)
 async def get_run(run_id: str) -> dict[str, Any]:
     """查询运行状态。status=done 时一并返回 summary 与 tables。"""
     meta = bt.get_run(run_id)
@@ -74,7 +75,7 @@ async def get_run(run_id: str) -> dict[str, Any]:
     return meta
 
 
-@router.delete("/run/{run_id}")
+@router.delete("/run/{run_id}", response_model=schemas.RunDeleteResp)
 async def remove_run(run_id: str) -> dict[str, Any]:
     """删除一次运行的产物（含看板与 CSV）。"""
     if not bt.delete_run(run_id):
@@ -82,7 +83,7 @@ async def remove_run(run_id: str) -> dict[str, Any]:
     return {"ok": True, "run_id": run_id}
 
 
-@router.get("/run/{run_id}/trades")
+@router.get("/run/{run_id}/trades", response_model=schemas.RunTradesResp)
 async def get_trades(run_id: str, limit: int = Query(300, ge=1, le=5000)) -> dict[str, Any]:
     """事件明细（抽样下发，避免大表把浏览器打爆）。"""
     rows = bt.run_trades(run_id, limit)
