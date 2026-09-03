@@ -143,6 +143,30 @@ def init_db() -> None:
         _connect()
 
 
+def close_db() -> None:
+    """落盘 WAL 并关闭连接（进程退出钩子用，main.lifespan 收尾调用）。
+
+    为什么需要：WAL 模式下写操作只进 -wal 文件，长时间不 checkpoint 会让 WAL
+    无限增长、且进程被强杀时全靠 WAL 回放恢复。退出前显式
+    wal_checkpoint(TRUNCATE) 把 WAL 清零落盘，再干净地关闭连接。
+    连接置空后 _connect() 仍可懒重建，测试或后续复用不受影响。
+    """
+    global _conn
+    with _lock:
+        if _conn is None:
+            return
+        try:
+            _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error as exc:
+            # 退出路径不抛异常：checkpoint 失败不代表数据损坏，close 本身仍会尽力落盘
+            log.warning("WAL checkpoint 失败（忽略，继续关闭）：%s", exc)
+        try:
+            _conn.close()
+        except sqlite3.Error as exc:
+            log.warning("关闭数据库连接失败：%s", exc)
+        _conn = None
+
+
 # ------------------------------------------------------------------ 自选股
 
 def list_watchlist() -> list[dict[str, Any]]:

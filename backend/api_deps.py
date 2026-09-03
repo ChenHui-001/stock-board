@@ -61,6 +61,33 @@ def _ai_cache_ttl_closed() -> float:
     return settings.AI_CACHE_TTL_CLOSED
 
 
+def _report_cache_valid(cached: dict[str, Any], *, allow_brief: bool) -> dict[str, Any] | None:
+    """对已取出的缓存报告做完整校验，全部通过原样返回，任一不过返回 None。
+
+    _cached_report / _cached_brief_report 原本是 26 行近乎逐行复制的两份逻辑，
+    唯一差异是是否放行轻量快照（is_brief）——抽到这里用 allow_brief 一个开关表达。
+    """
+    if not _cache_fresh(cached.get("cached_at") or ""):
+        return None
+    meta = cached.get("meta") or {}
+    if meta.get("fingerprint") != llmcfg.fingerprint():
+        return None
+    if meta.get("score_fp") != scorecfg.fingerprint():
+        return None
+    if any(k not in cached for k in _REQUIRED_REPORT_FIELDS):
+        return None
+    adv_scores = ((cached.get("analysis") or {}).get("advice") or {}).get("scores") or {}
+    if not adv_scores or "intraday" not in adv_scores:
+        return None
+    if (meta.get("schema_version") or 0) < REPORT_SCHEMA_VERSION:
+        return None
+    if _BLANK_LLM_REASON_RE.search(meta.get("degraded_reason") or ""):
+        return None
+    if not allow_brief and meta.get("is_brief"):
+        return None
+    return cached
+
+
 def _cached_report(code: str) -> dict[str, Any] | None:
     """当日缓存命中；但 LLM 配置变化、字段缺失或快照过旧时旧缓存作废。
 
@@ -71,25 +98,7 @@ def _cached_report(code: str) -> dict[str, Any] | None:
     cached = get_report(code)
     if not cached:
         return None
-    if not _cache_fresh(cached.get("cached_at") or ""):
-        return None
-    meta = cached.get("meta") or {}
-    if meta.get("fingerprint") != llmcfg.fingerprint():
-        return None
-    if meta.get("score_fp") != scorecfg.fingerprint():
-        return None
-    if any(k not in cached for k in _REQUIRED_REPORT_FIELDS):
-        return None
-    adv_scores = ((cached.get("analysis") or {}).get("advice") or {}).get("scores") or {}
-    if not adv_scores or "intraday" not in adv_scores:
-        return None
-    if (meta.get("schema_version") or 0) < REPORT_SCHEMA_VERSION:
-        return None
-    if _BLANK_LLM_REASON_RE.search(meta.get("degraded_reason") or ""):
-        return None
-    if meta.get("is_brief"):
-        return None
-    return cached
+    return _report_cache_valid(cached, allow_brief=False)
 
 
 def _cached_brief_report(code: str) -> dict[str, Any] | None:
@@ -97,23 +106,7 @@ def _cached_brief_report(code: str) -> dict[str, Any] | None:
     cached = get_report(code)
     if not cached:
         return None
-    if not _cache_fresh(cached.get("cached_at") or ""):
-        return None
-    meta = cached.get("meta") or {}
-    if meta.get("fingerprint") != llmcfg.fingerprint():
-        return None
-    if meta.get("score_fp") != scorecfg.fingerprint():
-        return None
-    if any(k not in cached for k in _REQUIRED_REPORT_FIELDS):
-        return None
-    adv_scores = ((cached.get("analysis") or {}).get("advice") or {}).get("scores") or {}
-    if not adv_scores or "intraday" not in adv_scores:
-        return None
-    if (meta.get("schema_version") or 0) < REPORT_SCHEMA_VERSION:
-        return None
-    if _BLANK_LLM_REASON_RE.search(meta.get("degraded_reason") or ""):
-        return None
-    return cached
+    return _report_cache_valid(cached, allow_brief=True)
 
 
 # ============================================================ AI 单飞锁

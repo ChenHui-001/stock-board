@@ -73,6 +73,8 @@ async def lifespan(app: FastAPI):
     yield
     await providers_shutdown()
     await llm.close()
+    # 最后关 DB：providers/llm 收尾期间可能还有落盘动作（如分析记录回写）
+    storage.close_db()
 
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0", lifespan=lifespan)
