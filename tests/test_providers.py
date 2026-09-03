@@ -30,7 +30,7 @@ def test_model_filter() -> None:
 def test_quote_racing() -> None:
     from backend.providers import Registry
     from backend.providers import base as pbase
-    import backend.providers as pmod
+    import backend.providers.quote_race as pmod  # QUOTE_RACE_STAGGER 定义处（拆分后归属 quote_race）
 
     class FakeProvider(pbase.Provider):
         def __init__(self, name, delay, codes=None, fail=False):
