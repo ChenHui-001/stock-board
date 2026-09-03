@@ -17,7 +17,7 @@
 #   - 与 docker-compose.yml（本地构建版）唯一区别：无 build 段，镜像从 Docker Hub 拉取。
 #   - 服务器上无需任何源码，只要这一个文件 + Docker。
 #   - 数据存命名卷 stock-board-data，容器重建/升级不丢。
-#   - 全部配置用环境变量覆盖，无 .env 文件、无 healthcheck。
+#   - 全部配置用环境变量覆盖，无 .env 文件；healthcheck 在镜像内定义。
 # ============================================================
 
 name: stock-board

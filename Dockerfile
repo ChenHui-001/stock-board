@@ -53,8 +53,23 @@ COPY frontend/ ./frontend/
 # ============================================================
 COPY --from=frontend-build /build/frontend/static/dist/ ./frontend/static/dist/
 
-RUN mkdir -p /app/data
+# 非 root 运行：安装 gosu（Debian 官方仓库自带，~200KB），创建降权用户。
+# 存量 root 属主数据卷的属主修复由 entrypoint 在启动时自动完成（无需手工迁移）。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1000 appuser \
+    && mkdir -p /app/data \
+    && chown -R appuser:appuser /app/data
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8000
 
+# 健康检查：/healthz 是纯轻量端点（不触发数据源探测），探测进程内存活即可
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"]
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

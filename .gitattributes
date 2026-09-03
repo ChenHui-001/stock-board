@@ -1,0 +1,3 @@
+# shell 脚本必须保持 LF，容器内 /bin/sh 解析 CRLF 会直接报错
+docker-entrypoint.sh text eol=lf
+*.sh text eol=lf

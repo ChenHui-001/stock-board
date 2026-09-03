@@ -27,3 +27,12 @@ frontend/static/dist/
 node_modules/
 tmp/
 shots/
+# 测试 / 脚本 / 文档 / 本地工具目录不进构建上下文（镜像本身也只 COPY backend/ + frontend/）
+tests/
+scripts/
+docs/
+.workbuddy/
+.claude/
+.freebuff/
+*.log
+*.log.*

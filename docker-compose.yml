@@ -1,5 +1,5 @@
 # ============================================================
-# 股票看板 · Docker Compose 部署文件（纯环境变量配置，无 .env、无 healthcheck）
+# 股票看板 · Docker Compose 部署文件（纯环境变量配置，无 .env；healthcheck 在镜像内定义）
 # 固定项目名：目录名含中文时 docker compose 无法自动推断项目名，会报错，故显式指定。
 name: stock-board
 #
