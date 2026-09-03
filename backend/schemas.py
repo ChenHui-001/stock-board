@@ -151,9 +151,17 @@ class SearchResp(_AllowExtra):
 
 
 class HotResp(_AllowExtra):
-    """GET /api/hot —— 涨幅/跌幅/活跃榜（附自选标记）。"""
+    """GET /api/hot —— 涨幅/跌幅/活跃榜（附自选标记）。
 
-    data: dict[str, Any]
+    实际返回为顶层 gainers/losers/actives 三个列表（service.hot 展开缓存包），
+    缓存 loader 里的 {"data": ...} 包裹不会出现在最终响应中。
+    """
+
+    gainers: list[dict[str, Any]] = []
+    losers: list[dict[str, Any]] = []
+    actives: list[dict[str, Any]] = []
+    stale: bool = False
+    error: str = ""
 
 
 class HotspotResp(_AllowExtra):
@@ -177,7 +185,8 @@ class StockDetailResp(_AllowExtra):
     """GET /api/stock/{code} —— 详情页聚合 payload（analysis.build_payload）。"""
 
     quote: dict[str, Any]
-    boards: list[dict[str, Any]]
+    # 实际为纯名字列表（_board_names() 转换，向后兼容老前端），结构化板块走 boards_detail
+    boards: list[str]
     kline: list[dict[str, Any]]
     ma: list[dict[str, Any]]
     ma_summary: dict[str, Any]
