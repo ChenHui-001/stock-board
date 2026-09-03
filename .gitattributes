@@ -1,3 +1,5 @@
 # shell 脚本必须保持 LF，容器内 /bin/sh 解析 CRLF 会直接报错
 docker-entrypoint.sh text eol=lf
 *.sh text eol=lf
+# 压缩产物按二进制处理，杜绝 CRLF 改写字节导致 SHA256 校验测试失败
+*.min.js binary

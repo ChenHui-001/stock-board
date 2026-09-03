@@ -42,7 +42,10 @@ uvicorn_test_err.log
 # === 前端：Vite + npm ===
 node_modules/
 frontend/static/dist/
-frontend/static/public/
+# public/ 下是构建期拷贝产物，但 vendor/ 是手工放置的构建源（echarts.min.js），
+# 必须入库：CI 冒烟测试守护其存在，Docker 镜像构建依赖它（否则详情页图表挂）
+frontend/static/public/*
+!frontend/static/public/vendor/
 frontend/static/js/_backup_iiife/
 
 # === 回测产物（大体积生成物） ===
