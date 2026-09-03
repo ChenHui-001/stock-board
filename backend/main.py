@@ -125,6 +125,19 @@ if FRONTEND_DIR.exists():
         name="static",
     )
 
+    # /vendor：echarts 等第三方库的稳定根路径。charts.js 懒加载注入的是
+    # "/vendor/echarts.min.js"（历史约定），但 /static 挂载下该文件实际位于
+    # /static/public/vendor/（dev）或 /static/dist/vendor/（vite 构建），
+    # 根路径 /vendor 无人服务 → 404 → 详情页"图表库未加载"。
+    # 这里把 public/vendor 直接挂到 /vendor，dev 与 dist 两种模式同路径可达。
+    _VENDOR_DIR = FRONTEND_DIR / "static" / "public" / "vendor"
+    if _VENDOR_DIR.exists():
+        app.mount(
+            "/vendor",
+            StaticFiles(directory=str(_VENDOR_DIR)),
+            name="vendor",
+        )
+
     @app.get("/")
     async def index() -> Response:
         return Response(
