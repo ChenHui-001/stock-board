@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,42 @@ FORWARD_DAYS = (1, 3, 5, 10)
 PRIMARY_DAYS = 5
 
 _NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+# 落盘缓存新鲜度：此前 kline/fin 缓存只读不删，跑一次回测后文件永久命中，
+# 后续日期的 K 线 / 新披露的财报永远进不来。超过时效即视为过期重新拉取。
+KLINE_MAX_AGE = 12 * 3600.0   # 12h：日内最多重复拉 2 次
+FIN_MAX_AGE = 24 * 3600.0     # 24h：财报按季披露，但新报告日要能进来
+
+# 回测运行工作目录前缀（三个策略各自 mkdtemp 产生，用完即弃但从未清理）
+RUN_DIR_PREFIXES = ("bt_score_", "bt_intraday_", "bt_cmp_")
+RUN_DIR_MAX_AGE_DAYS = 7.0
+
+
+def _fresh(path: Path, max_age: float) -> bool:
+    """文件存在且 mtime 未超过 max_age（秒）才允许命中缓存。"""
+    try:
+        return (time.time() - path.stat().st_mtime) < max_age
+    except OSError:
+        return False
+
+
+def prune_run_dirs(max_age_days: float = RUN_DIR_MAX_AGE_DAYS) -> int:
+    """清理过期的回测运行工作目录（bt_* 前缀），返回删除数。
+
+    各策略每次运行 mkdtemp 一个工作目录放在 CACHE_DIR 下，跑完不删，
+    长期累积。每次回测启动时顺带清理一次即可。
+    """
+    cutoff = time.time() - max_age_days * 86400
+    removed = 0
+    for p in CACHE_DIR.iterdir():
+        if p.is_dir() and p.name.startswith(RUN_DIR_PREFIXES):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    shutil.rmtree(p, ignore_errors=True)
+                    removed += 1
+            except OSError:
+                continue
+    return removed
 
 
 # --------------------------------------------------------------------- westock CLI
@@ -104,7 +142,7 @@ def load_kline(code: str, limit: int) -> pd.DataFrame:
     返回列：date / open / close / high / low / volume / turnover。
     """
     cache = CACHE_DIR / f"kline_{code}_{limit}.csv"
-    if cache.exists():
+    if cache.exists() and _fresh(cache, KLINE_MAX_AGE):
         try:
             return pd.read_csv(cache)
         except Exception as exc:  # noqa: BLE001
@@ -139,7 +177,7 @@ def load_fundamentals(code: str) -> list[dict[str, Any]]:
     import json
 
     cache = CACHE_DIR / f"fin_{code}.json"
-    if cache.exists():
+    if cache.exists() and _fresh(cache, FIN_MAX_AGE):
         try:
             return json.loads(cache.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001

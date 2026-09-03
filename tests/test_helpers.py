@@ -1,15 +1,7 @@
 """Helpers。"""
 from __future__ import annotations
 
-import asyncio
-import time
-from pathlib import Path
-from backend import (
-    analysis, api, cache, check_sources, hotspot, hotspot_ai, hotspot_search,
-    indicators, llm, llmcfg, metrics, news, providers, reports, scorecfg,
-    service, storage, value_screener, valuecfg,
-)
-from backend.config import settings
+from tests._common import *  # noqa: F401,F403  公共导入见 tests/_common.py
 from backend.indicators import build_ma, summarize_flow, support_resistance
 from backend.providers import registry
 from backend.providers.base import Bar, FlowDay

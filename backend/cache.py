@@ -10,6 +10,11 @@ from typing import Any, Awaitable, Callable
 SWEEP_INTERVAL = 60.0
 MAX_ENTRIES = 4096
 
+# 负缓存：loader 返回 None（源端暂无数据）时用短 TTL 缓存一个哨兵，
+# 避免同 key 高频请求反复穿透到上游（缓存穿透）。外部 peek 对哨兵不可见。
+NEG_TTL = 30.0
+_NEG = object()
+
 
 class _KeyLock:
     """带等待计数的锁：计数归零即可从锁表摘除，避免锁表随 key 基数无限膨胀。"""
@@ -28,7 +33,8 @@ class TTLCache:
         self._next_sweep = 0.0
 
     # ------------------------------------------------------------ 读写
-    def peek(self, key: str) -> Any | None:
+    def _peek_raw(self, key: str) -> Any | None:
+        """原始读取：命中（含负缓存哨兵）返回存储值，未命中/过期返回 None。"""
         item = self._data.get(key)
         if not item:
             return None
@@ -37,6 +43,10 @@ class TTLCache:
             self._data.pop(key, None)
             return None
         return value
+
+    def peek(self, key: str) -> Any | None:
+        value = self._peek_raw(key)
+        return None if value is _NEG else value
 
     def put(self, key: str, value: Any, ttl: float) -> None:
         self._data[key] = (time.monotonic() + ttl, value)
@@ -99,22 +109,29 @@ class TTLCache:
         loader: Callable[[], Awaitable[Any]],
         *,
         force: bool = False,
+        negative_ttl: float = NEG_TTL,
     ) -> Any:
         if not force:
-            cached = self.peek(key)
+            cached = self._peek_raw(key)
             if cached is not None:
-                return cached
+                return None if cached is _NEG else cached
+            # miss 路径顺带触发清扫：若只在 put() 里清扫，纯读场景下过期项
+            # 会一直滞留。_maybe_sweep 自带 60s 间隔护栏，高频调用无额外开销。
+            self._maybe_sweep()
         entry = self._acquire(key)
         try:
             async with entry.lock:
                 # double check：等锁期间可能已被别的协程填充
                 if not force:
-                    cached = self.peek(key)
+                    cached = self._peek_raw(key)
                     if cached is not None:
-                        return cached
+                        return None if cached is _NEG else cached
                 value = await loader()
                 if value is not None:
                     self.put(key, value, ttl)
+                elif negative_ttl > 0:
+                    # 负缓存：源端暂无数据也短暂占位，防同 key 请求穿透上游
+                    self.put(key, _NEG, negative_ttl)
                 return value
         finally:
             self._release(key, entry)

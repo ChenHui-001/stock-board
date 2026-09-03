@@ -254,6 +254,7 @@ async def run(params: dict[str, Any], on_progress: Callable[[float, str], None])
         })
     trades = pd.DataFrame(rows)
 
+    engine.prune_run_dirs()   # 顺带清理过期运行目录
     tmpdir = Path(tempfile.mkdtemp(prefix="bt_intraday_", dir=str(engine.CACHE_DIR)))
     trades_csv = tmpdir / "trades.csv"
     trades.to_csv(trades_csv, index=False, encoding="utf-8-sig")

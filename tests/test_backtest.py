@@ -255,3 +255,25 @@ def test_svg_bar_chart_a_share_colors():
     svg = render.svg_bar_chart(rows)
     assert 'fill="#e5534b"' in svg   # 涨=红
     assert 'fill="#2ea86b"' in svg   # 跌=绿
+
+
+def test_prune_run_dirs(tmp_path, monkeypatch):
+    """bt_* 过期运行目录应被清理；新鲜目录与 kline/fin 缓存文件不受影响。"""
+    import os
+    import time as _time
+
+    old = tmp_path / "bt_score_old"
+    fresh = tmp_path / "bt_intraday_new"
+    keeper = tmp_path / "kline_sh600000_400.csv"
+    old.mkdir()
+    fresh.mkdir()
+    keeper.write_text("date,close\n2026-01-01,9.0\n", encoding="utf-8")
+    past = _time.time() - 8 * 86400
+    os.utime(old, (past, past))
+    monkeypatch.setattr(engine, "CACHE_DIR", tmp_path)
+
+    removed = engine.prune_run_dirs(max_age_days=7.0)
+    assert removed == 1
+    assert not old.exists()
+    assert fresh.exists()
+    assert keeper.exists()

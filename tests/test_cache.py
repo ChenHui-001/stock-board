@@ -1,15 +1,7 @@
 """Cache。"""
 from __future__ import annotations
 
-import asyncio
-import time
-from pathlib import Path
-from backend import (
-    analysis, api, cache, check_sources, hotspot, hotspot_ai, hotspot_search,
-    indicators, llm, llmcfg, metrics, news, providers, reports, scorecfg,
-    service, storage, value_screener, valuecfg,
-)
-from backend.config import settings
+from tests._common import *  # noqa: F401,F403  公共导入见 tests/_common.py
 from backend.indicators import build_ma, summarize_flow, support_resistance
 from backend.providers import registry
 from backend.providers.base import Bar, FlowDay
@@ -128,3 +120,34 @@ def test_ai_cache_blank_degraded_invalidated() -> None:
     assert (api._BLANK_LLM_REASON_RE.search(ok_reason) is None)
 
 
+
+
+def test_negative_cache() -> None:
+    """loader 返回 None 应短 TTL 负缓存（防穿透）；force / 过期 / negative_ttl=0 时正常重试。"""
+    async def run() -> None:
+        c = cache.TTLCache()
+        calls = {"n": 0}
+
+        async def empty() -> None:
+            calls["n"] += 1
+            return None
+
+        # 第一次 miss → loader；第二次命中负缓存 → loader 不再被调
+        assert await c.get_or_set("nk", 60, empty) is None
+        assert await c.get_or_set("nk", 60, empty) is None
+        assert calls["n"] == 1, f"n={calls['n']}"
+        # 外部 peek 对负缓存哨兵不可见
+        assert c.peek("nk") is None
+        # force 绕过负缓存
+        assert await c.get_or_set("nk", 60, empty, force=True) is None
+        assert calls["n"] == 2, f"n={calls['n']}"
+        # negative_ttl=0 关闭负缓存 → 每次都穿透
+        assert await c.get_or_set("nk2", 60, empty, negative_ttl=0) is None
+        assert await c.get_or_set("nk2", 60, empty, negative_ttl=0) is None
+        assert calls["n"] == 4, f"n={calls['n']}"
+        # 负缓存过期后恢复 loader 调用
+        c._data["nk"] = (0.0, cache._NEG)
+        await c.get_or_set("nk", 60, empty)
+        assert calls["n"] == 5, f"n={calls['n']}"
+
+    asyncio.run(run())

@@ -375,6 +375,7 @@ async def run(params: dict[str, Any], on_progress: Callable[[float, str], None])
     s_quantile = engine.summarize_by_bucket(df, "档位_分位", QORDER)
     stats = engine.event_stats(df[f"fwd{engine.PRIMARY_DAYS}"])
 
+    engine.prune_run_dirs()   # 顺带清理过期运行目录
     tmpdir = Path(tempfile.mkdtemp(prefix="bt_score_", dir=str(engine.CACHE_DIR)))
     trades_csv = tmpdir / "trades.csv"
     out.to_csv(trades_csv, index=False, encoding="utf-8-sig")
