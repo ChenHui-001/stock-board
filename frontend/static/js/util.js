@@ -244,8 +244,27 @@
     }
   }
 
+  // 防竞态守卫：页面级 epoch 计数器。
+  // 问题背景：#view 是单容器，路由切换只替换其内容；页面模块里的 async load()
+  // 若在网络往返期间被切页，await 返回后仍会把旧数据渲染进当前页面（view() 实时
+  // 取节点，节点本身没换）。约定用法：
+  //   const guard = U.createPageGuard();          // 模块级，一个页面一个
+  //   const my = guard.begin();                    // 每次加载开始时取号
+  //   ... await ...
+  //   if (!guard.ok(my)) return;                   // 已切页/有更新加载：放弃提交
+  // 页面导出 destroy() 时调用 guard.kill()；begin() 也会使旧号失效（最新加载胜出）。
+  function createPageGuard() {
+    let epoch = 0;
+    return {
+      begin: function () { epoch += 1; return epoch; },
+      ok: function (token) { return token === epoch; },
+      kill: function () { epoch += 1; },
+    };
+  }
+
   export const U = {
     NBSP: NBSP,
+    createPageGuard: createPageGuard,
     isNum: isNum,
     price: price,
     pct: pct,

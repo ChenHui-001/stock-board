@@ -636,5 +636,15 @@ import { Settings } from './settings.js';
     }
   };
 
-// ESM defer 下 DOMContentLoaded 已触发 → 改同步执行
-App.start();
+// 启动时序说明（本模块与 page-home/page-detail/settings 存在循环依赖）：
+// ESM 求值顺序是「先递归求值全部 import，再跑本模块体」，所以页面模块先于本段
+// 代码执行——它们此刻引用 App 会触发 TDZ ReferenceError。当前契约：页面模块
+// 【顶层禁止引用 App，只允许在函数体内使用】（函数体都在启动后才被调用）。
+// module script 天然 defer（DOM 已就绪）→ 同步启动，bind() 的监听在 import返回
+// 前注册完成（frontend_smoke.mjs 依赖这一点）；只有将来有人改成非 defer 加载
+// （readyState=loading）才走 DOMContentLoaded 兜底，避免踩空 DOM。
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function () { App.start(); });
+} else {
+  App.start();
+}

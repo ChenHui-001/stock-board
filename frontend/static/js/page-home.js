@@ -601,9 +601,15 @@ import { App } from './app.js';
   }
 
   // ---------------------------------------------------------- 数据加载
+  // 防竞态守卫：load 在 await 期间用户可能切页，返回后 view() 拿到的是当前页的
+  // #view，直接 render 会把首页表格画到别的页面；destroy/新加载都会使旧号失效。
+  const pageGuard = U.createPageGuard();
+
   async function load(force) {
+    const my = pageGuard.begin();
     try {
       const data = await API.watchlist(force);
+      if (!pageGuard.ok(my)) return;   // 已切页或已被更新的加载取代：全部放弃
       state.items = data.items || [];
       // 清理已删除股票的选中态
       const codes = new Set(state.items.map(function (i) { return i.code; }));
@@ -611,6 +617,7 @@ import { App } from './app.js';
       render();
       App.setSession(data.session);
     } catch (err) {
+      if (!pageGuard.ok(my)) return;   // 错误提示同样不追到别的页面
       const root = view();
       if (!state.items.length) {
         root.innerHTML = '<div class="card"><div class="empty">'
@@ -629,15 +636,18 @@ import { App } from './app.js';
     if (state.ai.loading) return;
     state.ai.loading = true;
     state.ai.error = null;
+    const my = pageGuard.begin();
     if (!refresh) patchAIDashboard();
     try {
       const data = await API.aiWatchlist(refresh);
+      if (!pageGuard.ok(my)) return;   // 已切页：不写 state、不 patch 当前页 DOM
       const map = {};
       (data.items || []).forEach(function (s) { if (s.code) map[s.code] = s; });
       state.ai.items = map;
       state.ai.total = data.total || 0;
       state.ai.analyzed = data.analyzed || 0;
     } catch (err) {
+      if (!pageGuard.ok(my)) return;
       state.ai.error = err.message || String(err);
       U.toast('AI 摘要加载失败：' + state.ai.error, 'err');
     } finally {
@@ -645,8 +655,11 @@ import { App } from './app.js';
       // 关键优化：AI 数据回来后只 patch AI 相关节点，不再重建整个表格。
       // 原来这里是 render()，意味着每只股票都要重建 12+ DOM 节点，
       // 30 只就是 360 个；现在只更新 .ai-cell 和顶部 AI 看板。
-      patchAIDashboard();
-      patchAIRowsOnly();
+      // 页面已切走或已有更新的加载接管时跳过，避免 patch 到别的页面。
+      if (pageGuard.ok(my)) {
+        patchAIDashboard();
+        patchAIRowsOnly();
+      }
     }
   }
 
@@ -788,6 +801,11 @@ import { App } from './app.js';
       return load(true).then(function () { return loadAI(false); });
     },
     tick: tick,
+    // 路由切换卸载钩子（app.js 在切页前调用）：使在途 load/loadAI 的令牌失效
+    destroy: function () {
+      pageGuard.kill();
+      state.ticking = false;
+    },
     toggleManage: function () {
       if (!state.items.length) {
         U.toast('还没有自选股', 'err');

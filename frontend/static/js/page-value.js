@@ -493,20 +493,27 @@ import { API } from './api.js';
     return wrap;
   }
 
+  // 防竞态守卫：load/refresh 在 await 期间用户可能切页，#view 是单容器，
+  // 返回后直接写会把选股结果画到当前页面。切页（destroy）或新加载都使旧号失效。
+  const pageGuard = U.createPageGuard();
+
   async function load() {
     if (!viewEl) return;
+    const my = pageGuard.begin();
     skeleton();
     state.loading = true;
     try {
       state.data = await API.valueScreen(false);
+      if (!pageGuard.ok(my)) return;   // 已切页：不渲染、不清 loading 之外的状态提交
       state.error = null;
       renderData(state.data);
     } catch (e) {
+      if (!pageGuard.ok(my)) return;   // 错误画面同样不追到别的页面
       state.error = e.message || String(e);
       viewEl.innerHTML = '';
       viewEl.appendChild(U.el('div', 'val-error', '加载失败: ' + state.error));
     } finally {
-      state.loading = false;
+      if (pageGuard.ok(my)) state.loading = false;
     }
   }
 
@@ -515,10 +522,17 @@ import { API } from './api.js';
       viewEl = document.getElementById('view');
       load();
     },
+    destroy: function () {
+      // 路由切换卸载钩子（app.js 在切页前调用）
+      pageGuard.kill();
+      viewEl = null;
+    },
     refresh: async function () {
       // 显式刷新按钮触发的强刷,在 mount/refresh 之外也能用
       if (!viewEl) return;
+      const my = pageGuard.begin();
       state.data = await API.valueScreen(false);
+      if (!pageGuard.ok(my)) return;
       renderData(state.data);
     },
     tick: function () {
