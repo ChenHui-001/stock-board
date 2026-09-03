@@ -518,3 +518,118 @@ def test_industry_pe_tolerance() -> None:
     unknown = vs._financial_score({"pe": 8, "pb": 1.0, "board": "未知板块"}, fin)
     assert (abs(unknown["value_metrics"].get("pe_tol", 1.0) - 1.0) < 1e-9)
     assert (unknown["value_metrics"]["pe_band"] == "深度低估")
+
+
+# ---------------- P2：暴雷过滤 / 板块强度兜底 / 财务深度 ----------------
+
+def test_risk_score_disaster_filters() -> None:
+    """P2 暴雷过滤：商誉/质押/解禁三档加分与边界（数据来自东财 datacenter，已实测）。"""
+    from backend.value_screener import _risk_score
+
+    base_fin = [{"net_profit_yoy": 10.0, "debt_ratio": 40.0, "net_profit": 1e8}]
+
+    # 商誉占净资产 35% → +15；18% → +10；9% → +5
+    assert (_risk_score({"name": "甲", "financials": base_fin,
+                         "risk_extras": {"goodwill_ratio": 0.35}}, {})["score"] == 15)
+    assert (_risk_score({"name": "甲", "financials": base_fin,
+                         "risk_extras": {"goodwill_ratio": 0.18}}, {})["score"] == 10)
+    assert (_risk_score({"name": "甲", "financials": base_fin,
+                         "risk_extras": {"goodwill_ratio": 0.09}}, {})["score"] == 5)
+    # 低商誉（中国西电实测 0.09%）→ 无商誉风险
+    r = _risk_score({"name": "中国西电", "financials": base_fin,
+                     "risk_extras": {"goodwill_ratio": 0.0009}}, {})
+    assert (r["score"] == 0 and not any("商誉" in n for n in r["notes"])), str(r)
+    # 数据缺失 → 静默跳过（不奖不罚）
+    assert _risk_score({"name": "甲", "financials": base_fin}, {})["score"] == 0
+
+    # 质押 60% → +15；20% → +5；0%（已解押）→ 不计分
+    assert (_risk_score({"name": "甲", "financials": base_fin,
+                         "risk_extras": {"pledge_ratio": 60.0}}, {})["score"] == 15)
+    assert (_risk_score({"name": "甲", "financials": base_fin,
+                         "risk_extras": {"pledge_ratio": 20.0}}, {})["score"] == 5)
+    assert (_risk_score({"name": "甲", "financials": base_fin,
+                         "risk_extras": {"pledge_ratio": 0.0}}, {})["score"] == 0)
+
+    # 解禁：20 日后解禁占市值 6%（>5%）→ +15 且有解禁 note
+    r = _risk_score({"name": "甲", "financials": base_fin, "total_mv": 100.0,
+                     "risk_extras": {"lift_market_cap": 6e8, "lift_days": 20}}, {})
+    assert (r["score"] == 15 and any("解禁" in n for n in r["notes"])), str(r)
+    # 95 日后 → 超 90 日窗口不计分；总市值缺失 → 无法算占比不计分
+    assert (_risk_score({"name": "甲", "financials": base_fin, "total_mv": 100.0,
+                         "risk_extras": {"lift_market_cap": 6e8, "lift_days": 95}},
+                        {})["score"] == 0)
+    assert (_risk_score({"name": "甲", "financials": base_fin,
+                         "risk_extras": {"lift_market_cap": 6e8, "lift_days": 20}},
+                        {})["score"] == 0)
+
+
+def test_hot_board_strength_fallback() -> None:
+    """P2 板块强度兜底：涨停池为空的蓝筹板块用热门榜均值补齐（上限 0.8）。"""
+    from backend import value_screener as vs
+
+    hot = [
+        {"board": "银行", "change_pct": 3.0},
+        {"board": "银行", "change_pct": 4.0},
+        {"board": "白酒", "change_pct": -1.0},
+    ]
+    s = vs._hot_board_strength(hot)
+    # 银行 2 只均涨 3.5%：计数 2/15*0.4 + 涨幅 3.5/6*0.6 ≈ 0.40
+    assert (0.3 <= s["银行"] <= 0.5), str(s)
+    # 下跌板块涨幅部分计 0，仅剩计数贡献
+    assert (s["白酒"] <= 0.05), str(s)
+    assert all(v <= 0.8 for v in s.values()), "兜底强度不应超过 0.8 上限"
+
+    # 空热门榜 → 空兜底（保持旧行为）
+    assert vs._hot_board_strength([]) == {}
+
+
+def test_financial_deduct_quality() -> None:
+    """P2 财务深度：归母高增但扣非跟不上 → 成长分降档并打盈利质量标记。"""
+    from backend import value_screener as vs
+
+    def _fin(ded_yoy):
+        return [{"period": "2026H1", "net_profit_yoy": 50.0,
+                 "net_profit_deduct_yoy": ded_yoy, "revenue_yoy": 20.0,
+                 "roe": 12.0, "gross_margin": 30.0, "debt_ratio": 40.0}]
+
+    bad = vs._financial_score({"pe": 20.0, "pb": 2.0, "financials": _fin(-5.0)})
+    good = vs._financial_score({"pe": 20.0, "pb": 2.0, "financials": _fin(45.0)})
+    # 扣非负增长 → 标记 + 成长分被压（归母 6 分被清零，仅剩营收 2 分）
+    assert bad["value_metrics"].get("profit_quality"), str(bad["value_metrics"])
+    assert good["score"] - bad["score"] >= 4, f"good={good['score']} bad={bad['score']}"
+    # 扣非增速低于归母但为正 → 降档到 2 分，标记为「含非经常性损益」
+    mid = vs._financial_score({"pe": 20.0, "pb": 2.0, "financials": _fin(8.0)})
+    assert (mid["value_metrics"].get("profit_quality")
+            and mid["score"] < good["score"]), str(mid["value_metrics"])
+    # 扣非字段缺失（老数据）→ 不打折，向后兼容
+    legacy = [{"period": "2026H1", "net_profit_yoy": 50.0, "revenue_yoy": 20.0,
+               "roe": 12.0, "gross_margin": 30.0, "debt_ratio": 40.0}]
+    sl = vs._financial_score({"pe": 20.0, "pb": 2.0, "financials": legacy})
+    assert "profit_quality" not in sl["value_metrics"], str(sl["value_metrics"])
+
+
+def test_roe_trend_scoring() -> None:
+    """P2 财务深度：年报 ROE 趋势——全>10 加 2 分，连续 3 年下滑减 2 分；季报期不计入。"""
+    from backend import value_screener as vs
+
+    def _fin(roe_desc):
+        years = ["2025FY", "2024FY", "2023FY", "2022FY"]
+        return [{"period": p, "roe": r, "net_profit_yoy": 5.0,
+                 "gross_margin": 25.0, "debt_ratio": 40.0}
+                for p, r in zip(years, roe_desc)]
+
+    # 近 4 年 ROE 全 >10 → 加 2
+    up = vs._financial_score({"pe": 20.0, "pb": 2.0,
+                              "financials": _fin([12.0, 13.0, 14.0, 15.0])})
+    assert up["value_metrics"].get("roe_trend") == "近4年 ROE 均>10%", str(up["value_metrics"])
+    # 连续 3 年下滑（8<11<14）→ 减 2
+    down = vs._financial_score({"pe": 20.0, "pb": 2.0,
+                                "financials": _fin([8.0, 11.0, 14.0, 17.0])})
+    assert down["value_metrics"].get("roe_trend") == "ROE 连续下滑", str(down["value_metrics"])
+    assert up["score"] > down["score"], f"up={up['score']} down={down['score']}"
+
+    # 季报/中报期不参与趋势：混入 H1 也不改变趋势判定
+    mixed = [{"period": "2026H1", "roe": 3.0, "net_profit_yoy": 5.0,
+              "gross_margin": 25.0, "debt_ratio": 40.0}] + _fin([12.0, 13.0, 14.0, 15.0])
+    up2 = vs._financial_score({"pe": 20.0, "pb": 2.0, "financials": mixed})
+    assert up2["value_metrics"].get("roe_trend") == "近4年 ROE 均>10%", str(up2["value_metrics"])

@@ -748,7 +748,9 @@ async def _margin(code: str, market: str, force: bool) -> dict[str, Any]:
 
 async def _financials(code: str, market: str, force: bool) -> dict[str, Any]:
     async def loader() -> Any:
-        rows, src = await registry().financials(code, market, 12)
+        # 24 期（约 6 年）：价值筛选器需要近 5 个完整年报期算 ROE 趋势；
+        # 下游全部自行切片（prompts[:6] / 前端[:8] / financials_cached[:periods]），扩容安全
+        rows, src = await registry().financials(code, market, 24)
         return {"rows": rows, "source": src}
 
     return await cached_pack(

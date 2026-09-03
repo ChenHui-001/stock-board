@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -429,14 +430,18 @@ async def _stock_profile(
 
     async def _fin() -> list[dict[str, Any]]:
         try:
-            # 走 service.financials_cached（详情页 financials 缓存，6h TTL），
-            # 缓存取 12 期后切片前 8 期；源失败时缓存层已按空列表兜底
-            fin = await service.financials_cached(code, market, 8)
+            # 走 service.financials_cached（详情页 financials 缓存，6h TTL）。
+            # 取 24 期（约 6 年）：近 5 个完整年报期用于 ROE 趋势（P2 财务深度），
+            # 评分函数内部自行按 FY 切片，其余消费方不受影响
+            fin = await service.financials_cached(code, market, 24)
             return [
                 {
                     "period": f.period, "revenue_yoy": f.revenue_yoy,
                     "net_profit_yoy": f.net_profit_yoy,
                     "net_profit": f.net_profit, "roe": f.roe,
+                    # P2 财务深度：扣非净利及同比（两路 provider 均有，此前转换层丢失）
+                    "net_profit_deduct": f.net_profit_deduct,
+                    "net_profit_deduct_yoy": f.net_profit_deduct_yoy,
                     "gross_margin": f.gross_margin, "debt_ratio": f.debt_ratio,
                     "ocf_to_netprofit": getattr(f, "ocf_to_netprofit", None),
                 }
@@ -543,24 +548,36 @@ def _financial_score(
     latest = fin[0]
     has_valuation = profile.get("pe") is not None or profile.get("pb") is not None
 
-    # -------- 成长 12:净利润/营收同比 + 加速趋势
+    # -------- 成长 12:净利润/营收同比 + 加速趋势 + 扣非交叉验证
+    metrics: dict[str, Any] = {}
     growth_pts = 0
     np_yoys = [f.get("net_profit_yoy") for f in fin[:4] if f.get("net_profit_yoy") is not None]
     rev_yoys = [f.get("revenue_yoy") for f in fin[:4] if f.get("revenue_yoy") is not None]
     if np_yoys:
         latest_np = np_yoys[0]
         if latest_np > 30:
-            growth_pts += 6
+            np_pts = 6
         elif latest_np > 10:
-            growth_pts += 4
+            np_pts = 4
         elif latest_np > 0:
-            growth_pts += 2
+            np_pts = 2
         elif latest_np > -10:
-            growth_pts -= 1
+            np_pts = -1
         else:
-            growth_pts -= 3
+            np_pts = -3
         if len(np_yoys) >= 2 and np_yoys[0] > np_yoys[1]:
-            growth_pts += 3  # 加速
+            np_pts += 3  # 加速
+        # P2 扣非交叉验证：归母高增但扣非跟不上 → 盈利质量打折。
+        # 典型暴雷前兆：卖资产/政府补助/公允价值变动撑起的「高增长」
+        ded_yoy = latest.get("net_profit_deduct_yoy")
+        if latest_np > 30 and ded_yoy is not None:
+            if ded_yoy < 0:
+                np_pts = min(np_pts, 0)
+                metrics["profit_quality"] = "扣非同比为负，归母高增主要靠非经常性损益"
+            elif ded_yoy < 10:
+                np_pts = min(np_pts, 2)
+                metrics["profit_quality"] = "扣非增速显著低于归母，利润含非经常性损益"
+        growth_pts += np_pts
     if rev_yoys:
         latest_rev = rev_yoys[0]
         if latest_rev > 20:
@@ -601,6 +618,24 @@ def _financial_score(
             quality_pts += 1
         elif dr > 75:
             quality_pts -= 2
+
+    # P2 财务深度：年报 ROE 趋势（近 5 个完整年度，衡量盈利能力的持续性与方向）
+    fy_roes: list[float] = []
+    for f in fin:
+        p = str(f.get("period") or "")
+        if p.endswith("FY") and f.get("roe") is not None:
+            fy_roes.append(f["roe"])
+        if len(fy_roes) >= 5:
+            break
+    if len(fy_roes) >= 3:
+        if all(v > 10 for v in fy_roes):
+            quality_pts += 2
+            metrics["roe_trend"] = f"近{len(fy_roes)}年 ROE 均>10%"
+        elif len(fy_roes) >= 4 and fy_roes[0] < fy_roes[1] < fy_roes[2]:
+            quality_pts -= 2
+            metrics["roe_trend"] = "ROE 连续下滑"
+        else:
+            metrics["roe_trend"] = "平稳"
     quality_pts = max(0, min(10, quality_pts))
 
     # -------- 估值 18:价值投资核心维度（PE + PB + PEG）----
@@ -608,7 +643,6 @@ def _financial_score(
     # 旧实现是 PE/PB 任一缺失 → 该子项 0 分,导致价值维度永远 < 6 分,
     # 同时 VALUE_BUY 走不到(pe_band=None 不在低估档位),与页面"价值投资"定位冲突。
     value_pts = 0
-    metrics: dict[str, Any] = {}
     pe = profile.get("pe")
     if pe is not None and pe > 0:
         # 行业相对估值：PE 换算成行业调整后的有效值再套档位（见 _INDUSTRY_PE_TOLERANCE）
@@ -1002,6 +1036,47 @@ def _risk_score(profile: dict[str, Any], fin_score: dict[str, Any]) -> dict[str,
     if (profile.get("lianban") or 0) >= 6:
         risk += 15
         notes.append(f"{profile['lianban']} 连板高位")
+    # ---- P2 暴雷过滤：商誉 / 股权质押 / 限售解禁（东财 datacenter 接口，均已实测可用）。
+    # 审计意见：东财各 reportName 均「报表配置不存在」（数据源不可用），按项目原则
+    # 不接入、不编造，待找到可用源后再补。数据缺失时对应项静默跳过（不奖不罚）。
+    rx = profile.get("risk_extras") or {}
+    gwr = rx.get("goodwill_ratio")  # 商誉 / 归母净资产（小数）
+    if gwr is not None:
+        if gwr > 0.3:
+            risk += 15
+            notes.append(f"商誉占净资产 {gwr * 100:.0f}%，减值暴雷高危")
+        elif gwr > 0.15:
+            risk += 10
+            notes.append(f"商誉占净资产 {gwr * 100:.0f}%，减值风险高")
+        elif gwr > 0.08:
+            risk += 5
+            notes.append(f"商誉占净资产 {gwr * 100:.0f}%")
+    plg = rx.get("pledge_ratio")  # 大股东质押占总股本（%）。
+    # 仅在 >0 时计分：质押登记数据止于清零年，旧零值视为已解押而非陈旧数据
+    if plg is not None and plg > 0:
+        if plg > 50:
+            risk += 15
+            notes.append(f"股权质押 {plg:.0f}%，平仓风险高")
+        elif plg > 30:
+            risk += 10
+            notes.append(f"股权质押 {plg:.0f}%")
+        elif plg > 15:
+            risk += 5
+            notes.append(f"股权质押 {plg:.0f}%")
+    lift_cap = rx.get("lift_market_cap")  # 未来 90 日解禁市值合计（元）
+    lift_days = rx.get("lift_days")       # 最近一次解禁距今天数
+    total_mv = profile.get("total_mv")    # 总市值（亿）
+    if lift_cap and total_mv and lift_days is not None and lift_days <= 90:
+        lift_ratio = lift_cap / (total_mv * 1e8)
+        if lift_ratio > 0.05:
+            risk += 15 if lift_days <= 30 else 10
+            notes.append(f"{lift_days}日后解禁占市值 {lift_ratio * 100:.1f}%")
+        elif lift_ratio > 0.03:
+            risk += 8
+            notes.append(f"{lift_days}日后解禁占市值 {lift_ratio * 100:.1f}%")
+        elif lift_ratio > 0.01:
+            risk += 5
+            notes.append(f"{lift_days}日后解禁占市值 {lift_ratio * 100:.1f}%")
     risk = max(0, min(100, risk))
     return {"score": risk, "notes": notes, "completeness": 1}
 
@@ -1183,10 +1258,14 @@ async def _analyze_one(
     weights: dict[str, float] | None = None,
     board_avg: "dict[str, float] | None" = None,
     extra: "dict[str, Any] | None" = None,
+    risk_extra: "dict[str, Any] | None" = None,
 ) -> dict[str, Any] | None:
     profile = await _stock_profile(cand, extra=extra)
     if profile.get("price") is None and not profile.get("financials"):
         return None  # 核心数据全缺，跳过
+    # P2 暴雷过滤字段（run_screen 批量预取，无数据时为空 dict → 各项静默跳过）
+    if risk_extra:
+        profile["risk_extras"] = risk_extra
     # 注入所属板块平均涨幅，供「个股相对板块强度」评分使用
     b = profile.get("board") or ""
     if board_avg and b:
@@ -1273,8 +1352,32 @@ def _board_avg_change(
     }
 
 
-async def _fetch_board_strength(zt_rows: list[dict[str, Any]]) -> dict[str, float]:
-    """板块强度：按涨停池中候选所属板块聚合（涨停数 + 平均涨幅）。
+def _hot_board_strength(hot_rows: list[dict[str, Any]]) -> dict[str, float]:
+    """热门榜兜底板块强度：涨停池拿不到的板块（银行/白酒等蓝筹少有涨停）用它补齐。
+
+    热门≠涨停：计数权重降到 40%（15 只封顶）、涨幅权重 60%（6% 封顶），
+    且整体上限压到 0.8，避免与真实涨停强度混淆。
+    """
+    agg: dict[str, list[float]] = {}
+    for r in hot_rows:
+        b = r.get("board") or ""
+        c = r.get("change_pct")
+        if b and c is not None:
+            agg.setdefault(b, []).append(c)
+    strength: dict[str, float] = {}
+    for b, chgs in agg.items():
+        count = len(chgs)
+        avg = sum(chgs) / count if chgs else 0.0
+        s = min(1.0, count / 15) * 0.4 + min(1.0, max(0.0, avg) / 6) * 0.6
+        strength[b] = round(min(0.8, s), 3)
+    return strength
+
+
+async def _fetch_board_strength(
+    zt_rows: list[dict[str, Any]],
+    hot_rows: "list[dict[str, Any]] | None" = None,
+) -> dict[str, float]:
+    """板块强度：主源为涨停池聚合；涨停池覆盖不到的板块用热门榜均值兜底。
 
     东财板块涨幅榜接口不稳定（频控），用涨停池聚合作为主数据源；
     涨停数越多、平均涨幅越高 → 板块强度越强（0-1）。
@@ -1292,7 +1395,113 @@ async def _fetch_board_strength(zt_rows: list[dict[str, Any]]) -> dict[str, floa
         avg = sum(chgs) / len(chgs) if chgs else 0
         s = min(1.0, count / 10) * 0.6 + min(1.0, max(0, avg) / 10) * 0.4
         strength[b] = round(s, 3)
+    # P2 兜底：涨停池为空的板块（蓝筹）用热门榜均值补齐，setdefault 不覆盖涨停池结果
+    if hot_rows:
+        for b, s in _hot_board_strength(hot_rows).items():
+            strength.setdefault(b, s)
     return strength
+
+
+# ------------------------------------------------------------------ 暴雷过滤数据源
+# 东财 datacenter 三接口，2026-09-01 curl 实测通过（601179.SH 返回有效数据）：
+#   商誉  RPT_GOODWILL_STOCKDETAILS  → GOODWILL / SUMSHEQUITY_RATIO（商誉÷归母净资产，小数）
+#   质押  RPT_CSDC_LIST              → PLEDGE_RATIO（%，中登周频；止于清零年属正常）
+#   解禁  RPT_LIFT_STAGE             → FREE_DATE / LIFT_MARKET_CAP（元）/ 解禁类型
+# 审计意见接口（RPT_F10_FINANCE_AUDITOPINION 等 4 个 reportName）实测均「报表配置不存在」，
+# 数据源不可用，按项目原则不接入、不编造。
+_DC_BASE = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+_DC_HEADERS = {"Referer": "https://data.eastmoney.com/"}
+_RISK_EXTRA_TTL = 12 * 3600.0  # 商誉/质押/解禁均为低频数据（季报/周频/预告制），12h 缓存
+_risk_extra_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+async def _dc_rows(report: str, filt: str, columns: str, sort: str,
+                   order: str = "-1") -> list[dict[str, Any]]:
+    """datacenter 单报表查询；空结果（code 9201）/解析失败 → 空列表。"""
+    try:
+        resp = await fetch(
+            _DC_BASE, headers=_DC_HEADERS,
+            params={
+                "reportName": report, "columns": columns, "filter": filt,
+                "sortColumns": sort, "sortTypes": order,
+                "pageSize": 10, "pageNumber": 1,
+                "source": "WEB", "client": "WEB",
+            },
+        )
+        result = (resp.json() or {}).get("result") or {}
+        return result.get("data") or []
+    except Exception as exc:  # noqa: BLE001 — 单源失败静默跳过，不阻断选股
+        log.debug("datacenter %s 查询失败: %s", report, exc)
+        return []
+
+
+async def _risk_extra_one(code: str) -> dict[str, Any]:
+    """单只股票的暴雷过滤字段（商誉占比 / 质押比例 / 90 日内解禁）。全部尽力而为。"""
+    out: dict[str, Any] = {}
+    code_filter = f'(SECURITY_CODE="{code}")'
+    # 商誉：最新报告期（REPORT_DATE 倒序取第一条）
+    rows = await _dc_rows("RPT_GOODWILL_STOCKDETAILS", code_filter,
+                          "SECURITY_CODE,REPORT_DATE,GOODWILL,SUMSHEQUITY_RATIO",
+                          "REPORT_DATE")
+    if rows and rows[0].get("SUMSHEQUITY_RATIO") is not None:
+        out["goodwill_ratio"] = rows[0]["SUMSHEQUITY_RATIO"]
+    # 质押：最新一周（TRADE_DATE 倒序取第一条）
+    rows = await _dc_rows("RPT_CSDC_LIST", code_filter,
+                          "SECURITY_CODE,TRADE_DATE,PLEDGE_RATIO", "TRADE_DATE")
+    if rows and rows[0].get("PLEDGE_RATIO") is not None:
+        out["pledge_ratio"] = rows[0]["PLEDGE_RATIO"]
+    # 解禁：未来 90 日内合计市值（元）+ 最近一次解禁倒计时天数（FREE_DATE 正序）
+    today = datetime.now().strftime("%Y-%m-%d")
+    rows = await _dc_rows(
+        "RPT_LIFT_STAGE",
+        f'{code_filter}(FREE_DATE>=\'{today}\')',
+        "SECURITY_CODE,FREE_DATE,LIFT_MARKET_CAP,FREE_SHARES_TYPE",
+        "FREE_DATE", order="1",
+    )
+    now = datetime.now()
+    total_cap = 0.0
+    nearest_days: int | None = None
+    for r in rows:
+        try:
+            free_date = datetime.strptime(str(r.get("FREE_DATE") or "")[:10], "%Y-%m-%d")
+        except ValueError:
+            continue
+        days = (free_date - now).days
+        if days > 90:
+            break
+        total_cap += float(r.get("LIFT_MARKET_CAP") or 0)
+        if nearest_days is None:
+            nearest_days = max(0, days)
+    if total_cap > 0 and nearest_days is not None:
+        out["lift_market_cap"] = total_cap
+        out["lift_days"] = nearest_days
+    return out
+
+
+async def _fetch_risk_extras(cands: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """批量预取候选股暴雷过滤字段，key 为 `code.market`。
+
+    进程内 12h TTL 缓存 + 信号量限流（40 候选 × 3 端点 = 120 请求，
+    首轮约 10s，命中缓存后接近 0）。
+    """
+    sem = asyncio.Semaphore(6)
+
+    async def _one(c: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        key = f"{c['code']}.{c['market']}"
+        hit = _risk_extra_cache.get(key)
+        if hit and time.time() - hit[0] < _RISK_EXTRA_TTL:
+            return key, hit[1]
+        async with sem:
+            try:
+                data = await _risk_extra_one(c["code"])
+            except Exception as exc:  # noqa: BLE001
+                log.warning("risk_extras %s 失败，按空数据继续: %s", key, exc)
+                data = {}
+        _risk_extra_cache[key] = (time.time(), data)
+        return key, data
+
+    pairs = await asyncio.gather(*[_one(c) for c in cands])
+    return dict(pairs)
 
 
 # ------------------------------------------------------------------ 对外入口
@@ -1318,8 +1527,8 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     market = _market_state(indices, zt.get("count") or 0, avg_chg,
                            zb_count=zb.get("count") or 0)
 
-    # 板块强度
-    board_strength = await _fetch_board_strength(zt.get("rows") or [])
+    # 板块强度（涨停池聚合 + 热门榜兜底）
+    board_strength = await _fetch_board_strength(zt.get("rows") or [], hot)
 
     # 候选池
     candidates = _merge_candidates(zt, hot)
@@ -1333,6 +1542,9 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     # 腾讯补充字段一次批量取完，避免逐只请求（40 只候选 40 次 → 1 次）
     extra_map = await _tencent_extra_batch(candidates)
 
+    # P2 暴雷过滤字段（商誉/质押/解禁）批量预取，12h 进程内缓存
+    risk_map = await _fetch_risk_extras(candidates)
+
     # 逐股评分（并发，限流友好）
     sem = asyncio.Semaphore(8)
     async def _limited(c: dict[str, Any]):
@@ -1340,6 +1552,7 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
             return await _analyze_one(
                 c, board_strength, weights,
                 board_avg=board_avg, extra=extra_map.get(f"{c['code']}.{c['market']}"),
+                risk_extra=risk_map.get(f"{c['code']}.{c['market']}"),
             )
     results = await asyncio.gather(*[_limited(c) for c in candidates])
     stocks = [r for r in results if r is not None]
