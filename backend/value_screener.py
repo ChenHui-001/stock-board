@@ -16,7 +16,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from . import cache as cache_mod, valuecfg
+from . import cache as cache_mod, service, valuecfg
 from .config import settings
 
 _cache = cache_mod.cache
@@ -421,7 +421,9 @@ async def _stock_profile(
 
     async def _fin() -> list[dict[str, Any]]:
         try:
-            fin, _src = await registry().financials(code, market, 8)
+            # 走 service.financials_cached（详情页 financials 缓存，6h TTL），
+            # 缓存取 12 期后切片前 8 期；源失败时缓存层已按空列表兜底
+            fin = await service.financials_cached(code, market, 8)
             return [
                 {
                     "period": f.period, "revenue_yoy": f.revenue_yoy,
@@ -438,7 +440,8 @@ async def _stock_profile(
 
     async def _flow() -> list[dict[str, Any]]:
         try:
-            flow, _src = await registry().fund_flow(code, market, 30)
+            # 走 service.flow_cached（详情页 flow 缓存，历史 TTL）；源失败时空列表兜底
+            flow = await service.flow_cached(code, market, 30)
             return [{"date": d.date, "main": d.main, "main_pct": d.main_pct} for d in flow]
         except Exception as exc:  # noqa: BLE001
             log.warning("%s 异常，按空数据继续: %s", "_flow", exc)
@@ -447,7 +450,8 @@ async def _stock_profile(
     async def _kline() -> list[dict[str, Any]]:
         try:
             # 60 日 K 线:既给 20 日价格位置评分用,又给位置自适应(60 日窗口)用。
-            bars, _src = await registry().kline(code, market, 60)
+            # 走 service.kline_cached（详情页 kline 缓存，KLINE_LIMIT=260 根里切最近 60 根）
+            bars = await service.kline_cached(code, market, 60)
             return [
                 {"date": b.date, "close": b.close, "change_pct": b.change_pct,
                  "volume": b.volume, "high": b.high, "low": b.low}

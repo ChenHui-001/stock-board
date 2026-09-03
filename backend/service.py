@@ -9,7 +9,7 @@ from typing import Any
 from . import indicators, storage
 from .cache import cache
 from .config import settings
-from .providers import Board, ProviderError, Quote, registry
+from .providers import Bar, Board, FinancialPeriod, FlowDay, ProviderError, Quote, registry
 from .utils import (
     data_is_stale,
     describe_exc,
@@ -755,6 +755,33 @@ async def _financials(code: str, market: str, force: bool) -> dict[str, Any]:
         f"financials:{code}.{market}", FINANCIAL_TTL, loader, force,
         empty={"rows": [], "source": ""},
     )
+
+
+# ------------------------------------------------------------------ 缓存复用入口（价值筛选器等共享详情页缓存）
+# 目的：value_screener._stock_profile 此前直连 registry()，同一只股票在详情页与
+# 筛选器之间重复拉取财务/资金流/K线。以下薄封装统一走上方带 TTL 的缓存，
+# 源失败时 cached_pack 已按空数据兜底，调用方无需再自行降级。
+
+
+async def kline_cached(code: str, market: str, days: int) -> list[Bar]:
+    """最近 days 根日 K（时间正序，尾部为最新；复用详情页 kline 缓存）。"""
+    pack = await _kline(code, market, False)
+    bars = list(pack.get("bars") or [])
+    return bars[-days:] if days > 0 else bars
+
+
+async def flow_cached(code: str, market: str, days: int) -> list[FlowDay]:
+    """最近 days 日资金流（时间正序，尾部为当日；复用详情页 flow 缓存）。"""
+    pack = await _flow(code, market, False)
+    rows = list(pack.get("rows") or [])
+    return rows[-days:] if days > 0 else rows
+
+
+async def financials_cached(code: str, market: str, periods: int) -> list[FinancialPeriod]:
+    """最近 periods 期财务指标（最新一期在前；复用详情页 financials 缓存）。"""
+    pack = await _financials(code, market, False)
+    rows = list(pack.get("rows") or [])
+    return rows[:periods] if periods > 0 else rows
 
 
 def _board_names(rows: list[Board]) -> list[str]:
