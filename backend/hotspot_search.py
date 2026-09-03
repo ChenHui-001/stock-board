@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -237,7 +238,10 @@ async def search(q: str, days: int = 7, limit: int = 30, force: bool = False) ->
             },
         }
     engine = engine_name()
-    key = f"hsearch:{engine}:{q}:{days}:{limit}"
+    # 关键词先做 URL 编码再拼缓存 key：用户输入可能含 ":" 等分隔符，
+    # 不转义会让 key 段错位（hsearch:{engine}:{q}:{days}:{limit} 共 5 段）
+    qk = quote(q, safe="")
+    key = f"hsearch:{engine}:{qk}:{days}:{limit}"
     try:
         return await cache.get_or_set(key, TTL, lambda: _load(q, days, limit, engine), force=force)
     except ProviderError as exc:
@@ -246,7 +250,7 @@ async def search(q: str, days: int = 7, limit: int = 30, force: bool = False) ->
             log.warning("全网搜索失败，回退站内全文检索：%s", exc)
             try:
                 fallback = await cache.get_or_set(
-                    f"hsearch:eastmoney:{q}:{days}:{limit}", TTL,
+                    f"hsearch:eastmoney:{qk}:{days}:{limit}", TTL,
                     lambda: _load(q, days, limit, "eastmoney"), force=force,
                 )
                 fallback["meta"]["fallback_from"] = engine

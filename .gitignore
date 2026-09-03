@@ -47,7 +47,7 @@ frontend/static/js/_backup_iiife/
 
 # === 回测产物（大体积生成物） ===
 ai_score_trades.csv
-index.html
+/index.html
 
 # === 测试运行产物 ===
 tests/_smoke_data/
