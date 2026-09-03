@@ -5,11 +5,13 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import MutableHeaders
 
 from . import llm, storage
 from .api import router
@@ -75,6 +77,29 @@ async def lifespan(app: FastAPI):
     await llm.close()
     # 最后关 DB：providers/llm 收尾期间可能还有落盘动作（如分析记录回写）
     storage.close_db()
+
+
+class _JSCacheControlMiddleware:
+    """开发模式专用：/static/js/* 强制 no-cache。
+
+    历史缺陷：DEV_MODE 分支引用了本类但类定义缺失，导致「无 dist 的全新
+    checkout」（CI / 干净克隆）一导入 backend.main 就 NameError；
+    生产与本机（有 dist）永远走不到该分支，故长期潜伏。现补回实现。
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") == "http" and scope.get("path", "").startswith("/static/js/"):
+            async def _send(message: Any) -> None:
+                if message["type"] == "http.response.start":
+                    MutableHeaders(scope=message)["Cache-Control"] = "no-cache"
+                await send(message)
+
+            await self.app(scope, receive, _send)
+        else:
+            await self.app(scope, receive, send)
 
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0", lifespan=lifespan)
