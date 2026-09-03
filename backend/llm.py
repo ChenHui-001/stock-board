@@ -16,11 +16,10 @@ import httpx
 
 from . import llmcfg
 from .config import settings
+from .providers.base import client as _shared_client
 from .utils import describe_exc
 
 log = logging.getLogger("llm")
-
-_client: httpx.AsyncClient | None = None
 
 
 def _cfg() -> dict[str, Any]:
@@ -44,17 +43,16 @@ def ordered_profiles() -> list[dict[str, Any]]:
 
 
 def _client_of() -> httpx.AsyncClient:
-    global _client
-    if _client is None:
-        _client = httpx.AsyncClient(timeout=httpx.Timeout(settings.LLM_TIMEOUT))
-    return _client
+    # P2 #24：与行情 providers 共享同一个 httpx.AsyncClient 单例。
+    # LLM 的长超时不再烤在客户端里，改为逐请求传 timeout（见各调用点），
+    # 共享连接池（64 连接）足够容纳并发 LLM 长请求。
+    return _shared_client()
 
 
 async def close() -> None:
-    global _client
-    if _client is not None:
-        await _client.aclose()
-        _client = None
+    # 生命周期已归属 providers.base（main.py 的 providers_shutdown 统一关闭）。
+    # 保留函数只为兼容既有调用点 / 测试打点。
+    return None
 
 
 class LLMError(Exception):
@@ -258,7 +256,10 @@ async def _chat_one(c: dict[str, Any], system: str, user: str) -> tuple[dict[str
 
     async def post() -> httpx.Response:
         try:
-            return await _client_of().post(url, json=payload, headers=headers)
+            return await _client_of().post(
+                url, json=payload, headers=headers,
+                timeout=httpx.Timeout(settings.LLM_TIMEOUT),
+            )
         except httpx.HTTPError as exc:
             raise LLMError(f"LLM 请求失败: {_request_error(exc, url)}") from exc
 
@@ -405,7 +406,10 @@ async def test_connection(cfg: dict[str, Any] | None = None) -> tuple[bool, str]
     }
     start = time.monotonic()
     try:
-        resp = await _client_of().post(url, json=payload, headers=headers)
+        resp = await _client_of().post(
+            url, json=payload, headers=headers,
+            timeout=httpx.Timeout(settings.LLM_TIMEOUT),
+        )
     except httpx.HTTPError as exc:
         return False, f"连接失败：{_request_error(exc, url)}"
     cost_ms = (time.monotonic() - start) * 1000
@@ -432,7 +436,10 @@ async def list_models(cfg: dict[str, Any] | None = None) -> tuple[bool, list[str
     url = f"{str(c['base_url']).rstrip('/')}/models"
     headers = {"Authorization": f"Bearer {c['api_key']}", "Content-Type": "application/json"}
     try:
-        resp = await _client_of().get(url, headers=headers)
+        resp = await _client_of().get(
+            url, headers=headers,
+            timeout=httpx.Timeout(settings.LLM_TIMEOUT),
+        )
     except httpx.HTTPError as exc:
         return False, [], f"获取失败：{_request_error(exc, url)}"
     if resp.status_code in (401, 403):

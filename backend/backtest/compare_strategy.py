@@ -28,6 +28,7 @@ import pandas as pd
 
 from .. import analysis
 from ..providers.base import Bar
+from ..providers.base import client as _shared_http_client
 from ..utils import normalize_code, resolve_market
 from . import engine, render
 from .intraday_strategy import (
@@ -63,31 +64,31 @@ PARAMS_SCHEMA: list[dict[str, Any]] = [
 
 async def _tencent_minutes(code: str, market: str, limit: int, pages: int = 1) -> list[Bar]:
     """腾讯 5 分钟线（ifzq.gtimg.cn mkline），支持翻页拉更长历史。"""
-    import httpx
-
     symbol = f"{'sh' if market == 'SH' else 'sz'}{code}"
     url = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
     all_rows: list[list] = []
     seen: set[str] = set()
     start = ""
-    async with httpx.AsyncClient(
-        timeout=15,
-        headers={"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"},
-    ) as client:
-        for _ in range(pages):
-            param = f"{symbol},m5,{start},,{limit}" if start else f"{symbol},m5,,,{limit}"
-            resp = await client.get(url, params={"param": param})
-            resp.raise_for_status()
-            data = resp.json()
-            rows = ((data.get("data") or {}).get(symbol) or {}).get("m5") or []
-            if not rows:
-                break
-            new_rows = [r for r in rows if str(r[0]) not in seen]
-            all_rows.extend(new_rows)
-            seen.update(str(r[0]) for r in new_rows)
-            start = str(rows[0][0])
-            if len(new_rows) < limit:
-                break
+    # P2 #24：复用全局 httpx 单例（此前每次调用新建客户端，多付 TCP+TLS 握手）
+    client = _shared_http_client()
+    for _ in range(pages):
+        param = f"{symbol},m5,{start},,{limit}" if start else f"{symbol},m5,,,{limit}"
+        resp = await client.get(
+            url, params={"param": param},
+            headers={"Referer": "https://gu.qq.com/"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        rows = ((data.get("data") or {}).get(symbol) or {}).get("m5") or []
+        if not rows:
+            break
+        new_rows = [r for r in rows if str(r[0]) not in seen]
+        all_rows.extend(new_rows)
+        seen.update(str(r[0]) for r in new_rows)
+        start = str(rows[0][0])
+        if len(new_rows) < limit:
+            break
     if not all_rows:
         raise RuntimeError("腾讯分钟线返回为空")
     all_rows.sort(key=lambda r: str(r[0]))
