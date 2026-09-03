@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from ..scorecfg import get_weights
 from ..utils import confidence, describe_exc, round2
@@ -415,52 +415,23 @@ def _annotate_intraday(note: str) -> list[dict[str, Any]]:
     return out
 
 
-# ------------------------------------------------------------------ rule_based 主入口
+# ------------------------------------------------------------------ rule_based 分项评估（纯函数化子块）
 
-def rule_based(
+def _tech_score_block(
     detail: dict[str, Any],
-    news: list[dict[str, Any]] | None = None,
-    reports: list[dict[str, Any]] | None = None,
-    financials: dict[str, Any] | None = None,
+    q: dict[str, Any],
+    ma: dict[int, dict[str, Any]],
+    ma_sum: dict[str, Any],
+    sr: dict[str, Any],
+    trend: dict[str, Any],
+    price: float,
 ) -> dict[str, Any]:
-    """无 LLM（或 LLM 失败）时的确定性降级分析，输出结构完全一致。"""
-    q = detail["quote"]
-    financials = financials or detail.get("financials") or {}
-    ma = {m["window"]: m for m in detail.get("ma", [])}
-    ma_sum = detail.get("ma_summary", {})
-    flow = detail.get("fund_flow", {}).get("summary", {})
-    margin = detail.get("margin", {}).get("summary", {})
-    sr = detail.get("support_resistance", {})
-    trend = detail.get("status", {}).get("trend", {})
-    price = q.get("price") or 0.0
+    """技术面评分与摆动指标文案（rule_based 内联段落的代码搬移）。
 
-    # 当日实时盘口：振幅 / 盘中位置 / 今开跳空 / 量比 / 换手
-    prev_close = q.get("prev_close")
-    hi, lo, opn = q.get("high"), q.get("low"), q.get("open")
-    amp = (hi - lo) / prev_close * 100 if (hi and lo and prev_close) else None
-    intraday_pos = (price - lo) / (hi - lo) * 100 if (price and hi and lo and hi > lo) else None
-    gap = (opn - prev_close) / prev_close * 100 if (opn and prev_close) else None
-    vol_ratio = q.get("volume_ratio")
-    turnover = q.get("turnover")
-    change = q.get("change")
-    change_pct = q.get("change_pct")
-
-    def yi(v: Any) -> str:
-        if v is None:
-            return "无数据"
-        v = float(v)
-        if abs(v) >= 1e8:
-            return f"{v / 1e8:.2f}亿元"
-        return f"{v / 1e4:.0f}万元"
-
-    def mval(w: int) -> str:
-        info = ma.get(w) or {}
-        return "--" if info.get("value") is None else f"{info['value']:.2f}"
-
-    def mpos(w: int) -> str:
-        return (ma.get(w) or {}).get("position", "数据不足")
-
-    # ==================== 三维分面评分 ====================
+    返回键：tech_score / above / arrangement / sr_state / deviation_note /
+    osc_summary / macd / kdj / macd_cross / hist_trend / kdj_cross / kdj_zone /
+    intraday_pts / intraday_note。
+    """
     # 技术面：均线结构 / 排列 / 斜率 / 区间 / 乖离
     # 各因子按 FACTOR_WEIGHTS 加权（回测标定，见文件顶部注释）
     W = FACTOR_WEIGHTS
@@ -525,6 +496,34 @@ def rule_based(
     intraday_pts, intraday_note = _intraday_score(q)
     tech_score += intraday_pts * W["intraday"]
 
+    return {
+        "tech_score": tech_score,
+        "above": above,
+        "arrangement": arrangement,
+        "sr_state": sr_state,
+        "deviation_note": deviation_note,
+        "osc_summary": osc_summary,
+        "macd": macd,
+        "kdj": kdj,
+        "macd_cross": macd_cross,
+        "hist_trend": hist_trend,
+        "kdj_cross": kdj_cross,
+        "kdj_zone": kdj_zone,
+        "intraday_pts": intraday_pts,
+        "intraday_note": intraday_note,
+    }
+
+
+def _capital_score_block(
+    detail: dict[str, Any],
+    flow: dict[str, Any],
+    margin: dict[str, Any],
+) -> dict[str, Any]:
+    """资金面评分素材（当日/近5日主力、连续流向、两融、量能确认）。
+
+    返回键：capital_score / primary / main_last / main_last5 / main_total /
+    flow_fresh / flow_last_date / rz_pct / volume_pts / volume_note。
+    """
     # 资金面：当日主力为主 / 近5日辅 / 连续流向 / 两融 / 量能确认
     # 当日资金流向未发布时主项改用近5日口径，避免把前日 main_last 当成「当日」数据参与评分。
     capital_score = 0
@@ -548,6 +547,30 @@ def rule_based(
     volume_pts, volume_note = _volume_confirm(detail.get("kline", []))
     capital_score += volume_pts
 
+    return {
+        "capital_score": capital_score,
+        "primary": primary,
+        "main_last": main_last,
+        "main_last5": main_last5,
+        "main_total": main_total,
+        "flow_fresh": flow_fresh,
+        "flow_last_date": flow_last_date,
+        "rz_pct": rz_pct,
+        "volume_pts": volume_pts,
+        "volume_note": volume_note,
+    }
+
+
+def _news_score_block(
+    news: list[dict[str, Any]] | None,
+    reports: list[dict[str, Any]] | None,
+    financials: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """消息面 + 基本面评分素材。
+
+    返回键：news_score / news_pts / report_pts / fundamental_pts /
+    fundamental_notes / fundamental_text / bull_n / bear_n / bull_r / bear_r。
+    """
     # 消息面：资讯 + 研报
     bull_n, bear_n, _ = _news_score(news)
     news_pts = max(-12, min(12, bull_n * 4 - bear_n * 4))
@@ -556,32 +579,32 @@ def rule_based(
     fundamental_pts, fundamental_notes, fundamental_text = _fundamental_score(financials)
     news_score = news_pts + report_pts
 
-    # 三维权重（环境变量 / 设置页可配，默认 1.0）
-    w = get_weights()
-    w_tech = round(tech_score * w["tech"], 1)
-    w_capital = round(capital_score * w["capital"], 1)
-    w_news = round(news_score * w["news"], 1)
-    score = round(w_tech + w_capital + w_news + fundamental_pts, 1)
+    return {
+        "news_score": news_score,
+        "news_pts": news_pts,
+        "report_pts": report_pts,
+        "fundamental_pts": fundamental_pts,
+        "fundamental_notes": fundamental_notes,
+        "fundamental_text": fundamental_text,
+        "bull_n": bull_n,
+        "bear_n": bear_n,
+        "bull_r": bull_r,
+        "bear_r": bear_r,
+    }
 
-    # ==================== 信号一致性 ====================
-    def _dir(v: float) -> int:
-        return 1 if v > 0 else (-1 if v < 0 else 0)
 
-    dirs = [d for d in (_dir(tech_score), _dir(capital_score), _dir(news_score)) if d != 0]
-    signal_conflict = len(set(dirs)) > 1
-    signal_aligned = len(dirs) >= 2 and len(set(dirs)) == 1
-    signal_note = ""
-    if signal_conflict:
-        signal_note = "技术面/资金面/消息面方向不一致，信号背离，建议观望确认后再操作"
-    elif signal_aligned:
-        signal_note = "技术面/资金面/消息面方向一致，信号共振增强"
+def _decide_action(
+    score: float,
+    signal_conflict: bool,
+    q: dict[str, Any],
+    support: float | None,
+    stop_loss: float | None,
+) -> dict[str, Any]:
+    """P0-5 三档决策 + 触发价/止损文案；信号冲突时激进档降为观望。
 
-    # 支撑/压力/止损/止盈（提前到这里以便 P0-5 触发价计算引用）
-    support = sr.get("support") or (round2(price * 0.95) if price else None)
-    resistance = sr.get("resistance") or (round2(price * 1.05) if price else None)
-    stop_loss = round2(support * 0.97) if support else None
-    take_profit = round2(resistance * 1.02) if resistance else None
-
+    返回键：action / position / trigger_text / stop_text / add_trigger /
+    reduce_trigger / time_stop。
+    """
     # P0-5：4 档 → 3 档。
     #   加仓 / 减仓 / 观望，有且仅有一个高亮，绝不输出「可加可减」「逢低关注」类模糊表述
     if score >= TH_BUY:
@@ -647,13 +670,52 @@ def rule_based(
             "  ·  ▸ 减仓触发：三面信号方向一致且总分≤-8"
         )
 
+    return {
+        "action": action,
+        "position": position,
+        "trigger_text": trigger_text,
+        "stop_text": stop_text,
+        "add_trigger": add_trigger,
+        "reduce_trigger": reduce_trigger,
+        "time_stop": time_stop,
+    }
 
 
-    def zone(center: float | None, width: float = 0.015) -> str:
-        if not center:
-            return "--"
-        return f"{center * (1 - width):.2f}-{center * (1 + width):.2f}"
-
+def _risk_opportunity_lists(
+    q: dict[str, Any],
+    price: float,
+    sr: dict[str, Any],
+    flow: dict[str, Any],
+    ma: dict[int, dict[str, Any]],
+    *,
+    yi: Callable[[Any], str],
+    mval: Callable[[int], str],
+    mpos: Callable[[int], str],
+    above: int,
+    arrangement: str,
+    sr_state: str,
+    flow_fresh: bool,
+    flow_last_date: str,
+    primary: float,
+    main_last: float,
+    main_last5: float,
+    main_total: float,
+    rz_pct: float | None,
+    resistance: float | None,
+    support: float | None,
+    bull_n: int,
+    bear_n: int,
+    bull_r: int,
+    bear_r: int,
+    fundamental_pts: int,
+    fundamental_notes: list[str],
+    volume_pts: int,
+    volume_note: str,
+    deviation_note: str,
+    intraday_pts: int,
+    intraday_note: str,
+) -> tuple[list[str], list[str]]:
+    """机会/风险清单（含末尾的盘口信号可靠性标注）。yi/mval/mpos 为 rule_based 内的文案闭包。"""
     opportunities: list[str] = []
     risks: list[str] = []
     if above >= 3:
@@ -722,6 +784,34 @@ def rule_based(
     if not risks:
         risks.append(f"上方 {resistance} 为 {sr.get('resistance_from') or '近期高点'}，突破前存在震荡消化需求")
 
+    # 当日盘口提示：按信号拆分并标注历史命中率强度
+    if intraday_pts != 0 and intraday_note:
+        target = opportunities if intraday_pts > 0 else risks
+        target.extend(_annotate_intraday(intraday_note))
+
+    return opportunities, risks
+
+
+def _intraday_texts(
+    q: dict[str, Any],
+    price: float,
+    yi: Callable[[Any], str],
+) -> tuple[str, str]:
+    """当日盘中实时描述 + 成交活跃度描述（盘口指标由 quote 原始字段现算）。
+
+    返回 (intraday_text, intraday_activity)。
+    """
+    # 当日实时盘口：振幅 / 盘中位置 / 今开跳空 / 量比 / 换手
+    prev_close = q.get("prev_close")
+    hi, lo, opn = q.get("high"), q.get("low"), q.get("open")
+    amp = (hi - lo) / prev_close * 100 if (hi and lo and prev_close) else None
+    intraday_pos = (price - lo) / (hi - lo) * 100 if (price and hi and lo and hi > lo) else None
+    gap = (opn - prev_close) / prev_close * 100 if (opn and prev_close) else None
+    vol_ratio = q.get("volume_ratio")
+    turnover = q.get("turnover")
+    change = q.get("change")
+    change_pct = q.get("change_pct")
+
     # 当日盘中实时描述
     intraday_text = (
         f"现价 {price:.2f}"
@@ -740,11 +830,142 @@ def rule_based(
         + (f"，换手率 {turnover:.2f}%" if turnover is not None else "")
         + ("，放量活跃" if (vol_ratio or 0) >= 2 else "，交投清淡" if (vol_ratio or 0) <= 0.6 else "")
     )
+    return intraday_text, intraday_activity
 
-    # 当日盘口提示：按信号拆分并标注历史命中率强度
-    if intraday_pts != 0 and intraday_note:
-        target = opportunities if intraday_pts > 0 else risks
-        target.extend(_annotate_intraday(intraday_note))
+
+# ------------------------------------------------------------------ rule_based 主入口
+
+def rule_based(
+    detail: dict[str, Any],
+    news: list[dict[str, Any]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
+    financials: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """无 LLM（或 LLM 失败）时的确定性降级分析，输出结构完全一致。
+
+    编排流程：三维分项评估（技术/资金/消息）→ 加权总分 → 信号一致性 →
+    三档决策与触发价 → 机会/风险清单 → 盘中文案 → 结果组装。
+    各分项逻辑见上方 _tech_score_block / _capital_score_block /
+    _news_score_block / _decide_action / _risk_opportunity_lists / _intraday_texts。
+    """
+    q = detail["quote"]
+    financials = financials or detail.get("financials") or {}
+    ma = {m["window"]: m for m in detail.get("ma", [])}
+    ma_sum = detail.get("ma_summary", {})
+    flow = detail.get("fund_flow", {}).get("summary", {})
+    margin = detail.get("margin", {}).get("summary", {})
+    sr = detail.get("support_resistance", {})
+    trend = detail.get("status", {}).get("trend", {})
+    price = q.get("price") or 0.0
+
+    def yi(v: Any) -> str:
+        if v is None:
+            return "无数据"
+        v = float(v)
+        if abs(v) >= 1e8:
+            return f"{v / 1e8:.2f}亿元"
+        return f"{v / 1e4:.0f}万元"
+
+    def mval(w: int) -> str:
+        info = ma.get(w) or {}
+        return "--" if info.get("value") is None else f"{info['value']:.2f}"
+
+    def mpos(w: int) -> str:
+        return (ma.get(w) or {}).get("position", "数据不足")
+
+    # ==================== 三维分面评分 ====================
+    t = _tech_score_block(detail, q, ma, ma_sum, sr, trend, price)
+    tech_score = t["tech_score"]
+    above = t["above"]
+    arrangement = t["arrangement"]
+    sr_state = t["sr_state"]
+    deviation_note = t["deviation_note"]
+    osc_summary = t["osc_summary"]
+    macd, kdj = t["macd"], t["kdj"]
+    macd_cross, hist_trend = t["macd_cross"], t["hist_trend"]
+    kdj_cross, kdj_zone = t["kdj_cross"], t["kdj_zone"]
+    intraday_pts, intraday_note = t["intraday_pts"], t["intraday_note"]
+
+    c = _capital_score_block(detail, flow, margin)
+    capital_score = c["capital_score"]
+    primary = c["primary"]
+    main_last = c["main_last"]
+    main_last5 = c["main_last5"]
+    main_total = c["main_total"]
+    flow_fresh = c["flow_fresh"]
+    flow_last_date = c["flow_last_date"]
+    rz_pct = c["rz_pct"]
+    volume_pts = c["volume_pts"]
+    volume_note = c["volume_note"]
+
+    n = _news_score_block(news, reports, financials)
+    news_score = n["news_score"]
+    news_pts = n["news_pts"]
+    report_pts = n["report_pts"]
+    fundamental_pts = n["fundamental_pts"]
+    fundamental_notes = n["fundamental_notes"]
+    fundamental_text = n["fundamental_text"]
+    bull_n, bear_n = n["bull_n"], n["bear_n"]
+    bull_r, bear_r = n["bull_r"], n["bear_r"]
+
+    # 三维权重（环境变量 / 设置页可配，默认 1.0）
+    w = get_weights()
+    w_tech = round(tech_score * w["tech"], 1)
+    w_capital = round(capital_score * w["capital"], 1)
+    w_news = round(news_score * w["news"], 1)
+    score = round(w_tech + w_capital + w_news + fundamental_pts, 1)
+
+    # ==================== 信号一致性 ====================
+    def _dir(v: float) -> int:
+        return 1 if v > 0 else (-1 if v < 0 else 0)
+
+    dirs = [d for d in (_dir(tech_score), _dir(capital_score), _dir(news_score)) if d != 0]
+    signal_conflict = len(set(dirs)) > 1
+    signal_aligned = len(dirs) >= 2 and len(set(dirs)) == 1
+    signal_note = ""
+    if signal_conflict:
+        signal_note = "技术面/资金面/消息面方向不一致，信号背离，建议观望确认后再操作"
+    elif signal_aligned:
+        signal_note = "技术面/资金面/消息面方向一致，信号共振增强"
+
+    # 支撑/压力/止损/止盈（提前到这里以便 P0-5 触发价计算引用）
+    support = sr.get("support") or (round2(price * 0.95) if price else None)
+    resistance = sr.get("resistance") or (round2(price * 1.05) if price else None)
+    stop_loss = round2(support * 0.97) if support else None
+    take_profit = round2(resistance * 1.02) if resistance else None
+
+    a = _decide_action(score, signal_conflict, q, support, stop_loss)
+    action = a["action"]
+    position = a["position"]
+    trigger_text = a["trigger_text"]
+    stop_text = a["stop_text"]
+    add_trigger = a["add_trigger"]
+    reduce_trigger = a["reduce_trigger"]
+    time_stop = a["time_stop"]
+
+
+
+    def zone(center: float | None, width: float = 0.015) -> str:
+        if not center:
+            return "--"
+        return f"{center * (1 - width):.2f}-{center * (1 + width):.2f}"
+
+    opportunities, risks = _risk_opportunity_lists(
+        q, price, sr, flow, ma,
+        yi=yi, mval=mval, mpos=mpos,
+        above=above, arrangement=arrangement, sr_state=sr_state,
+        flow_fresh=flow_fresh, flow_last_date=flow_last_date,
+        primary=primary, main_last=main_last, main_last5=main_last5,
+        main_total=main_total, rz_pct=rz_pct,
+        resistance=resistance, support=support,
+        bull_n=bull_n, bear_n=bear_n, bull_r=bull_r, bear_r=bear_r,
+        fundamental_pts=fundamental_pts, fundamental_notes=fundamental_notes,
+        volume_pts=volume_pts, volume_note=volume_note,
+        deviation_note=deviation_note,
+        intraday_pts=intraday_pts, intraday_note=intraday_note,
+    )
+
+    intraday_text, intraday_activity = _intraday_texts(q, price, yi)
 
     return {
         "trend": {
