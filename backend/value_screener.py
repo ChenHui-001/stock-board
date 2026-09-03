@@ -26,7 +26,8 @@ from .providers.base import fetch
 log = logging.getLogger("value_screener")
 
 _CACHE_TTL = 900.0  # 15 分钟聚合缓存（避免反复打接口）
-_CANDIDATE_LIMIT = 40  # 候选池上限（涨停池 + 热门榜 + 价值基准 去重）
+_CANDIDATE_LIMIT = 40  # 候选池总席位（涨停池 + 热门榜 + 价值基准 去重）
+_EMOTION_QUOTA = 24  # 情绪赛道（涨停池+热门榜）固定配额；基准池保底 40-24=16 席
 # 价值投资基准池:沪深 300 蓝筹 + 部分行业龙头。
 # 这些是公认的价值投资候选,在涨停池为空(弱势市)/ 全部高估时仍能
 # 提供样本,让"价值投资"页面真的选得到价值股,而非纯涨停池的情绪博弈。
@@ -272,33 +273,40 @@ def _merge_candidates(
 ) -> list[dict[str, Any]]:
     """候选池:涨停池(情绪/题材)+ 热门榜(资金) + 价值基准池(蓝筹),去重 + 普通股过滤。
 
-    优先级:
-    1) 涨停池 - 带连板/板块,情绪博弈的核心样本;
-    2) 热门榜 - 资金关注度,捕捉主流资金动向;
-    3) 价值基准池 - 沪深 300 蓝筹,在弱势市/全部高估时仍能选到价值股。
-    合并去重后截断到 _CANDIDATE_LIMIT。
+    配额分流（P1 修复）：情绪赛道与价值基准是两个策略诉求，共用一个截断
+    名额时，正常交易日涨停池+热门榜就能占满 40 席，40 只蓝筹根本进不了
+    候选，「价值投资」页实际跑的是情绪选股。现拆成固定配额：
+      - 情绪赛道（涨停池→热门榜顺序）最多 _EMOTION_QUOTA=24 席;
+      - 价值基准池保底补位到总量 _CANDIDATE_LIMIT=40（情绪满额时恰得
+        40-24=16 席；弱势市情绪池不满时基准池自动多补，总席位不浪费）。
     """
-    merged: dict[str, dict[str, Any]] = {}
+    emotion: dict[str, dict[str, Any]] = {}
     for r in zt.get("rows") or []:
         if not _is_stock_code(r["code"], r["market"]):
             continue
-        merged[f"{r['code']}.{r['market']}"] = r
+        emotion[f"{r['code']}.{r['market']}"] = r
     for r in hot:
         if not _is_stock_code(r["code"], r["market"]):
             continue
         key = f"{r['code']}.{r['market']}"
-        if key not in merged:
-            merged[key] = r
-    # 价值基准池:仅在前面两个池未覆盖时才加入(避免重复抓数据)
+        if key not in emotion:
+            emotion[key] = r
+    out = list(emotion.values())[:_EMOTION_QUOTA]
+    seen = {f"{r['code']}.{r['market']}" for r in out}
+    # 价值基准池：去重后补位（基准股若已进情绪池，视为已占 1 席，不重复抓数据）
     for r in _VALUE_BASELINE:
+        if len(out) >= _CANDIDATE_LIMIT:
+            break
         if not _is_stock_code(r["code"], r["market"]):
             continue
         key = f"{r['code']}.{r['market']}"
-        if key not in merged:
-            # 补齐 hot 需要的字段,后续 _stock_profile 会用真实数据覆盖
-            merged[key] = {**r, "change_pct": 0.0, "turnover": None,
-                            "volume_ratio": None, "lianban": 0, "board": ""}
-    return list(merged.values())[:_CANDIDATE_LIMIT]
+        if key in seen:
+            continue
+        # 补齐 hot 需要的字段,后续 _stock_profile 会用真实数据覆盖
+        out.append({**r, "change_pct": 0.0, "turnover": None,
+                    "volume_ratio": None, "lianban": 0, "board": ""})
+        seen.add(key)
+    return out[:_CANDIDATE_LIMIT]
 
 
 # ------------------------------------------------------------------ 单股数据
@@ -471,6 +479,38 @@ async def _stock_profile(
 
 # ------------------------------------------------------------------ 评分引擎
 
+# ------------------------------------------------------------------ 行业相对估值（P1 修复）
+
+# A 股行业间 PE 中位数差异极大（银行 5~8x vs 半导体 40~80x），PE 绝对档位
+# 会把高研发行业的成长股全判「高估」、给低增长行业虚发「低估」信号。
+# 方案：按板块名/股票名关键词匹配行业，PE 有效值 = PE / 容差系数 后再套
+# 绝对档位——系数 >1 给成长溢价（阈值放宽），<1 收紧（低增长行业的低 PE
+# 更接近真实低估）。PEG 本身已按增速归一、PB 行业差异相对小，均不做调整。
+_INDUSTRY_PE_TOLERANCE: tuple[tuple[tuple[str, ...], float], ...] = (
+    (("半导", "芯片", "集成电路", "消费电子", "元件", "PCB"), 1.8),
+    (("软件", "云计算", "人工智能", "信创", "计算机", "数据"), 1.8),
+    (("生物", "医药", "医疗", "疫苗", "创新药"), 1.6),
+    (("新能源", "锂电", "光伏", "储能", "电力设备", "风电"), 1.5),
+    (("军工", "航天", "国防"), 1.4),
+    (("银行", "保险", "房地产", "煤炭", "钢铁", "水泥",
+      "公用事业", "公路", "港口", "高速公路"), 0.8),
+)
+_INDUSTRY_PE_TOLERANCE_DEFAULT = 1.0
+
+
+def _industry_pe_tolerance(board: str = "", name: str = "") -> float:
+    """行业 PE 容差系数：board（东财板块名）优先，股票名关键词兜底。
+
+    蓝筹基准池没有板块名（board=""），但「工商银行」「中国人保」等名称
+    自带行业词；无法识别的行业回落 1.0（与旧行为一致，不奖不罚）。
+    """
+    text = f"{board or ''}|{name or ''}"
+    for keys, tol in _INDUSTRY_PE_TOLERANCE:
+        if any(k in text for k in keys):
+            return tol
+    return _INDUSTRY_PE_TOLERANCE_DEFAULT
+
+
 def _financial_score(
     profile_or_fin: "dict[str, Any] | list[dict[str, Any]]",
     fin: "list[dict[str, Any]] | None" = None,
@@ -498,7 +538,7 @@ def _financial_score(
             "completeness": 0,
             "value_metrics": {"pe_band": None, "pb_band": None,
                               "peg_band": None, "ocf_band": None,
-                              "industry_band": None},
+                              "industry_band": None, "pe_tol": None},
         }
     latest = fin[0]
     has_valuation = profile.get("pe") is not None or profile.get("pb") is not None
@@ -571,16 +611,21 @@ def _financial_score(
     metrics: dict[str, Any] = {}
     pe = profile.get("pe")
     if pe is not None and pe > 0:
-        if pe < 15:
+        # 行业相对估值：PE 换算成行业调整后的有效值再套档位（见 _INDUSTRY_PE_TOLERANCE）
+        pe_tol = _industry_pe_tolerance(profile.get("board") or "",
+                                        profile.get("name") or "")
+        metrics["pe_tol"] = pe_tol
+        pe_eff = pe / pe_tol
+        if pe_eff < 15:
             metrics["pe_band"] = "深度低估"
             value_pts += 10
-        elif pe < 25:
+        elif pe_eff < 25:
             metrics["pe_band"] = "低估"
             value_pts += 8
-        elif pe < 40:
+        elif pe_eff < 40:
             metrics["pe_band"] = "合理"
             value_pts += 5
-        elif pe < 80:
+        elif pe_eff < 80:
             metrics["pe_band"] = "偏高"
             value_pts += 2
         else:

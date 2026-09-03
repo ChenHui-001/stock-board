@@ -464,3 +464,57 @@ def test_value_weights() -> None:
           and sample["stocks"][1]["watched"] is False)
 
 
+def test_merge_candidates_quota() -> None:
+    """P1 配额分流：情绪赛道 24 席 + 价值基准池保底 16 席，总席位 40。
+
+    旧行为：涨停池+热门榜正常交易日即占满 40 席，蓝筹基准池全军覆没，
+    「价值投资」页名不副实。新行为下基准池在任何市况都有实质存在。
+    """
+    from backend import value_screener as vs
+
+    zt = {"rows": [{"code": f"30{i:04d}", "market": "SZ", "name": f"题材{i}",
+                    "board": "AI", "change_pct": 10.0, "lianban": 2,
+                    "turnover": 5.0, "volume_ratio": 2.0} for i in range(30)]}
+    # 热门股代码避开基准池（602xxx 非真实但通过 _is_stock_code 过滤）
+    hot = [{"code": f"602{i:03d}", "market": "SH", "name": f"热股{i}",
+            "board": "光伏", "change_pct": 7.0, "lianban": 0,
+            "turnover": 8.0, "volume_ratio": 3.0} for i in range(10)]
+    merged = vs._merge_candidates(zt, hot)
+    codes = {c["code"] for c in merged}
+    baseline = {b["code"] for b in vs._VALUE_BASELINE}
+    assert (len(merged) <= vs._CANDIDATE_LIMIT), f"总数超限: {len(merged)}"
+    # 情绪赛道恰占 24 席（涨停 30 截断），基准池补进剩余 16 席
+    assert (len(codes & baseline) >= 14), f"基准池席位不足: {len(codes & baseline)}"
+    assert (len(codes - baseline) == vs._EMOTION_QUOTA), "情绪赛道应恰 24 席"
+
+    # 弱势市：涨停池/热门榜为空 → 基准池填满（不多于 40、全为基准）
+    weak = vs._merge_candidates({"rows": []}, [])
+    assert (all(c["code"] in baseline for c in weak)), "弱势市应全为基准池"
+    assert (weak), "弱势市基准池不应为空"
+
+
+def test_industry_pe_tolerance() -> None:
+    """P1 行业相对估值：同一 PE 在不同行业应得不同档位。
+
+    半导体 PE 50（系数 1.8 → 有效 27.8）应好于银行 PE 50（系数 0.8 → 有效 62.5）；
+    蓝筹基准池无板块名时用股票名关键词兜底（工商银行 → 银行系数 0.8）。
+    """
+    from backend import value_screener as vs
+
+    fin = [{"revenue_yoy": 20.0, "net_profit_yoy": 30.0, "roe": 12.0,
+            "gross_margin": 30.0, "debt_ratio": 40.0}]
+    semi = vs._financial_score({"pe": 50, "pb": 6, "board": "半导体"}, fin)
+    bank = vs._financial_score({"pe": 50, "pb": 6, "board": "银行"}, fin)
+    assert (semi["value_metrics"]["pe_band"] in ("低估", "合理")), str(semi["value_metrics"])
+    # 银行 50/0.8=62.5 → 偏高档（<80），仍显著差于半导体的合理档
+    assert (bank["value_metrics"]["pe_band"] == "偏高"), str(bank["value_metrics"])
+    assert (semi["score"] > bank["score"]), f"semi={semi['score']} bank={bank['score']}"
+
+    # 板块名缺失 → 股票名兜底；低 PE 银行仍能正确判为深度低估
+    blue = vs._financial_score({"pe": 8, "pb": 0.7, "name": "工商银行"}, fin)
+    assert (blue["value_metrics"]["pe_band"] == "深度低估"), str(blue["value_metrics"])
+
+    # 无法识别的行业回落系数 1.0：与旧行为一致
+    unknown = vs._financial_score({"pe": 8, "pb": 1.0, "board": "未知板块"}, fin)
+    assert (abs(unknown["value_metrics"].get("pe_tol", 1.0) - 1.0) < 1e-9)
+    assert (unknown["value_metrics"]["pe_band"] == "深度低估")
