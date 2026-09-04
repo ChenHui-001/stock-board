@@ -13,10 +13,11 @@
   可用：涨停池/炸板池（value_screener 同源）、跌停池 getTopicDTPool（实测），
         实时行情（VWAP/主力净流入/主力净比，东财 f62/f184），30日资金流
         （含超大单/大单），120日日K（涨停基因/5/20日涨幅），5分钟K线（分时结构，
-        provider 原生支持 klt=5）。
+        provider 原生支持 klt=5），板块资金流（push2delay clist f62/f164，
+        2026-09-04 补接：今日/5日主力净流入 + 板块涨跌幅）。
   缺失（按需求第二十七节标【数据缺失】，不编造）：盘口五档主动买盘（分时评分
-        恒缺 5 分）、板块级资金流入/连续资金流入/消息产业催化（板块分按可用
-        维度归一化）、真实涨停概率（zt_prob 仅为模型估计）。
+        恒缺 5 分）、消息产业催化（板块分恒缺 10 分）、真实涨停概率
+        （zt_prob 仅为模型估计）。
 
 聚合缓存 10 分钟；refresh=1 强制重算。
 """
@@ -182,19 +183,58 @@ def _market_emotion(
     }
 
 
+# ------------------------------------------------------------------ 板块资金流（东财 push2delay，2026-09-04 实测可用）
+
+async def _fetch_board_flow(limit: int = 100) -> dict[str, dict[str, Any]]:
+    """东财板块资金流榜（行业口径 m:90 t:2）。
+
+    字段（实测核对，勿凭记忆改）：
+      f12=板块代码(BKxxxx) f14=板块名 f3=板块涨跌幅% f62=今日主力净流入(元)
+      f164=5日主力净流入(元) f204/f205=领涨股名/代码
+    失败返回 {} → 板块评分退回「资金项标【数据缺失】」路径，不阻塞主流程。
+    """
+    url = ("https://push2delay.eastmoney.com/api/qt/clist/get"
+           "?pn=1&pz=%d&po=1&np=1&fltt=2&invt=2&fid=f62"
+           "&fs=m%%3A90%%20t%%3A2&fields=f12,f14,f3,f62,f164" % limit)
+    try:
+        resp = await fetch(url, headers={"Referer": "https://quote.eastmoney.com/"})
+        data = (resp.json() or {}).get("data") or {}
+        out: dict[str, dict[str, Any]] = {}
+        for i, r in enumerate(data.get("diff") or []):
+            name = str(r.get("f14") or "")
+            if not name:
+                continue
+            out[name] = {
+                "name": name,
+                "bk_code": r.get("f12") or "",
+                "chg": r.get("f3"),           # 板块涨跌幅 %
+                "main_today": r.get("f62"),   # 今日主力净流入（元）
+                "main_5d": r.get("f164"),     # 5日主力净流入（元）
+                "rank": i + 1,                # 按今日主力净流入降序的名次
+            }
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("板块资金流获取失败：%s", exc)
+        return {}
+
+
 # ------------------------------------------------------------------ 第二层：板块周期五阶段
 
 def _board_stats(
     zt_rows: list[dict[str, Any]], zb_rows: list[dict[str, Any]],
     hot_rows: list[dict[str, Any]], index_chg: float | None,
+    board_flow: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """按板块聚合涨停/炸板/热门数据，输出板块周期阶段与 0-100 评分。
+    """按板块聚合涨停/炸板/热门/资金流数据，输出板块周期阶段与 0-100 评分。
 
-    板块评分模型（需求第四节 100 分）中「板块资金流入 20 / 连续资金流入 10 /
-    消息产业催化 10」无数据源，按【数据缺失】处理：可用维度合计 60 分
-    （涨停梯队15+龙头强度15+相对大盘10+扩散5+分歧转强5+成交代理10），
-    总分 = 可得分 / 60 * 100，并在 missing 里如实标注，不编造。
+    板块评分模型（需求第四节 100 分）：「板块资金流入 20 / 连续资金流入 10」
+    已接入东财板块资金流（push2delay 实测，f62 今日 / f164 五日主力净流入），
+    可用维度合计 90 分（涨停梯队15+龙头强度15+相对大盘10+扩散5+分歧转强5+
+    成交代理10+今日资金20+连续资金10），总分 = 可得分 / 90 * 100；
+    仅「消息/产业催化 10」无数据源，恒标【数据缺失】，不编造。
+    资金流榜中主力净流入强（前 20 名且 >0）但暂无涨停的板块也纳入展示。
     """
+    board_flow = board_flow or {}
     zt_agg: dict[str, list[dict[str, Any]]] = {}
     for r in zt_rows:
         b = r.get("board") or ""
@@ -213,8 +253,12 @@ def _board_stats(
             hot_agg.setdefault(b, []).append(c)
 
     out: dict[str, dict[str, Any]] = {}
-    board_names = set(zt_agg) | set(hot_agg)
+    # 板块来源：涨停池 ∪ 热门榜 ∪ 资金流榜强势板块（前20名且今日主力>0）
+    flow_strong = {f["name"] for f in board_flow.values()
+                   if (f.get("rank") or 999) <= 20 and (f.get("main_today") or 0) > 0}
+    board_names = set(zt_agg) | set(hot_agg) | flow_strong
     for b in board_names:
+        fl = board_flow.get(b) or {}
         ztrs = zt_agg.get(b, [])
         zt_count = len(ztrs)
         lb_list = sorted((r.get("lianban") or 1) for r in ztrs)
@@ -225,9 +269,10 @@ def _board_stats(
         rel = (hot_avg - index_chg) if (hot_avg is not None and index_chg is not None) else None
 
         # --- 阶段判定（当日快照的估计，非完整历史推演；如实标注口径）
+        flow_chg = fl.get("chg")
         if zt_count == 0:
-            stage, stage_score = "观察", 55  # 仅热门榜，无涨停：启动前夜或冷门
-            if hot_avg is not None and hot_avg < -1:
+            stage, stage_score = "观察", 55  # 无涨停：启动前夜或冷门
+            if (hot_avg is not None and hot_avg < -1) or (flow_chg is not None and flow_chg < -1):
                 stage, stage_score = "退潮", 30
         elif zt_count >= 6 and zb_count >= max(3, zt_count // 2):
             stage, stage_score = "分歧", 80 if rel is not None and rel > 1 else 65
@@ -263,14 +308,31 @@ def _board_stats(
         # 成交代理 10：热门榜均涨幅（涨幅≠资金，代理口径标注）
         if hot_avg is not None:
             got += max(0, min(10, hot_avg * 2))
-        missing = ["板块资金流入", "连续资金流入(板块级)", "消息/产业催化"]
-        score = round(got / 60 * 100, 1)
+        # 板块资金流入 20（东财 f62 今日主力净流入，元）
+        missing = ["消息/产业催化"]  # 恒缺（无数据源），不编造
+        mt, m5d = fl.get("main_today"), fl.get("main_5d")
+        if mt is not None:
+            got += (20 if mt >= 1e9 else 16 if mt >= 5e8
+                    else 12 if mt >= 2e8 else 8 if mt > 0 else 0)
+        else:
+            missing.append("板块资金流入")
+        # 连续资金流入 10（f164 五日主力；五日与今日双正 = 持续性最强）
+        if m5d is not None:
+            got += 10 if (m5d > 0 and (mt or 0) > 0) else 5 if m5d > 0 else 0
+        else:
+            missing.append("连续资金流入(板块级)")
+        score = round(got / 90 * 100, 1)
 
         out[b] = {
             "name": b, "score": score, "stage": stage, "stage_score": stage_score,
             "is_ferment": stage == "发酵",
             "zt_count": zt_count, "zb_count": zb_count, "max_lianban": max_lb,
-            "has_leader": max_lb >= 2, "hot_avg": round(hot_avg, 2) if hot_avg is not None else None,
+            "has_leader": max_lb >= 2,
+            "fund_today": round(mt / 1e8, 2) if mt is not None else None,   # 今日主力净流入（亿）
+            "fund_5d": round(m5d / 1e8, 2) if m5d is not None else None,    # 5日主力净流入（亿）
+            "fund_rank": fl.get("rank"),                                    # 资金流榜名次
+            "board_chg": flow_chg,                                          # 板块涨跌幅 %
+            "hot_avg": round(hot_avg, 2) if hot_avg is not None else None,
             "relative_strength": round(rel, 2) if rel is not None else None,
             "missing": missing,
         }
@@ -833,21 +895,21 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
             return cached
 
     # ---- 第一层：市场环境（并发）
-    indices, zt, zb, dt, hot = await asyncio.gather(
+    indices, zt, zb, dt, hot, board_flow = await asyncio.gather(
         _fetch_index_quotes(), _fetch_zt_pool(), _fetch_zb_pool(),
-        _fetch_dt_pool(), _fetch_hot_pool(40),
+        _fetch_dt_pool(), _fetch_hot_pool(40), _fetch_board_flow(),
     )
     index_chg = next((i.get("change_pct") for i in indices if i.get("code") == "000001"), None)
     market = _market_emotion(zt, zb, dt, indices, hot)
 
     # ---- 第二层：板块周期
     bstats_map = _board_stats(zt.get("rows") or [], zb.get("rows") or [],
-                              hot, index_chg)
+                              hot, index_chg, board_flow)
     hot_rank = {b["name"]: i for i, b in enumerate(
         sorted(bstats_map.values(), key=lambda x: x["score"], reverse=True))}
     for b in bstats_map.values():
         b["hot_rank"] = hot_rank.get(b["name"])
-    boards_top = sorted(bstats_map.values(), key=lambda x: x["score"], reverse=True)[:8]
+    boards_top = sorted(bstats_map.values(), key=lambda x: x["score"], reverse=True)[:12]
     boards_top = [{k: v for k, v in b.items() if k != "top_leader_chg"} for b in boards_top]
 
     # ---- 候选池 + 批量行情

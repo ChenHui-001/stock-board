@@ -56,18 +56,46 @@ def test_board_stats_stages() -> None:
                for lb in (3, 1, 1, 1, 1)]
     bstats = ops._board_stats(
         zt_rows, [{"hybk": "AI"}],
-        [{"board": "AI", "change_pct": 4.0}], index_chg=1.0)
+        [{"board": "AI", "change_pct": 4.0}], index_chg=1.0,
+        board_flow={"AI": {"name": "AI", "chg": 4.0, "main_today": 1.2e9,
+                           "main_5d": 3e9, "rank": 2}})
     ai = bstats["AI"]
     # 5 涨停 + 最高 3 连板 + 炸板 1 → 发酵期，评分 85
     assert ai["stage"] == "发酵" and ai["stage_score"] == 85, str(ai)
     assert ai["is_ferment"] is True and ai["has_leader"] is True, str(ai)
-    # 板块资金/催化无源 → 如实标注【数据缺失】口径
-    assert ai["missing"] == ["板块资金流入", "连续资金流入(板块级)", "消息/产业催化"]
+    # 资金流已接入：仅消息/产业催化恒缺；资金字段带出（亿元口径）
+    assert ai["missing"] == ["消息/产业催化"], str(ai)
+    assert ai["fund_today"] == 12.0 and ai["fund_5d"] == 30.0, str(ai)
+    assert ai["fund_rank"] == 2 and ai["board_chg"] == 4.0, str(ai)
     assert ai["relative_strength"] == 3.0, str(ai)
+    # 今日主力≥10亿(20分)+五日双正(10分) → 分母 90 下评分显著抬升
+    assert ai["score"] >= 70, ai["score"]
 
-    # 退潮：无涨停且热门均涨幅 < -1%
-    b2 = ops._board_stats([], [], [{"board": "银行", "change_pct": -2.0}], index_chg=0.0)
+    # 资金流缺失的板块：资金两项如实标【数据缺失】，不编造
+    b_no_flow = ops._board_stats(zt_rows, [{"hybk": "AI"}],
+                                 [{"board": "AI", "change_pct": 4.0}], 1.0, {})
+    miss = b_no_flow["AI"]["missing"]
+    assert "板块资金流入" in miss and "连续资金流入(板块级)" in miss, str(miss)
+
+    # 退潮：无涨停且板块跌幅 < -1%（flow chg 兜底口径；板块经热门榜纳入）
+    b2 = ops._board_stats([], [],
+                          [{"board": "银行", "change_pct": -1.5}], index_chg=0.0,
+                          board_flow={"银行": {"name": "银行", "chg": -2.0,
+                                               "main_today": -5e8, "main_5d": -1e9,
+                                               "rank": 80}})
     assert b2["银行"]["stage"] == "退潮" and b2["银行"]["stage_score"] == 30, str(b2)
+
+    # 资金流强势板块（前20名且今日主力>0）无涨停也纳入展示
+    b3 = ops._board_stats([], [], [], index_chg=0.0,
+                          board_flow={"传媒": {"name": "传媒", "chg": 2.3,
+                                               "main_today": 6.2e9, "main_5d": 6.5e9,
+                                               "rank": 1},
+                                      "冷门板块": {"name": "冷门板块", "chg": 0.5,
+                                                   "main_today": 1e7, "main_5d": -2e8,
+                                                   "rank": 200}})
+    assert "传媒" in b3, list(b3)
+    assert "冷门板块" not in b3, list(b3)
+    assert b3["传媒"]["zt_count"] == 0, str(b3["传媒"])
 
 
 def test_candidate_base_dedup_and_filter() -> None:

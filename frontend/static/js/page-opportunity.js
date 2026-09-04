@@ -150,12 +150,13 @@ function renderBoards(boards) {
   const table = U.el('table', 'opp-table');
   const thead = U.el('thead');
   const trh = U.el('tr');
-  ['板块', '评分', '阶段', '涨停数', '龙头', '数据缺失'].forEach(function (h) {
+  ['板块', '评分', '阶段', '涨停数', '龙头', '今日主力', '5日主力', '数据缺失'].forEach(function (h) {
     trh.appendChild(U.el('th', '', h));
   });
   thead.appendChild(trh);
   table.appendChild(thead);
   const tbody = U.el('tbody');
+  const mv = function (v) { return (v > 0 ? '+' : '') + v.toFixed(1) + '亿'; };
   boards.forEach(function (b) {
     const tr = U.el('tr', 'opp-row');
     tr.appendChild(U.el('td', 'opp-td-name', b.name || '—'));
@@ -165,6 +166,11 @@ function renderBoards(boards) {
     tr.appendChild(tdStage);
     tr.appendChild(U.el('td', '', fmt(b.zt_count)));
     tr.appendChild(U.el('td', '', b.has_leader ? '有' : '无'));
+    // 板块主力净流入（亿元，正红负绿；缺失 → —）
+    tr.appendChild(U.el('td', b.fund_today == null ? '' : U.tone(b.fund_today),
+                        fmt(b.fund_today, mv)));
+    tr.appendChild(U.el('td', b.fund_5d == null ? '' : U.tone(b.fund_5d),
+                        fmt(b.fund_5d, mv)));
     const tdMiss = U.el('td', 'opp-td-miss');
     const mb = missingBadges(b.missing);
     if (mb) tdMiss.appendChild(mb);
