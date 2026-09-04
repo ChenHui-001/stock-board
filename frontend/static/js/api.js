@@ -147,6 +147,10 @@
     valueScreen: function (refresh) {
       return request('/api/value/screen' + (refresh ? '?refresh=1' : ''), { timeout: 240000 });
     },
+    // 机会投资（短线策略选股）：后端有 10 分钟缓存，force=true 强制重算
+    opportunity: function (force) {
+      return request('/api/opportunity' + (force ? '?force=1' : ''), { timeout: 240000 });
+    },
     valueWeights: function () {
       return request('/api/value/weights');
     },

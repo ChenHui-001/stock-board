@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, hotspot as hotspot_mod, hotspot_ai, hotspot_search, llm, llmcfg, news as news_mod, reports as reports_mod, scorecfg, service, storage, value_screener, valuecfg
+from . import analysis, hotspot as hotspot_mod, hotspot_ai, hotspot_search, llm, llmcfg, news as news_mod, opportunity_screener, reports as reports_mod, scorecfg, service, storage, value_screener, valuecfg
 from .api_deps import (
 REPORT_SCHEMA_VERSION,
 _BLANK_LLM_REASON_RE,  # noqa: F401
@@ -358,6 +358,21 @@ async def value_screen(refresh: bool = Query(False)) -> dict[str, Any]:
         return result
     except Exception as exc:  # noqa: BLE001
         raise _fail(exc, "价值选股运行失败") from exc
+
+
+# ------------------------------------------------------------------ 机会投资选股
+
+@router.get("/opportunity", response_model=schemas.OpportunityResp)
+async def opportunity_screen(refresh: bool = Query(False)) -> dict[str, Any]:
+    """A股快速轮动短线筛选 V8.0：情绪四档 + 板块五阶段 + 四维评分 + 三重准入。
+
+    结果聚合缓存 10 分钟；refresh=1 强制重算（逐股拉资金流/120日K/5分钟K，较慢）。
+    无达标标的时 empty=true，empty_reason=【今日无符合条件标的，空仓优于强行交易】。
+    """
+    try:
+        return await opportunity_screener.run_screen(force=refresh)
+    except Exception as exc:  # noqa: BLE001
+        raise _fail(exc, "机会投资选股运行失败") from exc
 
 
 @router.get("/value/weights", response_model=schemas.ValueWeightsResp)

@@ -5707,3 +5707,209 @@ a.hotspot-title:hover {
 .card-title .svg-icon { margin-right: 4px; color: var(--accent); }
 .sector-heat-icon .svg-icon { color: var(--up); }
 .modal-close .svg-icon { display: block; }
+
+/* ===================== 机会投资页（.opp- 前缀） ===================== */
+.page-opportunity {
+  padding: 16px 20px 28px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+.opp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.opp-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.opp-title .svg-icon { color: var(--up); }
+.opp-head-right { display: flex; align-items: center; gap: 8px; }
+.opp-gen { font-size: 12px; color: var(--text-faint); margin-bottom: 10px; }
+.opp-error {
+  margin: 24px auto; max-width: 640px; padding: 14px 18px;
+  background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: var(--radius); color: var(--down); font-size: 13.5px;
+}
+.opp-section-title { font-size: 16px; font-weight: 600; margin: 20px 0 10px; }
+
+/* 通用卡片 */
+.opp-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.opp-card-title { font-size: 14.5px; font-weight: 600; margin-bottom: 8px; }
+
+/* 小徽章 */
+.opp-chip {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 12px; line-height: 1.5; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.opp-flat { background: rgba(128, 128, 128, 0.15); color: var(--text-dim); border-color: rgba(128, 128, 128, 0.25); }
+.opp-hl { background: rgba(239, 68, 68, 0.16); color: var(--up); border-color: rgba(239, 68, 68, 0.4); font-weight: 600; }
+.opp-up { background: rgba(239, 68, 68, 0.1); color: var(--up); border-color: rgba(239, 68, 68, 0.25); }
+.opp-warn { background: rgba(245, 158, 11, 0.14); color: var(--warn); border-color: rgba(245, 158, 11, 0.35); }
+.opp-down { background: rgba(34, 197, 94, 0.12); color: var(--down); border-color: rgba(34, 197, 94, 0.3); }
+.opp-blue { background: rgba(59, 130, 246, 0.14); color: #3b82f6; border-color: rgba(59, 130, 246, 0.35); }
+
+/* 「⚠ 数据缺失」黄底小 chip */
+.opp-missing-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.opp-missing {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px; border-radius: 4px;
+  font-size: 11.5px;
+  background: rgba(245, 158, 11, 0.12); color: var(--warn);
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+}
+
+/* 市场状态卡 */
+.opp-market-head {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 10px; margin-bottom: 10px;
+}
+.opp-emo {
+  padding: 3px 12px; font-size: 13px; font-weight: 700; letter-spacing: 1px;
+}
+.opp-emo-big { font-size: 15px; padding: 4px 14px; }
+.opp-emo-a { background: rgba(239, 68, 68, 0.18); color: var(--up); border-color: rgba(239, 68, 68, 0.45); }
+.opp-emo-b { background: rgba(245, 158, 11, 0.18); color: var(--warn); border-color: rgba(245, 158, 11, 0.45); }
+.opp-emo-c { background: rgba(250, 204, 21, 0.16); color: #ca8a04; border-color: rgba(250, 204, 21, 0.45); }
+.opp-emo-d { background: rgba(128, 128, 128, 0.15); color: var(--text-dim); border-color: rgba(128, 128, 128, 0.3); }
+.opp-market-name { font-size: 15px; font-weight: 600; }
+.opp-market-pos { font-size: 12.5px; color: var(--text-faint); padding-left: 10px; border-left: 1px solid var(--line); }
+.opp-market-pos b { color: var(--text); }
+
+/* 指标一行 / 2x4 网格 */
+.opp-metrics { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.opp-metrics-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 8px 12px;
+}
+.opp-metric { min-width: 72px; }
+.opp-metric-label { font-size: 11.5px; color: var(--text-faint); margin-bottom: 2px; }
+.opp-metric-value { font-size: 13.5px; font-weight: 600; font-family: var(--mono, monospace); }
+.opp-metric-value.up { color: var(--up); }
+.opp-metric-value.down { color: var(--down); }
+
+/* 表格（板块周期 / 妖股基因 / 交易计划） */
+.opp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.opp-table th, .opp-table td {
+  padding: 6px 10px; text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.opp-table thead th {
+  font-size: 11.5px; font-weight: 500; color: var(--text-faint);
+}
+.opp-table tbody tr:last-child td { border-bottom: none; }
+.opp-table-sm { font-size: 12.5px; }
+.opp-table-sm th, .opp-table-sm td { padding: 4px 8px; }
+.opp-td-name { font-weight: 600; }
+.opp-td-got { white-space: nowrap; font-family: var(--mono, monospace); }
+.opp-td-note { color: var(--text-faint); font-size: 12px; }
+.opp-td-miss { max-width: 260px; }
+.opp-td-miss .opp-missing-row { margin-top: 2px; }
+
+/* 候选卡 */
+.opp-cand { border-left: 3px solid var(--line); }
+.opp-cand-head {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px;
+}
+.opp-cand-id { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.opp-rank { background: var(--accent); color: #fff; font-weight: 700; }
+.opp-cand-name { font-size: 16px; font-weight: 700; font-family: var(--mono, monospace); }
+.opp-cand-quote { display: flex; align-items: baseline; gap: 8px; }
+.opp-cand-price { font-size: 18px; font-weight: 700; font-family: var(--mono, monospace); }
+.opp-cand-chg { font-size: 13.5px; font-weight: 600; font-family: var(--mono, monospace); }
+.opp-cand-chg.up { color: var(--up); }
+.opp-cand-chg.down { color: var(--down); }
+.opp-cand-chg.flat { color: var(--text-faint); }
+.opp-act-row { margin: 8px 0 4px; }
+.opp-act-buy { background: rgba(239, 68, 68, 0.9); color: #fff; font-weight: 700; padding: 3px 12px; }
+.opp-act-watch { background: rgba(245, 158, 11, 0.85); color: #fff; font-weight: 600; padding: 3px 12px; }
+.opp-act-skip { background: rgba(128, 128, 128, 0.35); color: #fff; padding: 3px 12px; }
+
+/* 评分行 */
+.opp-score-row {
+  display: flex; flex-wrap: wrap; gap: 8px 22px;
+  padding: 10px 0; margin-top: 6px;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.opp-score-item { min-width: 64px; }
+.opp-score-label { font-size: 11.5px; color: var(--text-faint); }
+.opp-score-value { font-size: 14px; font-weight: 700; font-family: var(--mono, monospace); position: relative; }
+.opp-score-value.up { color: var(--up); }
+.opp-stars { color: var(--warn); font-size: 12px; letter-spacing: 1px; }
+.opp-score-est {
+  display: block; font-size: 10px; font-weight: 400;
+  color: var(--text-faint); letter-spacing: 0;
+}
+
+/* 三重准入 */
+.opp-gates { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.opp-gates-title { font-size: 12px; color: var(--text-faint); }
+
+/* 子信息行 */
+.opp-sub-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-top: 10px;
+}
+.opp-sub-label { font-size: 12px; color: var(--text-faint); min-width: 60px; }
+.opp-sub-item { font-size: 12.5px; color: var(--text-dim); font-family: var(--mono, monospace); }
+.opp-sub-item.up { color: var(--up); }
+.opp-sub-item.down { color: var(--down); }
+
+/* 卡内小节 */
+.opp-sec { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.opp-sec-title { font-size: 12.5px; font-weight: 600; color: var(--text-dim); margin-bottom: 6px; }
+.opp-basis { font-size: 12px; color: var(--text-faint); line-height: 1.6; margin-bottom: 2px; }
+
+/* 分歧转强勾选列表 */
+.opp-checklist { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.opp-check { font-size: 12.5px; font-family: var(--mono, monospace); }
+.opp-check.ok { color: var(--up); }
+.opp-check.no { color: var(--down); }
+.opp-check.na { color: var(--text-faint); }
+
+/* 交易计划表（两列键值） */
+.opp-plan { font-size: 12.5px; }
+.opp-plan td { padding: 4px 8px; vertical-align: top; }
+.opp-plan-key { width: 84px; color: var(--text-faint); white-space: nowrap; }
+.opp-plan-val { color: var(--text); line-height: 1.5; }
+
+/* 结论段 */
+.opp-conclusion {
+  margin-top: 12px; padding: 8px 12px;
+  background: var(--bg-elev-2);
+  border-left: 3px solid var(--up);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px; color: var(--text-dim); line-height: 1.6;
+}
+
+/* empty 大横幅 */
+.opp-empty-banner {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 36px 20px;
+  text-align: center;
+}
+.opp-empty-title { font-size: 18px; font-weight: 700; color: var(--warn); letter-spacing: 1px; }
+.opp-empty-reason { margin-top: 10px; font-size: 13.5px; color: var(--text-dim); }
+.opp-empty-sub { margin-top: 12px; font-size: 12px; color: var(--text-faint); }
+.opp-empty-line { font-size: 13px; color: var(--text-faint); padding: 12px 0; }
+
+/* 窄屏：指标网格退化为 2 列 */
+@media (max-width: 720px) {
+  .opp-metrics-grid { grid-template-columns: repeat(2, 1fr); }
+}

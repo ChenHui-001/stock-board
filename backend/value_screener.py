@@ -314,7 +314,7 @@ def _merge_candidates(
 
 # 腾讯 qt.gtimg.cn 原始字段索引（实测核对，勿凭记忆改）：
 #   f[30]=行情时间(YYYYMMDDHHMMSS) f[37]=成交额(万) f[38]=换手率%
-#   f[39]=PE(TTM)                  f[43]=振幅%      f[45]=总市值(亿)
+#   f[39]=PE(TTM)                  f[43]=振幅%      f[44]=流通市值(亿) f[45]=总市值(亿)
 #   f[46]=PB                       f[49]=量比
 # 历史坑：曾把 pb 取到 f[49](量比)、volume_ratio 取到 f[43](振幅)，
 # 导致估值分与量价分系统性失真（PE/PB 档位、量比信号全部错值）。
@@ -340,6 +340,7 @@ def _parse_tencent_extra(fields: list[str]) -> dict[str, Any]:
     return {
         "pe": _f(_T_PE),
         "pb": _f(_T_PB),          # ← 修正：PB 在 46（原错取 49=量比）
+        "float_mv": _f(44),       # 流通市值（亿）；机会投资妖股「市值弹性」依赖
         "total_mv": _f(_T_MV),    # 总市值（亿）
         "turnover": _f(_T_TO),
         "volume_ratio": _f(_T_VR),  # ← 修正：量比在 49（原错取 43=振幅）

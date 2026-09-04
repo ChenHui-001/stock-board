@@ -179,6 +179,22 @@ class ValueScreenResp(_AllowExtra):
     """GET /api/value/screen —— 价值选股聚合结果（市场环境/板块强度/分级池等）。"""
 
 
+class OpportunityResp(_AllowExtra):
+    """GET /api/opportunity —— 机会投资筛选 V8.0 聚合结果。
+
+    松散类型 + 全默认值：筛选器各层对缺失数据按【数据缺失】标注而非报错，
+    极端情况下 market/boards/candidates 可为空壳，不触发 ResponseValidationError。
+    """
+
+    generated_at: str = ""
+    market: dict[str, Any] = {}
+    boards: list[dict[str, Any]] = []
+    empty: bool = False
+    empty_reason: str = ""
+    candidates: list[dict[str, Any]] = []
+    scan_summary: dict[str, Any] = {}
+
+
 # ------------------------------------------------------------------ 个股
 
 class StockDetailResp(_AllowExtra):

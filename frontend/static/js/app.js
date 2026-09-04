@@ -5,6 +5,7 @@ import { Charts } from './charts.js';
 import { AI } from './ai.js';
 import { PageSearch } from './page-search.js';
 import { PageValue } from './page-value.js';
+import { PageOpportunity } from './page-opportunity.js';
 import { PageHotspot } from './page-hotspot.js';
 import { PageHome } from './page-home.js';
 import { PageDetail } from './page-detail.js';
@@ -30,6 +31,7 @@ import { Settings } from './settings.js';
     if (parts[0] === 'search') return { route: 'search', param: null };
     if (parts[0] === 'hotspot') return { route: 'hotspot', param: null };
     if (parts[0] === 'value') return { route: 'value', param: null };
+    if (parts[0] === 'opportunity') return { route: 'opportunity', param: null };
     if (parts[0] === 'backtest') return { route: 'backtest', param: null };
     return { route: 'home', param: null };
   }
@@ -39,6 +41,7 @@ import { Settings } from './settings.js';
     if (state.route === 'stock') return PageDetail;
     if (state.route === 'hotspot') return PageHotspot;
     if (state.route === 'value') return PageValue;
+    if (state.route === 'opportunity') return PageOpportunity;
     if (state.route === 'backtest') return PageBacktest;
     return PageHome;
   }
@@ -96,6 +99,8 @@ import { Settings } from './settings.js';
       PageHotspot.mount();
     } else if (state.route === 'value') {
       PageValue.mount();
+    } else if (state.route === 'opportunity') {
+      PageOpportunity.mount();
     } else if (state.route === 'backtest') {
       PageBacktest.mount();
     } else {
