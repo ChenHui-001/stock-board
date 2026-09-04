@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from tests._common import *  # noqa: F401,F403  公共导入见 tests/_common.py
+import asyncio
 from backend import opportunity_screener as ops
 
 
@@ -54,45 +55,60 @@ def test_board_stats_stages() -> None:
                 "lianban": lb, "seal_amount": 2e8 if lb == 3 else 1e7,
                 "change_pct": 9.9}
                for lb in (3, 1, 1, 1, 1)]
-    bstats = ops._board_stats(
-        zt_rows, [{"hybk": "AI"}],
-        [{"board": "AI", "change_pct": 4.0}], index_chg=1.0,
-        board_flow={"AI": {"name": "AI", "chg": 4.0, "main_today": 1.2e9,
-                           "main_5d": 3e9, "rank": 2}})
+    flow_ai = {"AI": {"name": "AI", "chg": 4.0, "main_today": 1.2e9,
+                      "main_5d": 3e9, "rank": 2}}
+    hot_ai = [{"board": "AI", "change_pct": 4.0}]
+    cat_hit = {"AI": {"count": 5, "titles": ["文化传媒板块震荡走强"], "latest_time": "09:51"}}
+
+    bstats = asyncio.run(ops._board_stats(
+        zt_rows, [{"hybk": "AI"}], hot_ai, index_chg=1.0,
+        board_flow=flow_ai, catalysts=cat_hit))
     ai = bstats["AI"]
     # 5 涨停 + 最高 3 连板 + 炸板 1 → 发酵期，评分 85
     assert ai["stage"] == "发酵" and ai["stage_score"] == 85, str(ai)
     assert ai["is_ferment"] is True and ai["has_leader"] is True, str(ai)
-    # 资金流已接入：仅消息/产业催化恒缺；资金字段带出（亿元口径）
-    assert ai["missing"] == ["消息/产业催化"], str(ai)
+    # 资金流+催化都有源 → 无任何【数据缺失】标注
+    assert ai["missing"] == [], str(ai)
     assert ai["fund_today"] == 12.0 and ai["fund_5d"] == 30.0, str(ai)
     assert ai["fund_rank"] == 2 and ai["board_chg"] == 4.0, str(ai)
+    assert ai["catalyst"]["count"] == 5, str(ai)
+    # 今日主力≥10亿(20)+五日双正(10)+催化≥3条(10) → 满额抬升
+    assert ai["score"] >= 80, ai["score"]
     assert ai["relative_strength"] == 3.0, str(ai)
-    # 今日主力≥10亿(20分)+五日双正(10分) → 分母 90 下评分显著抬升
-    assert ai["score"] >= 70, ai["score"]
 
-    # 资金流缺失的板块：资金两项如实标【数据缺失】，不编造
-    b_no_flow = ops._board_stats(zt_rows, [{"hybk": "AI"}],
-                                 [{"board": "AI", "change_pct": 4.0}], 1.0, {})
+    # 0 命中 = 查过确无资讯的真实结论，不标【数据缺失】
+    b_zero = asyncio.run(ops._board_stats(
+        zt_rows, [{"hybk": "AI"}], hot_ai, 1.0, flow_ai,
+        {"AI": {"count": 0, "titles": [], "latest_time": None}}))
+    assert b_zero["AI"]["missing"] == [], str(b_zero["AI"])
+    assert b_zero["AI"]["catalyst"]["count"] == 0, str(b_zero["AI"])
+
+    # 检索失败（None）→ 如实标【数据缺失】，不编造
+    b_none = asyncio.run(ops._board_stats(
+        zt_rows, [{"hybk": "AI"}], hot_ai, 1.0, flow_ai, {"AI": None}))
+    assert "消息/产业催化" in b_none["AI"]["missing"], str(b_none["AI"])
+    # 资金流也缺 → 资金两项一并标注
+    b_no_flow = asyncio.run(ops._board_stats(
+        zt_rows, [{"hybk": "AI"}], hot_ai, 1.0, {}, {"AI": None}))
     miss = b_no_flow["AI"]["missing"]
     assert "板块资金流入" in miss and "连续资金流入(板块级)" in miss, str(miss)
 
     # 退潮：无涨停且板块跌幅 < -1%（flow chg 兜底口径；板块经热门榜纳入）
-    b2 = ops._board_stats([], [],
-                          [{"board": "银行", "change_pct": -1.5}], index_chg=0.0,
-                          board_flow={"银行": {"name": "银行", "chg": -2.0,
-                                               "main_today": -5e8, "main_5d": -1e9,
-                                               "rank": 80}})
+    b2 = asyncio.run(ops._board_stats(
+        [], [], [{"board": "银行", "change_pct": -1.5}], index_chg=0.0,
+        board_flow={"银行": {"name": "银行", "chg": -2.0,
+                             "main_today": -5e8, "main_5d": -1e9, "rank": 80}},
+        catalysts={"银行": {"count": 0, "titles": [], "latest_time": None}}))
     assert b2["银行"]["stage"] == "退潮" and b2["银行"]["stage_score"] == 30, str(b2)
 
     # 资金流强势板块（前20名且今日主力>0）无涨停也纳入展示
-    b3 = ops._board_stats([], [], [], index_chg=0.0,
-                          board_flow={"传媒": {"name": "传媒", "chg": 2.3,
-                                               "main_today": 6.2e9, "main_5d": 6.5e9,
-                                               "rank": 1},
-                                      "冷门板块": {"name": "冷门板块", "chg": 0.5,
-                                                   "main_today": 1e7, "main_5d": -2e8,
-                                                   "rank": 200}})
+    b3 = asyncio.run(ops._board_stats(
+        [], [], [], index_chg=0.0,
+        board_flow={"传媒": {"name": "传媒", "chg": 2.3,
+                             "main_today": 6.2e9, "main_5d": 6.5e9, "rank": 1},
+                    "冷门板块": {"name": "冷门板块", "chg": 0.5,
+                                 "main_today": 1e7, "main_5d": -2e8, "rank": 200}},
+        catalysts={}))
     assert "传媒" in b3, list(b3)
     assert "冷门板块" not in b3, list(b3)
     assert b3["传媒"]["zt_count"] == 0, str(b3["传媒"])

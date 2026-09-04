@@ -5913,3 +5913,16 @@ a.hotspot-title:hover {
 @media (max-width: 720px) {
   .opp-metrics-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* 机会投资：板块催化列（最新催化标题，单行截断+悬浮全文） */
+.opp-table td.opp-td-cat {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-2, inherit);
+}
+.opp-table td.opp-td-cat.opp-cat-hit {
+  color: var(--up);
+}

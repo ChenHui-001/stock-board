@@ -26,12 +26,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from . import cache as cache_mod, service
 from .providers import registry
 from .providers.base import fetch
+from .providers.eastmoney import clean_em, search_articles
 from .utils import is_trading_now
 # 复用价值筛选器已验证的数据源与工具（同仓库内私有函数复用，行为一致）
 from .value_screener import (
@@ -218,20 +219,83 @@ async def _fetch_board_flow(limit: int = 100) -> dict[str, dict[str, Any]]:
         return {}
 
 
+# ------------------------------------------------------------------ 板块消息/产业催化（东财全文检索）
+
+_catalyst_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+_CATALYST_TTL = 1800.0  # 新闻催化 30 分钟缓存，足够新鲜且不刷接口
+
+
+async def _fetch_catalysts(
+    names: list[str], sem: asyncio.Semaphore | None = None,
+) -> dict[str, dict[str, Any] | None]:
+    """板块消息/产业催化判定：东财全文检索板块名，统计近 24h 命中文章。
+
+    返回 {板块名: 结果}：
+      - {"count": N>0, "titles": [≤2条标题], "latest_time": "HH:MM"} → 有催化
+      - {"count": 0, ...} → 查询成功但确无近期资讯（真实结论，不算缺失）
+      - None → 检索失败（标【数据缺失】，不编造）
+    """
+    out: dict[str, dict[str, Any] | None] = {}
+    todo: list[str] = []
+    now_ts = time.time()
+    cutoff = now_ts - _CATALYST_TTL
+    for n in names:
+        hit = _catalyst_cache.get(n)
+        if hit and hit[0] > cutoff:
+            out[n] = hit[1]
+        else:
+            todo.append(n)
+    if not todo:
+        return out
+    sem = sem or asyncio.Semaphore(4)
+    cutoff_dt = datetime.now() - timedelta(hours=24)
+
+    async def _one(name: str) -> None:
+        try:
+            async with sem:
+                rows = await search_articles(name, page_size=10)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("板块催化检索 %s 失败: %s", name, exc)
+            _catalyst_cache[name] = (now_ts, None)
+            out[name] = None
+            return
+        recent: list[tuple[str, str]] = []
+        for r in rows:
+            d = str(r.get("date") or "")
+            try:
+                dt = datetime.strptime(d[:19], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+            if dt >= cutoff_dt:
+                recent.append((d[11:16], clean_em(r.get("title") or "")))
+        res = {
+            "count": len(recent),
+            "titles": [t for _hm, t in recent[:2]],
+            "latest_time": recent[0][0] if recent else None,
+        }
+        _catalyst_cache[name] = (now_ts, res)
+        out[name] = res
+
+    await asyncio.gather(*[_one(n) for n in todo])
+    return out
+
+
 # ------------------------------------------------------------------ 第二层：板块周期五阶段
 
-def _board_stats(
+async def _board_stats(
     zt_rows: list[dict[str, Any]], zb_rows: list[dict[str, Any]],
     hot_rows: list[dict[str, Any]], index_chg: float | None,
     board_flow: dict[str, dict[str, Any]] | None = None,
+    catalysts: dict[str, dict[str, Any] | None] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """按板块聚合涨停/炸板/热门/资金流数据，输出板块周期阶段与 0-100 评分。
+    """按板块聚合涨停/炸板/热门/资金流/消息催化数据，输出板块周期阶段与 0-100 评分。
 
-    板块评分模型（需求第四节 100 分）：「板块资金流入 20 / 连续资金流入 10」
-    已接入东财板块资金流（push2delay 实测，f62 今日 / f164 五日主力净流入），
-    可用维度合计 90 分（涨停梯队15+龙头强度15+相对大盘10+扩散5+分歧转强5+
-    成交代理10+今日资金20+连续资金10），总分 = 可得分 / 90 * 100；
-    仅「消息/产业催化 10」无数据源，恒标【数据缺失】，不编造。
+    板块评分模型（需求第四节，100 分制全量落地）：
+      涨停梯队15+龙头强度15+相对大盘10+扩散5+分歧转强5+成交代理10
+      +今日资金20+连续资金10（push2delay 实测 f62/f164）
+      +消息产业催化10（东财全文检索板块名，近24h命中：≥3条=10分/1-2条=6分/0条=0分）
+    「查过但 0 命中」是真实结论不算缺失；仅检索失败标【数据缺失】。
+    catalysts 显式传入时直接使用（测试/复用），None 时内部并发拉取（带30分钟缓存）。
     资金流榜中主力净流入强（前 20 名且 >0）但暂无涨停的板块也纳入展示。
     """
     board_flow = board_flow or {}
@@ -257,6 +321,7 @@ def _board_stats(
     flow_strong = {f["name"] for f in board_flow.values()
                    if (f.get("rank") or 999) <= 20 and (f.get("main_today") or 0) > 0}
     board_names = set(zt_agg) | set(hot_agg) | flow_strong
+    cats = catalysts if catalysts is not None else await _fetch_catalysts(list(board_names))
     for b in board_names:
         fl = board_flow.get(b) or {}
         ztrs = zt_agg.get(b, [])
@@ -309,7 +374,7 @@ def _board_stats(
         if hot_avg is not None:
             got += max(0, min(10, hot_avg * 2))
         # 板块资金流入 20（东财 f62 今日主力净流入，元）
-        missing = ["消息/产业催化"]  # 恒缺（无数据源），不编造
+        missing: list[str] = []
         mt, m5d = fl.get("main_today"), fl.get("main_5d")
         if mt is not None:
             got += (20 if mt >= 1e9 else 16 if mt >= 5e8
@@ -321,7 +386,15 @@ def _board_stats(
             got += 10 if (m5d > 0 and (mt or 0) > 0) else 5 if m5d > 0 else 0
         else:
             missing.append("连续资金流入(板块级)")
-        score = round(got / 90 * 100, 1)
+        # 消息/产业催化 10（东财全文检索板块名，近24h命中；0命中=真实结论不标缺失）
+        cat = cats.get(b)
+        if cat is None:
+            missing.append("消息/产业催化")
+        elif cat["count"] >= 3:
+            got += 10
+        elif cat["count"] >= 1:
+            got += 6
+        score = round(min(100.0, got), 1)
 
         out[b] = {
             "name": b, "score": score, "stage": stage, "stage_score": stage_score,
@@ -332,6 +405,7 @@ def _board_stats(
             "fund_5d": round(m5d / 1e8, 2) if m5d is not None else None,    # 5日主力净流入（亿）
             "fund_rank": fl.get("rank"),                                    # 资金流榜名次
             "board_chg": flow_chg,                                          # 板块涨跌幅 %
+            "catalyst": cat,   # {"count","titles","latest_time"} 或 None=检索失败
             "hot_avg": round(hot_avg, 2) if hot_avg is not None else None,
             "relative_strength": round(rel, 2) if rel is not None else None,
             "missing": missing,
@@ -903,8 +977,8 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     market = _market_emotion(zt, zb, dt, indices, hot)
 
     # ---- 第二层：板块周期
-    bstats_map = _board_stats(zt.get("rows") or [], zb.get("rows") or [],
-                              hot, index_chg, board_flow)
+    bstats_map = await _board_stats(zt.get("rows") or [], zb.get("rows") or [],
+                                    hot, index_chg, board_flow)
     hot_rank = {b["name"]: i for i, b in enumerate(
         sorted(bstats_map.values(), key=lambda x: x["score"], reverse=True))}
     for b in bstats_map.values():

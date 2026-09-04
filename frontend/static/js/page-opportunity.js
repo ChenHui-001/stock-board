@@ -150,7 +150,7 @@ function renderBoards(boards) {
   const table = U.el('table', 'opp-table');
   const thead = U.el('thead');
   const trh = U.el('tr');
-  ['板块', '评分', '阶段', '涨停数', '龙头', '今日主力', '5日主力', '数据缺失'].forEach(function (h) {
+  ['板块', '评分', '阶段', '涨停数', '龙头', '今日主力', '5日主力', '催化', '数据缺失'].forEach(function (h) {
     trh.appendChild(U.el('th', '', h));
   });
   thead.appendChild(trh);
@@ -171,6 +171,17 @@ function renderBoards(boards) {
                         fmt(b.fund_today, mv)));
     tr.appendChild(U.el('td', b.fund_5d == null ? '' : U.tone(b.fund_5d),
                         fmt(b.fund_5d, mv)));
+    // 消息/产业催化：count>0 显示最新标题（title 悬浮看全部），0 条或检索失败 → —
+    const tdCat = U.el('td', 'opp-td-cat');
+    const cat = b.catalyst;
+    if (cat && cat.count > 0 && cat.titles && cat.titles.length) {
+      tdCat.textContent = cat.titles[0];
+      tdCat.title = cat.titles.join('\n');
+      tdCat.classList.add('opp-cat-hit');
+    } else {
+      tdCat.textContent = '—';
+    }
+    tr.appendChild(tdCat);
     const tdMiss = U.el('td', 'opp-td-miss');
     const mb = missingBadges(b.missing);
     if (mb) tdMiss.appendChild(mb);
