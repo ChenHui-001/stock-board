@@ -100,19 +100,26 @@ class OkResp(_AllowExtra):
 # ------------------------------------------------------------------ AI 评分 / 价值选股权重
 
 class ScoreWeightsResp(_AllowExtra):
-    """GET/POST /api/score/weights、POST reset —— 三维分面权重（动态维度键 + 元字段）。"""
+    """GET/POST /api/score/weights、POST reset —— 三维分面权重（动态维度键 + 元字段）。
 
-    range: list[float]
-    source: str
+    POST 保存与 reset 只回权重 dict（历史契约），GET 才带 range/source；默认值松散化。
+    """
+
+    range: list[float] = []
+    source: str = ""
 
 
 class ValueWeightsResp(_AllowExtra):
-    """GET/POST /api/value/weights、POST reset —— 价值选股维度权重。"""
+    """GET/POST /api/value/weights、POST reset —— 价值选股维度权重。
 
-    range: list[float]
-    maxes: dict[str, Any]
-    base_total: float
-    source: str
+    全字段默认值：POST 保存与 reset 只回权重 dict（历史契约），GET 才带
+    range/maxes/base_total/source 元信息；松散化避免 ResponseValidationError。
+    """
+
+    range: list[float] = []
+    maxes: dict[str, Any] = {}
+    base_total: float = 0.0
+    source: str = ""
 
 
 # ------------------------------------------------------------------ 自选股

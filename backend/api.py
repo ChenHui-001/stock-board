@@ -207,14 +207,15 @@ async def score_weights_get() -> dict[str, Any]:
 async def score_weights_save(body: dict[str, Any]) -> dict[str, Any]:
     """保存权重（自动 clamp 到合法范围），保存后 AI 当日缓存作废。"""
     w = scorecfg.save_weights(body)
-    return {"ok": True, **w}
+    source = "db" if await storage.a_get_kv("score_weights") else "env"
+    return {**w, "ok": True, "range": [scorecfg._MIN, scorecfg._MAX], "source": source}
 
 
 @router.post("/score/weights/reset", response_model=schemas.ScoreWeightsResp)
 async def score_weights_reset() -> dict[str, Any]:
     """清除界面配置，回退到环境变量权重。"""
     w = scorecfg.reset_weights()
-    return {"ok": True, **w}
+    return {**w, "ok": True, "range": [scorecfg._MIN, scorecfg._MAX], "source": "env"}
 
 
 @router.post("/llm/models", response_model=schemas.LLMModelsResp)
@@ -388,14 +389,19 @@ async def value_weights_get() -> dict[str, Any]:
 async def value_weights_save(body: dict[str, Any]) -> dict[str, Any]:
     """保存权重（自动 clamp 到合法范围），权重变化后选股缓存作废。"""
     w = valuecfg.save_weights(body)
-    return {"ok": True, **w}
+    source = "db" if await storage.a_get_kv("value_weights") else "default"
+    return {**w, "ok": True, "range": [valuecfg._MIN, valuecfg._MAX],
+            "maxes": valuecfg.DIM_MAXES, "base_total": valuecfg.BASE_TOTAL,
+            "source": source}
 
 
 @router.post("/value/weights/reset", response_model=schemas.ValueWeightsResp)
 async def value_weights_reset() -> dict[str, Any]:
     """清除界面权重配置，回退默认 1.0。"""
     w = valuecfg.reset_weights()
-    return {"ok": True, **w}
+    return {**w, "ok": True, "range": [valuecfg._MIN, valuecfg._MAX],
+            "maxes": valuecfg.DIM_MAXES, "base_total": valuecfg.BASE_TOTAL,
+            "source": "default"}
 
 
 @router.get("/stock/{code}", response_model=schemas.StockDetailResp)
