@@ -5946,3 +5946,49 @@ a.hotspot-title:hover {
   color: var(--warn);
   font-weight: 600;
 }
+
+/* 热点追踪：概念 chip 情绪计数直显 + 相对热度底条 */
+.sector-chip {
+  position: relative;
+  overflow: hidden;
+}
+
+.sector-chip-sent {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  gap: 3px;
+}
+
+.sector-chip-sent-bull {
+  color: var(--up);
+}
+
+.sector-chip-sent-bear {
+  color: var(--down);
+}
+
+.sector-chip.active .sector-chip-sent-bull {
+  color: var(--up);
+}
+
+.sector-chip-heatbar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(245, 70, 93, .55), rgba(245, 70, 93, .15));
+  pointer-events: none;
+}
+
+.sector-chip.active .sector-chip-heatbar {
+  background: linear-gradient(90deg, var(--accent), rgba(59, 130, 246, .3));
+}
+
+/* 热点追踪：2 分钟内新快讯高亮（左侧红条 + 微底色） */
+.hotspot-item-fresh {
+  border-left: 3px solid var(--up);
+  background: rgba(245, 70, 93, .04);
+}

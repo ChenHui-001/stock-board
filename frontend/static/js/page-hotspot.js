@@ -166,6 +166,8 @@ import { AI } from './ai.js';
     };
     row.appendChild(allChip);
 
+    // 热度条基准：以当前榜内最高提及数为 100%（chip 底部红条宽度 = 相对热度）
+    const maxTotal = heat.reduce(function (mx, s) { return Math.max(mx, s.total || 0); }, 1);
     heat.slice(0, 12).forEach(function (s) {
       const cls = 'sector-chip' + (state.sector === s.name ? ' active' : '')
         + ' sector-trend-' + (s.trend || 'flat');
@@ -174,7 +176,19 @@ import { AI } from './ai.js';
       const trendLabel = { up: '发酵', down: '退潮', flat: '持平' }[s.trend || 'flat'];
       chip.appendChild(U.el('span', 'sector-chip-trend', trendIcon));
       chip.appendChild(U.el('span', 'sector-chip-name', s.name));
+      // 情绪计数直显：短线用户不用悬浮就能看到利好/利空倾向
+      if (s.bull > 0 || s.bear > 0) {
+        const sent = U.el('span', 'sector-chip-sent');
+        if (s.bull > 0) sent.appendChild(U.el('span', 'sector-chip-sent-bull', '+' + s.bull));
+        if (s.bull > 0 && s.bear > 0) sent.appendChild(document.createTextNode(' '));
+        if (s.bear > 0) sent.appendChild(U.el('span', 'sector-chip-sent-bear', '-' + s.bear));
+        chip.appendChild(sent);
+      }
       chip.appendChild(U.el('span', 'sector-chip-count', String(s.total)));
+      // 相对热度底条
+      const bar = U.el('i', 'sector-chip-heatbar');
+      bar.style.width = Math.max(8, Math.round((s.total || 0) / maxTotal * 100)) + '%';
+      chip.appendChild(bar);
       chip.title = s.name + '：' + s.total + ' 条，趋势' + trendLabel
         + '（利好 ' + s.bull + ' / 利空 ' + s.bear + ' / 中性 ' + s.neutral + '）';
       chip.onclick = function () {
@@ -217,7 +231,7 @@ import { AI } from './ai.js';
 
     // 时间窗：后端支持 5~120 分钟，改动即按新窗口重取
     const range = U.el('div', 'hotspot-range');
-    [15, 30, 60].forEach(function (m) {
+    [5, 15, 30, 60].forEach(function (m) {
       const b = U.el('button', 'range-btn' + (state.minutes === m ? ' active' : ''), m + ' 分钟');
       b.title = '只看最近 ' + m + ' 分钟的快讯';
       b.onclick = function () {
@@ -432,12 +446,13 @@ import { AI } from './ai.js';
       const list = buckets[g.key];
       if (!list.length) return;
       host.appendChild(U.el('div', 'hotspot-group-label', g.label + ' · ' + list.length + ' 条'));
-      list.forEach(function (it) { host.appendChild(renderItem(it)); });
+      const fresh = g.key === 'just';  // 2 分钟内新快讯高亮，短线扫读一眼定位最新
+      list.forEach(function (it) { host.appendChild(renderItem(it, fresh)); });
     });
   }
 
-  function renderItem(it) {
-    const row = U.el('div', 'hotspot-item');
+  function renderItem(it, fresh) {
+    const row = U.el('div', 'hotspot-item' + (fresh ? ' hotspot-item-fresh' : ''));
 
     const time = U.el('div', 'hotspot-time', (it.time || '').slice(11, 16) || '--');
     row.appendChild(time);
