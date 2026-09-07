@@ -450,6 +450,47 @@ def _stage_of(bstats: dict[str, Any] | None) -> tuple[str, float]:
     return bstats.get("stage") or "未知", float(bstats.get("stage_score") or 0.0)
 
 
+# ------------------------------------------------------------------ 候选实时资金（push2delay）
+
+async def _fetch_main_inflow(cands: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """push2delay 批量实时资金：f62 主净 / f184 净比 / f8 换手 / f10 量比（2026-09-07 实测）。
+
+    背景：push2 主站频控时 registry().quotes 会自动切腾讯源，而腾讯 Quote
+    缺主力资金字段 → 硬筛选「主净>1000万」全军覆没（60/60 被灭）。
+    push2delay 同接口可用（延迟约 1 分钟，对分歧转强买点判断可接受）。
+    失败返回 {} 不阻塞（维持 registry 行情现状），个股级字段仅非 None 覆盖。
+    """
+    if not cands:
+        return {}
+    secids = ",".join(("1" if c["market"] == "SH" else "0") + "." + c["code"]
+                      for c in cands)
+    try:
+        resp = await fetch(
+            "https://push2delay.eastmoney.com/api/qt/ulist.np/get",
+            headers={"Referer": "https://quote.eastmoney.com/"},
+            params={"fltt": 2, "invt": 2, "fields": "f12,f8,f10,f62,f184",
+                    "secids": secids, "ut": "fa5fd1943c7b386f172d6893dbfba10b"},
+        )
+        rows = ((resp.json() or {}).get("data") or {}).get("diff") or []
+        if isinstance(rows, dict):
+            rows = list(rows.values())
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            code = str(r.get("f12") or "")
+            if len(code) != 6:
+                continue
+            out[code] = {
+                "main_net_inflow": to_float(r.get("f62")),
+                "main_net_pct": to_float(r.get("f184")),
+                "turnover": to_float(r.get("f8")),
+                "volume_ratio": to_float(r.get("f10")),
+            }
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("候选实时资金获取失败：%s", exc)
+        return {}
+
+
 # ------------------------------------------------------------------ 第四层-①：妖股基因 100
 
 def _count_zt(bars: list[dict[str, Any]], days: int) -> tuple[int, int]:
@@ -1038,26 +1079,37 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
                     "main_net_inflow": q.main_net_inflow, "main_net_pct": q.main_net_pct,
                 })
             c.update(extra_map.get(f"{c['code']}.{c['market']}") or {})
+        # push2delay 实时资金兜底：registry 频控切腾讯源时补回主净/净比/换手/量比
+        main_map = await _fetch_main_inflow(cands)
+        for c in cands:
+            for k, v in (main_map.get(c["code"]) or {}).items():
+                if v is not None:
+                    c[k] = v
 
     # ---- 第三层：硬筛选（需求第六节；5/20日涨幅在深度数据后复核）
     passed: list[dict[str, Any]] = []
+    hard_dropped: dict[str, int] = {}  # 淘汰原因 → 只数（透明化：让用户看到卡在哪关）
     for c in cands:
         chg = c.get("change_pct")
         to = c.get("turnover")
         vr = c.get("volume_ratio")
         amt = c.get("amount")
         main_in = c.get("main_net_inflow")
+        reasons: list[str] = []
         if chg is None or not (3 <= chg <= 8):
-            continue  # 涨停/涨停上方不属于「分歧转强」买点区间
+            reasons.append("涨幅不在3~8%")  # 涨停/涨停上方不属于「分歧转强」买点区间
         if to is None or not (5 <= to <= 20):
-            continue
+            reasons.append("换手不在5~20%")
         if vr is None or vr < 2:
-            continue
+            reasons.append("量比<2")
         if amt is None or amt < 2e8:
-            continue
+            reasons.append("成交额<2亿")
         if main_in is None or main_in <= 1e7:
-            continue
-        passed.append(c)
+            reasons.append("主力净流入≤1000万")
+        for r in reasons:
+            hard_dropped[r] = hard_dropped.get(r, 0) + 1
+        if not reasons:
+            passed.append(c)
 
     # ---- 第四层：深度数据 + 四维评分
     sem = asyncio.Semaphore(6)
@@ -1186,18 +1238,38 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
         r.pop("_sort", None)
         r.pop("_all_pass", None)
     empty = not final
+    # 观察名单：未全过三重准入但综合分≥80且无排除项（action=观察），≤2 只。
+    # 策略「宁缺毋滥」的透明化——让用户看到今日最接近达标者与差距，
+    # 明确不构成买入建议；与 final 互斥（not _all_pass）。
+    watch = [r for r in results if not r["_all_pass"] and r["action"] == "观察"][:2]
+    for i, r in enumerate(watch, 1):
+        r["rank"] = i
+        r.pop("_sort", None)
+        r.pop("_all_pass", None)
+    scan = {
+        "candidate_total": len(cands), "hard_passed": len(passed),
+        "deep_scored": len(filtered), "final": len(final),
+        "hard_dropped": dict(sorted(hard_dropped.items(),
+                                    key=lambda kv: kv[1], reverse=True)),
+    }
+    empty_reason = "【今日无符合条件标的，空仓优于强行交易】" if empty else ""
+    if empty:
+        if hard_dropped:
+            top2 = "、".join(f"{k}({v}只)" for k, v in
+                             list(hard_dropped.items())[:2])
+            empty_reason += f" 硬筛淘汰主因：{top2}。"
+        if watch:
+            empty_reason += (f" 最接近达标者已列入观察（{len(watch)} 只，见下方），"
+                             "仅盯盘参考，不构成买入建议。")
     result = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "market": market,
         "boards": boards_top,
         "empty": empty,
-        "empty_reason": ("【今日无符合条件标的，空仓优于强行交易】"
-                         if empty else ""),
+        "empty_reason": empty_reason,
         "candidates": final,
-        "scan_summary": {
-            "candidate_total": len(cands), "hard_passed": len(passed),
-            "deep_scored": len(filtered), "final": len(final),
-        },
+        "watchlist": watch,
+        "scan_summary": scan,
     }
     _cache.put(key, result, _CACHE_TTL)
     return result

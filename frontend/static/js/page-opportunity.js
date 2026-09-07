@@ -456,8 +456,20 @@ function renderData(data) {
   const root = viewEl.querySelector('.page-opportunity');
 
   if (data.generated_at) {
-    root.appendChild(U.el('div', 'opp-gen',
-      '生成于 ' + data.generated_at + (state.refreshing ? '' : ' · 缓存10分钟')));
+    const ss = data.scan_summary || {};
+    const funnel = (ss.candidate_total !== undefined)
+      ? ' · 扫描' + ss.candidate_total + ' → 硬筛' + (ss.hard_passed ?? 0)
+        + ' → 深评' + (ss.deep_scored ?? 0) + ' → 推荐' + (ss.final ?? 0)
+      : '';
+    const gen = U.el('div', 'opp-gen',
+      '生成于 ' + data.generated_at + funnel + (state.refreshing ? '' : ' · 缓存10分钟'));
+    const drops = ss.hard_dropped || {};
+    const dropTxt = Object.keys(drops).map(function (k) { return k + ' ' + drops[k] + '只'; }).join('，');
+    if (dropTxt) {
+      gen.title = '硬筛淘汰分布（一只股票可命中多条）：' + dropTxt;
+      gen.style.cursor = 'help';
+    }
+    root.appendChild(gen);
   }
 
   const mkt = renderMarket(data.market);
@@ -476,6 +488,13 @@ function renderData(data) {
     data.candidates.forEach(function (c) { root.appendChild(renderCandidate(c)); });
   } else {
     root.appendChild(U.el('div', 'opp-empty-line', '暂无候选数据'));
+  }
+
+  // 观察名单：未过三重准入的次优候选（后端保证 ≤2 只），仅供盯盘
+  if (data.watchlist && data.watchlist.length) {
+    root.appendChild(U.el('div', 'opp-section-title',
+      '今日观察 · 未过三重准入（盯盘参考，不构成买入建议）'));
+    data.watchlist.forEach(function (c) { root.appendChild(renderCandidate(c)); });
   }
 }
 
