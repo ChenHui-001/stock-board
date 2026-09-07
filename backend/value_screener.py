@@ -1273,6 +1273,17 @@ def _buy_score(profile: dict[str, Any], scores: dict[str, Any]) -> dict[str, Any
     return {"score": pts, "detail": f"量价+资金+板块+情绪+{pe_note}"}
 
 
+# trade_score（交易排序分）合成口径：
+#   trade = total × _TRADE_W_TOTAL + buy × _TRADE_W_BUY
+#   - total  : 综合评分（0~BASE_TOTAL），完全由用户可调的 7 维权重驱动（见 _composite_score）
+#   - buy    : _buy_score 择时买点分（0~100），固定择时口径，不吃维度权重
+# 调整历史：2025-XX 由 0.7/0.3 调整为 0.85/0.15——用户反馈「想让权重话语权更大」，
+#   买点分占比过高会稀释用户自定义维度的排序影响；保留 15% 给买点分以保底择时信息量。
+# 注意：_TRADE_W_TOTAL + _TRADE_W_BUY 应恒等于 1.0。
+_TRADE_W_TOTAL = 0.85  # 综合评分（吃维度权重）在 trade_score 中的占比
+_TRADE_W_BUY = 0.15    # 择时买点分（不吃权重）在 trade_score 中的占比
+
+
 def _composite_score(scores: dict[str, Any], weights: dict[str, float]) -> float:
     """综合评分：各维度按相对权重做归一化加权平均，再减风险扣分。
 
@@ -1430,7 +1441,9 @@ async def _analyze_one(
     w = weights or valuecfg.get_weights()
     total = _composite_score(scores, w)
     buy = _buy_score(profile, scores)
-    trade = round(total * 0.7 + buy["score"] * 0.3, 1)
+    # trade_score 排序分：以综合评分（吃 7 维用户权重）为主，择时买点分为辅。
+    # 比例见模块级常量 _TRADE_W_TOTAL / _TRADE_W_BUY（当前 0.85/0.15）。
+    trade = round(total * _TRADE_W_TOTAL + buy["score"] * _TRADE_W_BUY, 1)
     grade, grade_name = _grade(total)
     completeness = _completeness(profile)
     signal = _signal(profile, total, buy["score"], risk["score"],
