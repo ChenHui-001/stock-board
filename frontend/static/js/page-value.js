@@ -388,11 +388,10 @@ import { API } from './api.js';
       state._weightsUI.status.textContent = '保存中…';
       try {
         await API.valueWeightsSave(body);
-        state._weightsUI.status.textContent = '✓ 已保存';
-        // 权重改了 → 缓存指纹变了,30s 后再拉一次
-        setTimeout(function () {
-          state._weightsUI.status.textContent = '';
-        }, 4000);
+        // 权重入库 → 后端缓存键（含权重指纹）自动作废，重拉一次选股即可按
+        // 新权重重算（GET /api/value/screen 不带 refresh 即可，无需 force）。
+        // 重算约几十秒：按钮保持禁用防连点，状态栏挂「重算中」直到新数据渲染完成。
+        await reloadAfterWeightsChange('✓ 已保存，正在按新权重重算…');
       } catch (e) {
         state._weightsUI.status.textContent = '✗ ' + (e.message || '保存失败');
       } finally {
@@ -414,8 +413,9 @@ import { API } from './api.js';
             inputs[k].num.value = cfg[k];
           }
         });
-        state._weightsUI.status.textContent = '✓ 已恢复默认';
-        setTimeout(function () { state._weightsUI.status.textContent = ''; }, 4000);
+        // 恢复默认同样改变权重指纹 → 触发一次按新权重（默认权重）的重算，
+        // 重算期间的「正在重算…」提示由 reloadAfterWeightsChange 挂到状态栏
+        await reloadAfterWeightsChange('✓ 已恢复默认，正在重算…');
       } catch (e) {
         state._weightsUI.status.textContent = '✗ ' + (e.message || '重置失败');
       } finally {
@@ -423,6 +423,54 @@ import { API } from './api.js';
         resetBtn.disabled = false;
       }
     };
+  }
+
+  // 权重保存 / 恢复默认后，按新权重重新拉取选股数据。
+  // 后端缓存键 = value:screen:{权重指纹}，权重一变旧缓存自动作废，
+  // 因此 GET /api/value/screen 不带 refresh 参数也会重算（无需 force）。
+  // 重算约几十秒：这里刻意不调 skeleton() 清空页面——skeleton 会把权重面板
+  // 连同状态提示一起拆掉——而是让旧数据保持可见、状态栏挂「重算中」，
+  // 新数据到了再整体重绘。防竞态：pageGuard 取新号，重算期间切页（destroy
+  // 或用户切回本页触发的新 load）都会使本次结果失效，安全放弃不渲染。
+  async function reloadAfterWeightsChange(pendingText) {
+    if (!viewEl) return;   // 保存/重置 await 期间已切页：容器已卸载，无需重拉
+    const my = pageGuard.begin();
+    state.loading = true;
+    if (pendingText && state._weightsUI && state._weightsUI.status) {
+      state._weightsUI.status.textContent = pendingText;
+    }
+    try {
+      state.data = await API.valueScreen(false);
+      if (!pageGuard.ok(my)) return;   // 重算期间已切页：放弃提交，不渲染
+      state.error = null;
+      renderData(state.data);
+      // renderData 会重建权重面板（隐藏态），在新面板上给一次完成提示
+      if (state._weightsUI && state._weightsUI.status) {
+        state._weightsUI.status.textContent = '✓ 已按新权重更新';
+        setTimeout(function () {
+          if (state._weightsUI && state._weightsUI.status) {
+            state._weightsUI.status.textContent = '';
+          }
+        }, 4000);
+      }
+    } catch (e) {
+      if (!pageGuard.ok(my)) return;   // 错误画面同样不追到别的页面
+      state.error = e.message || String(e);
+      viewEl.innerHTML = '';
+      viewEl.appendChild(U.el('div', 'val-error', '加载失败: ' + state.error));
+    } finally {
+      if (pageGuard.ok(my)) state.loading = false;
+    }
+  }
+
+  // 当前生效权重的一行式摘要（如「权重 基本面1.5 / 板块1.0 / …」），
+  // 让用户不打开权重面板也能确认本次选股用的权重已生效。
+  function weightsSummary(w) {
+    if (!w) return null;
+    const parts = WEIGHT_FIELDS.map(function (f) {
+      return f.label + (U.isNum(w[f.key]) ? w[f.key] : '1.0');
+    });
+    return U.el('div', 'val-gen', '生效权重  ' + parts.join(' / '));
   }
 
   function renderData(data) {
@@ -434,6 +482,8 @@ import { API } from './api.js';
         '生成于 ' + (data.generated_at || '') +
         (state.refreshing ? '' : ' · 缓存 15 分钟')));
     }
+    const wSum = weightsSummary(data.weights);
+    if (wSum) root.appendChild(wSum);
 
     const mktBan = renderMarketBanner(data.market);
     if (mktBan) root.appendChild(mktBan);

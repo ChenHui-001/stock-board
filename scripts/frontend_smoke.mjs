@@ -350,6 +350,28 @@ for (const [hash, label] of ROUTES) {
   await goto('#/search');
 }
 
+// ---- 价值页：保存权重后必须自动触发选股重新加载（权重 → 指纹 → 缓存作废 → 重拉）
+{
+  await goto('#/value');
+  await sleep(300);   // 等 loadWeights 填好滑块并绑定保存/重置按钮
+  const saveBtn = el('view').querySelector('.val-weights-actions .btn-primary');
+  check('价值页：权重面板与保存按钮已渲染', !!saveBtn,
+    saveBtn ? '' : '找不到 .val-weights-actions .btn-primary');
+  if (saveBtn && typeof saveBtn.onclick === 'function') {
+    const n0 = count('value');
+    await saveBtn.onclick();
+    const delta = count('value') - n0;
+    // 保存(POST /api/value/weights) + 重拉(GET /api/value/screen) 至少两次 /api/value 请求
+    check('价值页：保存权重后自动触发选股重新加载', delta >= 2,
+      'value 请求 +' + delta);
+    const status = el('view').querySelector('.val-weights-status');
+    check('价值页：重算完成后状态栏提示「已按新权重更新」',
+      !!status && String(status.textContent).indexOf('已按新权重') >= 0,
+      status ? String(status.textContent) : '状态栏不存在');
+  }
+  await goto('#/search');
+}
+
 report();
 
 function report() {
