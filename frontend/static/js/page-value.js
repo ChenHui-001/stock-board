@@ -160,8 +160,21 @@ import { API } from './api.js';
     // 投资建议 = 信号的中文含义
     const tdSig = U.el('td', 'val-sig');
     tdSig.appendChild(signalTag(s.signal, s.advice));
+    // P2 财务质量标记：扣非交叉验证（暴雷前兆）/ ROE 趋势 / 现金流档位
+    const vm = s.value_metrics || {};
+    if (vm.profit_quality) {
+      tdSig.appendChild(U.el('div', 'val-fin-flag val-fin-warn', '⚠ ' + vm.profit_quality));
+    }
+    if (vm.ocf_band === '恶化' || vm.ocf_band === '偏弱') {
+      tdSig.appendChild(U.el('div', 'val-fin-flag' + (vm.ocf_band === '恶化' ? ' val-fin-warn' : ''),
+        '经营现金流' + vm.ocf_band));
+    }
+    if (vm.roe_trend) {
+      tdSig.appendChild(U.el('div', 'val-fin-flag', 'ROE ' + vm.roe_trend));
+    }
     if (s.risk_notes && s.risk_notes.length) {
-      const note = U.el('div', 'val-meta', '·' + s.risk_notes.slice(0, 2).join(' · '));
+      const note = U.el('div', 'val-meta', '·' + s.risk_notes.slice(0, 3).join(' · '));
+      if (s.risk_notes.length > 3) note.title = '全部风险提示：\n' + s.risk_notes.join('\n');
       tdSig.appendChild(note);
     }
     tr.appendChild(tdSig);

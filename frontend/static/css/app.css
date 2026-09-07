@@ -5935,3 +5935,14 @@ a.hotspot-title:hover {
   white-space: nowrap;
   font-size: 12px;
 }
+
+/* 价值投资：财务质量标记（扣非/现金流/ROE 趋势） */
+.val-fin-flag {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2, inherit);
+}
+.val-fin-flag.val-fin-warn {
+  color: var(--warn);
+  font-weight: 600;
+}
