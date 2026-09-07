@@ -23,6 +23,7 @@ from .config import settings
 _cache = cache_mod.cache
 from .providers import ProviderError, registry
 from .providers.base import fetch
+from .utils import to_float
 
 log = logging.getLogger("value_screener")
 
@@ -397,6 +398,86 @@ async def _tencent_extra(code: str, market: str) -> dict[str, Any]:
     return got.get(f"{code}.{market}") or {}
 
 
+# ------------------------------------------------------------------ 板块资金流 / 实时资金（push2delay）
+
+async def _fetch_board_flow(limit: int = 100) -> dict[str, dict[str, Any]]:
+    """东财板块资金流榜（行业口径 m:90 t:2，push2delay 实测可用）。
+
+    字段（实测核对，勿凭记忆改）：
+      f12=板块代码(BKxxxx) f14=板块名 f3=板块涨跌幅% f62=今日主力净流入(元)
+      f164=5日主力净流入(元) f204/f205=领涨股名/代码 f206=领涨股涨跌幅%
+    数值列统一 to_float：上游对无数据返回字符串 "-" 而非 null。
+    失败返回 {} → 板块资金项按缺失跳过（不奖不罚），不阻塞主流程。
+    """
+    url = ("https://push2delay.eastmoney.com/api/qt/clist/get"
+           "?pn=1&pz=%d&po=1&np=1&fltt=2&invt=2&fid=f62"
+           "&fs=m%%3A90%%20t%%3A2&fields=f12,f14,f3,f62,f164,f204,f205,f206" % limit)
+    try:
+        resp = await fetch(url, headers={"Referer": "https://quote.eastmoney.com/"})
+        data = (resp.json() or {}).get("data") or {}
+        out: dict[str, dict[str, Any]] = {}
+        for i, r in enumerate(data.get("diff") or []):
+            name = str(r.get("f14") or "")
+            if not name:
+                continue
+            # 领涨股盘前/无数据时上游返回 "-"，与缺失同义
+            ln = str(r.get("f204") or "").strip()
+            leader_name = ln if ln not in ("", "-") else None
+            out[name] = {
+                "name": name,
+                "bk_code": r.get("f12") or "",
+                "chg": to_float(r.get("f3")),           # 板块涨跌幅 %
+                "main_today": to_float(r.get("f62")),   # 今日主力净流入（元）
+                "main_5d": to_float(r.get("f164")),     # 5日主力净流入（元）
+                "leader_name": leader_name,             # 领涨股名
+                "leader_code": (r.get("f205") or None) if leader_name else None,
+                "leader_chg": to_float(r.get("f206")),  # 领涨股涨跌幅 %
+                "rank": i + 1,                # 按今日主力净流入降序的名次
+            }
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("板块资金流获取失败：%s", exc)
+        return {}
+
+
+async def _fetch_main_inflow(cands: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """push2delay 批量实时资金：f62 主净 / f184 净比 / f8 换手 / f10 量比。
+
+    背景：push2 主站频控时 registry().quotes 会自动切腾讯源，而腾讯 Quote
+    缺主力资金字段。push2delay 同接口可用（延迟约 1 分钟，日内确认口径可接受）。
+    失败返回 {} 不阻塞；个股级字段仅非 None 值被消费方采纳。
+    """
+    if not cands:
+        return {}
+    secids = ",".join(("1" if c["market"] == "SH" else "0") + "." + c["code"]
+                      for c in cands)
+    try:
+        resp = await fetch(
+            "https://push2delay.eastmoney.com/api/qt/ulist.np/get",
+            headers={"Referer": "https://quote.eastmoney.com/"},
+            params={"fltt": 2, "invt": 2, "fields": "f12,f8,f10,f62,f184",
+                    "secids": secids, "ut": "fa5fd1943c7b386f172d6893dbfba10b"},
+        )
+        rows = ((resp.json() or {}).get("data") or {}).get("diff") or []
+        if isinstance(rows, dict):
+            rows = list(rows.values())
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            code = str(r.get("f12") or "")
+            if len(code) != 6:
+                continue
+            out[code] = {
+                "main_net_inflow": to_float(r.get("f62")),
+                "main_net_pct": to_float(r.get("f184")),
+                "turnover": to_float(r.get("f8")),
+                "volume_ratio": to_float(r.get("f10")),
+            }
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("候选实时资金获取失败：%s", exc)
+        return {}
+
+
 async def _stock_profile(
     cand: dict[str, Any], extra: "dict[str, Any] | None" = None
 ) -> dict[str, Any]:
@@ -763,16 +844,43 @@ def _financial_score(
     }
 
 
-def _board_score(profile: dict[str, Any], board_strength: dict[str, float]) -> dict[str, Any]:
-    """板块评分（满分 10）：候选所属板块的市场强度。"""
+def _board_score(
+    profile: dict[str, Any], board_strength: dict[str, float],
+    board_flow: "dict[str, dict[str, Any]] | None" = None,
+) -> dict[str, Any]:
+    """板块评分（满分 10）：市场强度 0~7 + 板块主力资金流 0~3。
+
+    资金流来自东财板块资金流榜（push2delay 实测）：今日主力净流入 ≥5 亿 +3 /
+    ≥2 亿 +2 / >0 +1 / ≤0 不加；今日与 5 日双正为「资金持续性确认」再 +0.5
+    （上限 3）。资金数据缺失时不奖不罚，detail 如实标注。
+    """
     b = profile.get("board") or ""
     if not b:
         return {"score": 0, "detail": "板块未知", "completeness": 0}
     strength = board_strength.get(b)
     if strength is None:
         return {"score": 3, "detail": f"板块「{b}」无强度数据", "completeness": 0}
-    pts = max(0, min(10, round(strength * 10)))
-    return {"score": pts, "detail": f"板块强度 {strength:.2f}", "completeness": 1}
+    pts = max(0.0, min(7.0, strength * 7))
+    detail = f"板块强度 {strength:.2f}"
+    fl = (board_flow or {}).get(b) or {}
+    mt = fl.get("main_today")
+    if mt is not None:
+        if mt >= 5e8:
+            fund_pts = 3.0
+        elif mt >= 2e8:
+            fund_pts = 2.0
+        elif mt > 0:
+            fund_pts = 1.0
+        else:
+            fund_pts = 0.0
+        if fund_pts > 0 and (fl.get("main_5d") or 0) > 0:
+            fund_pts = min(3.0, fund_pts + 0.5)  # 今日与 5 日双正 → 持续性确认
+        detail += f" · 板块主净{mt / 1e8:.1f}亿"
+    else:
+        fund_pts = 0.0
+        detail += " · 板块资金【数据缺失】"
+    score = max(0.0, min(10.0, round(pts + fund_pts, 1)))
+    return {"score": score, "detail": detail, "completeness": 1}
 
 
 def _flow_score(profile: dict[str, Any]) -> dict[str, Any]:
@@ -830,6 +938,24 @@ def _flow_score(profile: dict[str, Any]) -> dict[str, Any]:
             f"1日{main_1/1e8:.1f}亿 3日{main_3/1e8:.1f}亿 "
             f"5日{main_5/1e8:.1f}亿 30日{main_30/1e8:.1f}亿"
         )
+    # 盘中实时主净确认（push2delay f62，延迟约 1 分钟）：
+    #   实时与日级双正 → 资金流入确认 +1.5；实时正但日级负 → 盘中回流 +0.5；
+    #   实时负但日级正 → 盘中转流出预警 -1.5（日内趋势逆转信号）；双负不加不减
+    rt = profile.get("realtime") or {}
+    rtm = rt.get("main_net_inflow")
+    if rtm is not None:
+        day_main = main_1
+        if rtm > 0 and day_main > 0:
+            pts += 1.5
+            detail += f" · 实时主净{rtm/1e8:.1f}亿确认流入"
+        elif rtm > 0 and day_main <= 0:
+            pts += 0.5
+            detail += f" · 实时主净{rtm/1e8:.1f}亿盘中回流"
+        elif rtm < 0 and day_main > 0:
+            pts -= 1.5
+            detail += f" · 实时主净{rtm/1e8:.1f}亿盘中转流出⚠"
+        else:
+            detail += f" · 实时主净{rtm/1e8:.1f}亿"
     pts = max(0, min(12, pts))
     return {"score": pts, "detail": detail, "completeness": 1}
 
@@ -1170,6 +1296,19 @@ def _composite_score(scores: dict[str, Any], weights: dict[str, float]) -> float
     return max(0.0, min(float(valuecfg.BASE_TOTAL), round(total, 1)))
 
 
+_SIGNAL_TRIGGERS = {
+    "VALUE_BUY": "估值低估 + 风险<30 + 非连板；分批建仓，跌破估值买区企稳再接",
+    "QUALITY_HOLD": "总分达标 + 估值合理；持有条件=基本面不恶化，现金流恶化即减",
+    "BREAKOUT_BUY": "放量突破 + 量比≥1.5；跌破突破位止损",
+    "PULLBACK_BUY": "板块启动/分歧期低吸；跌破分歧低点止损",
+    "BUY": "综合分达标；按买点评分择时，不追高",
+    "WATCH": "总分 60~74；等待资金拐点或估值回落确认",
+    "AVOID": "风险>60（暴雷/高位连板/追高）；暂不参与",
+    "EXIT": "估值严重高估 + 风险偏高；利用反弹分批减仓",
+    "REDUCE": "短线急跌 -4%+；先减仓再观察企稳信号",
+}
+
+
 def _signal(
     profile: dict[str, Any], total: float, buy: int, risk: int,
     value_metrics: "dict[str, Any] | None" = None,
@@ -1260,6 +1399,8 @@ async def _analyze_one(
     board_avg: "dict[str, float] | None" = None,
     extra: "dict[str, Any] | None" = None,
     risk_extra: "dict[str, Any] | None" = None,
+    board_flow: "dict[str, dict[str, Any]] | None" = None,
+    realtime: "dict[str, Any] | None" = None,
 ) -> dict[str, Any] | None:
     profile = await _stock_profile(cand, extra=extra)
     if profile.get("price") is None and not profile.get("financials"):
@@ -1267,12 +1408,15 @@ async def _analyze_one(
     # P2 暴雷过滤字段（run_screen 批量预取，无数据时为空 dict → 各项静默跳过）
     if risk_extra:
         profile["risk_extras"] = risk_extra
+    # 盘中实时主净确认（push2delay 批量，无数据时 None → 资金评分按日级口径）
+    if realtime:
+        profile["realtime"] = realtime
     # 注入所属板块平均涨幅，供「个股相对板块强度」评分使用
     b = profile.get("board") or ""
     if board_avg and b:
         profile["board_avg_chg"] = board_avg.get(b)
     fin_score = _financial_score(profile, board_strength=board_strength)
-    board = _board_score(profile, board_strength)
+    board = _board_score(profile, board_strength, board_flow)
     flow = _flow_score(profile)
     volume = _volume_score(profile)
     emotion = _emotion_score(profile)
@@ -1322,6 +1466,7 @@ async def _analyze_one(
         "total_score": total, "buy_score": buy["score"], "trade_score": trade,
         "grade": grade, "grade_name": grade_name,
         "signal": signal, "advice": advice_map.get(signal, "—"),
+        "signal_trigger": _SIGNAL_TRIGGERS.get(signal, ""),
         "completeness": completeness,
     }
 
@@ -1517,9 +1662,10 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
 
     weights = valuecfg.get_weights()
 
-    # 第一层：市场环境（指数 / 涨停池 / 炸板池 / 热门榜 并发）
-    indices, zt, zb, hot = await asyncio.gather(
-        _fetch_index_quotes(), _fetch_zt_pool(), _fetch_zb_pool(), _fetch_hot_pool(20)
+    # 第一层：市场环境（指数 / 涨停池 / 炸板池 / 热门榜 / 板块资金流 并发）
+    indices, zt, zb, hot, board_flow = await asyncio.gather(
+        _fetch_index_quotes(), _fetch_zt_pool(), _fetch_zb_pool(),
+        _fetch_hot_pool(20), _fetch_board_flow(),
     )
     avg_chg = 0.0
     if hot:
@@ -1546,6 +1692,9 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     # P2 暴雷过滤字段（商誉/质押/解禁）批量预取，12h 进程内缓存
     risk_map = await _fetch_risk_extras(candidates)
 
+    # 盘中实时主净确认（push2delay 批量，延迟约 1 分钟；失败为 {} 按日级口径）
+    realtime_map = await _fetch_main_inflow(candidates)
+
     # 逐股评分（并发，限流友好）
     sem = asyncio.Semaphore(8)
     async def _limited(c: dict[str, Any]):
@@ -1554,6 +1703,8 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
                 c, board_strength, weights,
                 board_avg=board_avg, extra=extra_map.get(f"{c['code']}.{c['market']}"),
                 risk_extra=risk_map.get(f"{c['code']}.{c['market']}"),
+                board_flow=board_flow,
+                realtime=realtime_map.get(c["code"]),
             )
     results = await asyncio.gather(*[_limited(c) for c in candidates])
     stocks = [r for r in results if r is not None]

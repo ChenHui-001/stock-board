@@ -633,3 +633,72 @@ def test_roe_trend_scoring() -> None:
               "gross_margin": 25.0, "debt_ratio": 40.0}] + _fin([12.0, 13.0, 14.0, 15.0])
     up2 = vs._financial_score({"pe": 20.0, "pb": 2.0, "financials": mixed})
     assert up2["value_metrics"].get("roe_trend") == "近4年 ROE 均>10%", str(up2["value_metrics"])
+
+
+def test_board_score_fund_flow() -> None:
+    """板块评分叠加板块主力资金流：强度 0-7 + 资金 0-3（今日/5日双正确认）。"""
+    from backend import value_screener as vs
+
+    # 资金缺失 → 退回纯强度（×7），不奖不罚并如实标注
+    r = vs._board_score({"board": "AI"}, {"AI": 0.8}, board_flow={})
+    assert r["score"] == 5.6 and "【数据缺失】" in r["detail"], str(r)
+
+    # 今日主净 ≥5 亿 + 5 日双正 → 满额资金 3 分
+    r2 = vs._board_score({"board": "AI"}, {"AI": 0.8},
+                         board_flow={"AI": {"main_today": 6e8, "main_5d": 2e9}})
+    assert r2["score"] == 8.6 and "板块主净6.0亿" in r2["detail"], str(r2)
+
+    # 今日 1 亿（+1）+ 双正确认（+0.5）= 1.5
+    r3 = vs._board_score({"board": "AI"}, {"AI": 0.8},
+                         board_flow={"AI": {"main_today": 1e8, "main_5d": 1e9}})
+    assert r3["score"] == 7.1, str(r3)
+
+    # 今日流出 → 资金 0 分，纯强度
+    r4 = vs._board_score({"board": "AI"}, {"AI": 0.8},
+                         board_flow={"AI": {"main_today": -3e8, "main_5d": -5e8}})
+    assert r4["score"] == 5.6, str(r4)
+
+    # 无强度数据 → 恒 3 分兜底不受资金影响
+    r5 = vs._board_score({"board": "冷板"}, {}, board_flow={"冷板": {"main_today": 8e8, "main_5d": 1e9}})
+    assert r5["score"] == 3, str(r5)
+
+
+def test_flow_score_realtime_confirm() -> None:
+    """资金评分盘中实时主净确认：双正 +1.5 / 盘中回流 +0.5 / 转流出 -1.5。"""
+    from backend import value_screener as vs
+
+    flow = [{"date": f"d{i}", "main": 3e7} for i in range(5)]
+    prof = {"flow": flow, "total_mv": 100}  # 100 亿市值，日级流入
+    base = vs._flow_score(prof)["score"]
+
+    # 实时双正 → +1.5
+    p1 = {**prof, "realtime": {"main_net_inflow": 5e7, "main_net_pct": 10}}
+    r1 = vs._flow_score(p1)
+    assert r1["score"] == min(12, base + 1.5), f"base={base} got={r1}"
+    assert "确认流入" in r1["detail"], str(r1)
+
+    # 日级流出 + 实时流入 → 盘中回流 +0.5
+    flow_out = [{"date": f"d{i}", "main": -3e7} for i in range(5)]
+    p2 = {"flow": flow_out, "total_mv": 100,
+          "realtime": {"main_net_inflow": 5e7, "main_net_pct": 10}}
+    r2 = vs._flow_score(p2)
+    assert "盘中回流" in r2["detail"], str(r2)
+
+    # 日级流入 + 实时流出 → 转流出预警 -1.5
+    p3 = {"flow": flow, "total_mv": 100,
+          "realtime": {"main_net_inflow": -4e7, "main_net_pct": -8}}
+    r3 = vs._flow_score(p3)
+    assert r3["score"] == max(0, base - 1.5), f"base={base} got={r3}"
+    assert "盘中转流出" in r3["detail"], str(r3)
+
+    # 无实时数据 → 与旧行为一致（向后兼容）
+    assert vs._flow_score(prof)["score"] == base
+
+
+def test_signal_trigger_map() -> None:
+    """信号触发条件说明：所有可产出信号均有中文触发/应对文案。"""
+    from backend import value_screener as vs
+
+    for sig in ("VALUE_BUY", "QUALITY_HOLD", "BREAKOUT_BUY", "PULLBACK_BUY",
+                "BUY", "WATCH", "AVOID", "EXIT", "REDUCE"):
+        assert vs._SIGNAL_TRIGGERS.get(sig), sig

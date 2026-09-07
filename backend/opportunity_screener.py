@@ -36,8 +36,9 @@ from .providers.eastmoney import clean_em, search_articles
 from .utils import is_trading_now, to_float
 # 复用价值筛选器已验证的数据源与工具（同仓库内私有函数复用，行为一致）
 from .value_screener import (
-    _fetch_hot_pool, _fetch_index_quotes, _fetch_zb_pool, _fetch_zt_pool,
-    _hot_board_strength, _is_stock_code, _tencent_extra_batch,
+    _fetch_board_flow, _fetch_hot_pool, _fetch_index_quotes, _fetch_main_inflow,
+    _fetch_zb_pool, _fetch_zt_pool, _hot_board_strength, _is_stock_code,
+    _tencent_extra_batch,
 )
 
 log = logging.getLogger(__name__)
@@ -183,46 +184,6 @@ def _market_emotion(
         "missing": missing,
     }
 
-
-# ------------------------------------------------------------------ 板块资金流（东财 push2delay，2026-09-04 实测可用）
-
-async def _fetch_board_flow(limit: int = 100) -> dict[str, dict[str, Any]]:
-    """东财板块资金流榜（行业口径 m:90 t:2）。
-
-    字段（实测核对，勿凭记忆改）：
-      f12=板块代码(BKxxxx) f14=板块名 f3=板块涨跌幅% f62=今日主力净流入(元)
-      f164=5日主力净流入(元) f204/f205=领涨股名/代码 f206=领涨股涨跌幅%
-    失败返回 {} → 板块评分退回「资金项标【数据缺失】」路径，不阻塞主流程。
-    """
-    url = ("https://push2delay.eastmoney.com/api/qt/clist/get"
-           "?pn=1&pz=%d&po=1&np=1&fltt=2&invt=2&fid=f62"
-           "&fs=m%%3A90%%20t%%3A2&fields=f12,f14,f3,f62,f164,f204,f205,f206" % limit)
-    try:
-        resp = await fetch(url, headers={"Referer": "https://quote.eastmoney.com/"})
-        data = (resp.json() or {}).get("data") or {}
-        out: dict[str, dict[str, Any]] = {}
-        for i, r in enumerate(data.get("diff") or []):
-            name = str(r.get("f14") or "")
-            if not name:
-                continue
-            # 领涨股盘前/无数据时上游返回 "-"，与缺失同义
-            ln = str(r.get("f204") or "").strip()
-            leader_name = ln if ln not in ("", "-") else None
-            out[name] = {
-                "name": name,
-                "bk_code": r.get("f12") or "",
-                "chg": to_float(r.get("f3")),           # 板块涨跌幅 %（无数据为"-"→None）
-                "main_today": to_float(r.get("f62")),   # 今日主力净流入（元）
-                "main_5d": to_float(r.get("f164")),     # 5日主力净流入（元）
-                "leader_name": leader_name,             # 领涨股名
-                "leader_code": (r.get("f205") or None) if leader_name else None,
-                "leader_chg": to_float(r.get("f206")),  # 领涨股涨跌幅 %
-                "rank": i + 1,                # 按今日主力净流入降序的名次
-            }
-        return out
-    except Exception as exc:  # noqa: BLE001
-        log.warning("板块资金流获取失败：%s", exc)
-        return {}
 
 
 # ------------------------------------------------------------------ 板块消息/产业催化（东财全文检索）
@@ -449,46 +410,6 @@ def _stage_of(bstats: dict[str, Any] | None) -> tuple[str, float]:
         return "未知", 0.0
     return bstats.get("stage") or "未知", float(bstats.get("stage_score") or 0.0)
 
-
-# ------------------------------------------------------------------ 候选实时资金（push2delay）
-
-async def _fetch_main_inflow(cands: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """push2delay 批量实时资金：f62 主净 / f184 净比 / f8 换手 / f10 量比（2026-09-07 实测）。
-
-    背景：push2 主站频控时 registry().quotes 会自动切腾讯源，而腾讯 Quote
-    缺主力资金字段 → 硬筛选「主净>1000万」全军覆没（60/60 被灭）。
-    push2delay 同接口可用（延迟约 1 分钟，对分歧转强买点判断可接受）。
-    失败返回 {} 不阻塞（维持 registry 行情现状），个股级字段仅非 None 覆盖。
-    """
-    if not cands:
-        return {}
-    secids = ",".join(("1" if c["market"] == "SH" else "0") + "." + c["code"]
-                      for c in cands)
-    try:
-        resp = await fetch(
-            "https://push2delay.eastmoney.com/api/qt/ulist.np/get",
-            headers={"Referer": "https://quote.eastmoney.com/"},
-            params={"fltt": 2, "invt": 2, "fields": "f12,f8,f10,f62,f184",
-                    "secids": secids, "ut": "fa5fd1943c7b386f172d6893dbfba10b"},
-        )
-        rows = ((resp.json() or {}).get("data") or {}).get("diff") or []
-        if isinstance(rows, dict):
-            rows = list(rows.values())
-        out: dict[str, dict[str, Any]] = {}
-        for r in rows:
-            code = str(r.get("f12") or "")
-            if len(code) != 6:
-                continue
-            out[code] = {
-                "main_net_inflow": to_float(r.get("f62")),
-                "main_net_pct": to_float(r.get("f184")),
-                "turnover": to_float(r.get("f8")),
-                "volume_ratio": to_float(r.get("f10")),
-            }
-        return out
-    except Exception as exc:  # noqa: BLE001
-        log.warning("候选实时资金获取失败：%s", exc)
-        return {}
 
 
 # ------------------------------------------------------------------ 第四层-①：妖股基因 100

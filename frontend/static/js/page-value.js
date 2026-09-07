@@ -78,10 +78,13 @@ import { API } from './api.js';
     return tag;
   }
 
-  function signalTag(signal, advice) {
+  function signalTag(signal, advice, trigger) {
     const tone = SIGNAL_TONE[signal] || 'flat';
     const tag = U.el('span', 'val-signal val-' + tone, advice || signal || '—');
-    if (signal) tag.title = '信号:' + signal;
+    if (signal) {
+      tag.title = '信号:' + signal + (trigger ? '\n触发/应对：' + trigger : '');
+      if (trigger) tag.style.cursor = 'help';
+    }
     return tag;
   }
 
@@ -159,7 +162,7 @@ import { API } from './api.js';
 
     // 投资建议 = 信号的中文含义
     const tdSig = U.el('td', 'val-sig');
-    tdSig.appendChild(signalTag(s.signal, s.advice));
+    tdSig.appendChild(signalTag(s.signal, s.advice, s.signal_trigger));
     // P2 财务质量标记：扣非交叉验证（暴雷前兆）/ ROE 趋势 / 现金流档位
     const vm = s.value_metrics || {};
     if (vm.profit_quality) {
