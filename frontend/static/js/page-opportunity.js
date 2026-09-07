@@ -150,7 +150,7 @@ function renderBoards(boards) {
   const table = U.el('table', 'opp-table');
   const thead = U.el('thead');
   const trh = U.el('tr');
-  ['板块', '评分', '阶段', '涨停数', '龙头', '今日主力', '5日主力', '催化', '数据缺失'].forEach(function (h) {
+  ['板块', '评分', '阶段', '涨停数', '强势股', '今日主力', '5日主力', '催化', '数据缺失'].forEach(function (h) {
     trh.appendChild(U.el('th', '', h));
   });
   thead.appendChild(trh);
@@ -165,7 +165,21 @@ function renderBoards(boards) {
     tdStage.appendChild(chip(b.stage || '—', stageTone(b.stage)));
     tr.appendChild(tdStage);
     tr.appendChild(U.el('td', '', fmt(b.zt_count)));
-    tr.appendChild(U.el('td', '', b.has_leader ? '有' : '无'));
+    // 强势股：板块内涨停股（连板标注）+ 资金流领涨股，单行截断悬浮看全部
+    const tdStocks = U.el('td', 'opp-td-stocks');
+    const parts = (b.zt_stocks || []).map(function (s) {
+      return s.lianban >= 2 ? s.name + ' ' + s.lianban + '连板' : s.name;
+    });
+    if (b.leader && b.leader.name && parts.indexOf(b.leader.name) < 0) {
+      parts.push(b.leader.name + '(领涨)');
+    }
+    if (parts.length) {
+      tdStocks.textContent = parts.slice(0, 3).join('、');
+      tdStocks.title = parts.join('\n');
+    } else {
+      tdStocks.textContent = '—';
+    }
+    tr.appendChild(tdStocks);
     // 板块主力净流入（亿元，正红负绿；缺失 → —）
     tr.appendChild(U.el('td', b.fund_today == null ? '' : U.tone(b.fund_today),
                         fmt(b.fund_today, mv)));

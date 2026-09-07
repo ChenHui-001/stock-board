@@ -33,7 +33,7 @@ from . import cache as cache_mod, service
 from .providers import registry
 from .providers.base import fetch
 from .providers.eastmoney import clean_em, search_articles
-from .utils import is_trading_now
+from .utils import is_trading_now, to_float
 # 复用价值筛选器已验证的数据源与工具（同仓库内私有函数复用，行为一致）
 from .value_screener import (
     _fetch_hot_pool, _fetch_index_quotes, _fetch_zb_pool, _fetch_zt_pool,
@@ -191,12 +191,12 @@ async def _fetch_board_flow(limit: int = 100) -> dict[str, dict[str, Any]]:
 
     字段（实测核对，勿凭记忆改）：
       f12=板块代码(BKxxxx) f14=板块名 f3=板块涨跌幅% f62=今日主力净流入(元)
-      f164=5日主力净流入(元) f204/f205=领涨股名/代码
+      f164=5日主力净流入(元) f204/f205=领涨股名/代码 f206=领涨股涨跌幅%
     失败返回 {} → 板块评分退回「资金项标【数据缺失】」路径，不阻塞主流程。
     """
     url = ("https://push2delay.eastmoney.com/api/qt/clist/get"
            "?pn=1&pz=%d&po=1&np=1&fltt=2&invt=2&fid=f62"
-           "&fs=m%%3A90%%20t%%3A2&fields=f12,f14,f3,f62,f164" % limit)
+           "&fs=m%%3A90%%20t%%3A2&fields=f12,f14,f3,f62,f164,f204,f205,f206" % limit)
     try:
         resp = await fetch(url, headers={"Referer": "https://quote.eastmoney.com/"})
         data = (resp.json() or {}).get("data") or {}
@@ -205,12 +205,18 @@ async def _fetch_board_flow(limit: int = 100) -> dict[str, dict[str, Any]]:
             name = str(r.get("f14") or "")
             if not name:
                 continue
+            # 领涨股盘前/无数据时上游返回 "-"，与缺失同义
+            ln = str(r.get("f204") or "").strip()
+            leader_name = ln if ln not in ("", "-") else None
             out[name] = {
                 "name": name,
                 "bk_code": r.get("f12") or "",
-                "chg": r.get("f3"),           # 板块涨跌幅 %
-                "main_today": r.get("f62"),   # 今日主力净流入（元）
-                "main_5d": r.get("f164"),     # 5日主力净流入（元）
+                "chg": to_float(r.get("f3")),           # 板块涨跌幅 %（无数据为"-"→None）
+                "main_today": to_float(r.get("f62")),   # 今日主力净流入（元）
+                "main_5d": to_float(r.get("f164")),     # 5日主力净流入（元）
+                "leader_name": leader_name,             # 领涨股名
+                "leader_code": (r.get("f205") or None) if leader_name else None,
+                "leader_chg": to_float(r.get("f206")),  # 领涨股涨跌幅 %
                 "rank": i + 1,                # 按今日主力净流入降序的名次
             }
         return out
@@ -317,9 +323,21 @@ async def _board_stats(
             hot_agg.setdefault(b, []).append(c)
 
     out: dict[str, dict[str, Any]] = {}
-    # 板块来源：涨停池 ∪ 热门榜 ∪ 资金流榜强势板块（前20名且今日主力>0）
-    flow_strong = {f["name"] for f in board_flow.values()
-                   if (f.get("rank") or 999) <= 20 and (f.get("main_today") or 0) > 0}
+    # 板块来源：涨停池 ∪ 热门榜 ∪ 资金流榜强势板块
+    # 强势 = 前20名且今日主力>0；盘前/停牌等 f62 不可得时保底展示前12名
+    #（资金项届时标【数据缺失】，不编造），避免盘前板块列表空白。
+    def _flow_strong() -> set[str]:
+        strong: set[str] = set()
+        for f in board_flow.values():
+            rk = f.get("rank")
+            if not rk:
+                continue
+            mt = f.get("main_today")
+            if (rk <= 20 and (mt or 0) > 0) or (rk <= 12 and mt is None):
+                strong.add(f["name"])
+        return strong
+
+    flow_strong = _flow_strong()
     board_names = set(zt_agg) | set(hot_agg) | flow_strong
     cats = catalysts if catalysts is not None else await _fetch_catalysts(list(board_names))
     for b in board_names:
@@ -396,6 +414,16 @@ async def _board_stats(
             got += 6
         score = round(min(100.0, got), 1)
 
+        # 强势股：板块内涨停股（连板降序取前3）+ 资金流领涨股
+        zt_stocks = [{"code": r.get("code"), "name": r.get("name") or "",
+                      "lianban": r.get("lianban") or 1,
+                      "change_pct": r.get("change_pct")}
+                     for r in sorted(ztrs, key=lambda x: (x.get("lianban") or 1),
+                                     reverse=True)[:3]]
+        leader = ({"name": fl["leader_name"], "code": fl["leader_code"],
+                   "chg": fl.get("leader_chg")}
+                  if fl.get("leader_name") else None)
+
         out[b] = {
             "name": b, "score": score, "stage": stage, "stage_score": stage_score,
             "is_ferment": stage == "发酵",
@@ -406,6 +434,8 @@ async def _board_stats(
             "fund_rank": fl.get("rank"),                                    # 资金流榜名次
             "board_chg": flow_chg,                                          # 板块涨跌幅 %
             "catalyst": cat,   # {"count","titles","latest_time"} 或 None=检索失败
+            "zt_stocks": zt_stocks,   # 板块内涨停股（连板降序前3）
+            "leader": leader,         # 资金流领涨股 {name,code,chg} 或 None
             "hot_avg": round(hot_avg, 2) if hot_avg is not None else None,
             "relative_strength": round(rel, 2) if rel is not None else None,
             "missing": missing,

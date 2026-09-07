@@ -5926,3 +5926,12 @@ a.hotspot-title:hover {
 .opp-table td.opp-td-cat.opp-cat-hit {
   color: var(--up);
 }
+
+/* 机会投资：板块强势股列 */
+.opp-table td.opp-td-stocks {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}

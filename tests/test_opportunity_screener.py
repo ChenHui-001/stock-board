@@ -51,12 +51,15 @@ def test_market_emotion_tiers() -> None:
 
 
 def test_board_stats_stages() -> None:
-    zt_rows = [{"code": "600001", "market": "SH", "board": "AI",
+    zt_rows = [{"code": f"60000{idx}", "name": nm, "market": "SH", "board": "AI",
                 "lianban": lb, "seal_amount": 2e8 if lb == 3 else 1e7,
                 "change_pct": 9.9}
-               for lb in (3, 1, 1, 1, 1)]
+               for idx, (lb, nm) in enumerate(
+                   zip((3, 1, 1, 1, 1), ("甲", "乙", "丙", "丁", "戊")), 1)]
     flow_ai = {"AI": {"name": "AI", "chg": 4.0, "main_today": 1.2e9,
-                      "main_5d": 3e9, "rank": 2}}
+                      "main_5d": 3e9, "rank": 2,
+                      "leader_name": "龙版传媒", "leader_code": "601599",
+                      "leader_chg": 10.0}}
     hot_ai = [{"board": "AI", "change_pct": 4.0}]
     cat_hit = {"AI": {"count": 5, "titles": ["文化传媒板块震荡走强"], "latest_time": "09:51"}}
 
@@ -72,6 +75,10 @@ def test_board_stats_stages() -> None:
     assert ai["fund_today"] == 12.0 and ai["fund_5d"] == 30.0, str(ai)
     assert ai["fund_rank"] == 2 and ai["board_chg"] == 4.0, str(ai)
     assert ai["catalyst"]["count"] == 5, str(ai)
+    # 强势股：涨停股连板降序前3 + 资金流领涨股
+    assert [s["name"] for s in ai["zt_stocks"]] == ["甲", "乙", "丙"], str(ai)
+    assert ai["zt_stocks"][0]["lianban"] == 3, str(ai["zt_stocks"])
+    assert ai["leader"] == {"name": "龙版传媒", "code": "601599", "chg": 10.0}, str(ai)
     # 今日主力≥10亿(20)+五日双正(10)+催化≥3条(10) → 满额抬升
     assert ai["score"] >= 80, ai["score"]
     assert ai["relative_strength"] == 3.0, str(ai)
@@ -112,6 +119,17 @@ def test_board_stats_stages() -> None:
     assert "传媒" in b3, list(b3)
     assert "冷门板块" not in b3, list(b3)
     assert b3["传媒"]["zt_count"] == 0, str(b3["传媒"])
+
+    # 盘前保底：f62 不可得（None）时资金流榜前12名仍展示，资金项标【数据缺失】
+    b4 = asyncio.run(ops._board_stats(
+        [], [], [], index_chg=0.0,
+        board_flow={"光刻胶": {"name": "光刻胶", "chg": 0.0, "main_today": None,
+                               "main_5d": None, "rank": 1},
+                    "次新": {"name": "次新", "chg": 0.0, "main_today": None,
+                             "main_5d": None, "rank": 30}},
+        catalysts={"光刻胶": {"count": 0, "titles": [], "latest_time": None}}))
+    assert "光刻胶" in b4 and "次新" not in b4, list(b4)
+    assert b4["光刻胶"]["missing"] == ["板块资金流入", "连续资金流入(板块级)"], str(b4["光刻胶"])
 
 
 def test_candidate_base_dedup_and_filter() -> None:
