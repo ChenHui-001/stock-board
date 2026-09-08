@@ -6246,3 +6246,11 @@ a.hotspot-title:hover {
   .hs-community-row { flex-wrap: wrap; }
   .hs-community-stocks { justify-content: flex-start; flex-basis: 100%; }
 }
+.hs-community-toggle { cursor: pointer; user-select: none; }
+.hs-community-toggle:hover .sector-heat-title { color: var(--accent); }
+.hs-community-chevron {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.hs-community-toggle:hover .hs-community-chevron { color: var(--accent); }

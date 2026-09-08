@@ -428,27 +428,45 @@ for (const [hash, label] of ROUTES) {
     check('热点页：无匹配 leaders 的 chip 不显示下钻面板', false, '未找到退潮组 chip');
   }
 
-  // 11. 社区讨论热度榜（股吧人气榜聚合板块，懒加载区块）
+  // 11. 社区讨论热度榜（默认收起，点击头部展开）
   const comm = view.querySelector('.hs-community');
-  const commRows = view.querySelectorAll('.hs-community-row');
-  check('热点页：社区讨论热度榜渲染（板块行 ≥2）',
-    !!comm && commRows.length >= 2, commRows.length + ' 行');
-  const commNames = view.querySelectorAll('.hs-community-name, .hs-community-stock-name')
-    .map((n) => String(n.textContent)).join('|');
-  check('热点页：社区热度榜板块与代表股渲染（金健米业/中京电子）',
-    commNames.indexOf('农产品加工') >= 0 && commNames.indexOf('元件') >= 0
-      && commNames.indexOf('金健米业') >= 0 && commNames.indexOf('中京电子') >= 0,
-    commNames);
-  const missingBadges = view.querySelectorAll('.hs-src-missing')
-    .map((n) => String(n.textContent)).join('|');
-  check('热点页：未接入社区源如实标注【数据缺失】',
-    missingBadges.indexOf('数据缺失') >= 0 && missingBadges.indexOf('雪球') >= 0
-      && missingBadges.indexOf('同花顺') >= 0,
-    missingBadges || '无徽标');
-  const commBar = comm ? comm.querySelector('.hs-community-barfill') : null;
-  check('热点页：社区热度条宽度 = heat_norm（最高热度 100%）',
-    !!commBar && String(commBar.style.width) === '100%',
-    commBar ? String(commBar.style.width) : '无热度条');
+  const commHead = view.querySelector('.hs-community-toggle');
+  check('热点页：社区热度榜默认收起（只有头部无榜单）',
+    !!comm && !!commHead && !view.querySelector('.hs-community-list'),
+    comm ? '头部已渲染' : '区块未渲染');
+  const collapsedSub = comm ? (comm.querySelector('.sector-heat-sub')
+    ? String(comm.querySelector('.sector-heat-sub').textContent) : '') : '';
+  check('热点页：收起态副标题带 Top1 速览与更新时间',
+    collapsedSub.indexOf('Top1') >= 0 && collapsedSub.indexOf('农产品加工') >= 0,
+    collapsedSub);
+  if (commHead && typeof commHead.onclick === 'function') {
+    commHead.onclick();   // 展开 → 整页重绘
+    const comm2 = view.querySelector('.hs-community');
+    const commRows = view.querySelectorAll('.hs-community-row');
+    check('热点页：点击头部后榜单展开（板块行 ≥2）',
+      !!comm2 && commRows.length >= 2, commRows.length + ' 行');
+    const commNames = view.querySelectorAll('.hs-community-name, .hs-community-stock-name')
+      .map((n) => String(n.textContent)).join('|');
+    check('热点页：社区热度榜板块与代表股渲染（金健米业/中京电子）',
+      commNames.indexOf('农产品加工') >= 0 && commNames.indexOf('元件') >= 0
+        && commNames.indexOf('金健米业') >= 0 && commNames.indexOf('中京电子') >= 0,
+      commNames);
+    const missingBadges = view.querySelectorAll('.hs-src-missing')
+      .map((n) => String(n.textContent)).join('|');
+    check('热点页：未接入社区源如实标注【数据缺失】',
+      missingBadges.indexOf('数据缺失') >= 0 && missingBadges.indexOf('雪球') >= 0
+        && missingBadges.indexOf('同花顺') >= 0,
+      missingBadges || '无徽标');
+    const commBar = comm2 ? comm2.querySelector('.hs-community-barfill') : null;
+    check('热点页：社区热度条宽度 = heat_norm（最高热度 100%）',
+      !!commBar && String(commBar.style.width) === '100%',
+      commBar ? String(commBar.style.width) : '无热度条');
+    const head2 = view.querySelector('.hs-community-toggle');
+    if (head2 && typeof head2.onclick === 'function') head2.onclick();   // 复位收起
+    check('热点页：再次点击头部可收起', !view.querySelector('.hs-community-list'), '');
+  } else {
+    check('热点页：点击头部后榜单展开（板块行 ≥2）', false, '头部不可点击');
+  }
 
   await goto('#/search');
 }
