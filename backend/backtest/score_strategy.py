@@ -221,6 +221,20 @@ def fundamental_score(fins: list[dict[str, Any]], signal_date: str) -> float:
 
 # ------------------------------------------------------------------ 分档
 
+def threshold_from_params(params: dict[str, Any]) -> dict[str, float]:
+    """从表单参数构造分档阈值 dict（键与 bucket_by_threshold 消费方对齐）。
+
+    历史坑：run() 曾用 {"buy","sell"} 键构造、而 bucket_by_threshold 读
+    {"add","hold","reduce"}，键名脱节导致实弹回测在分档处 KeyError 'add'
+    （单测未覆盖该链路故长期未发现）。收敛到单一构造点 + 契约测试防回归。
+    """
+    return {
+        "add":    float(params.get("th_add", TH_BUY)),
+        "hold":   float(params.get("th_hold", 0.0)),
+        "reduce": float(params.get("th_reduce", TH_SELL)),
+    }
+
+
 def bucket_by_threshold(score: float, th: dict[str, float]) -> str:
     if score >= th["add"]:
         return "加仓"
@@ -335,10 +349,7 @@ async def run(params: dict[str, Any], on_progress: Callable[[float, str], None])
         raise ValueError("股票池为空，请至少填写一只标的代码")
     limit = int(params.get("limit") or 800)
     limit = max(200, min(2000, limit))
-    th = {
-        "buy":  float(params.get("th_buy", TH_BUY)),
-        "sell": float(params.get("th_sell", TH_SELL)),
-    }
+    th = threshold_from_params(params)
 
     on_progress(0.02, f"准备 {len(codes)} 只标的 × {limit} 根日线")
     df = await _to_thread(build_events, codes, limit, on_progress)

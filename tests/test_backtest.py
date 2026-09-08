@@ -107,6 +107,24 @@ def test_bucket_by_threshold_matches_production():
     assert score_strategy.bucket_by_threshold(-30, th) == "清仓"
 
 
+def test_threshold_from_params_contract():
+    """run() 阈值构造与 bucket_by_threshold 消费键名对齐（回归：曾因键名
+    {"buy","sell"} vs {"add","hold","reduce"} 脱节，实弹回测 KeyError 'add'）。"""
+    th = score_strategy.threshold_from_params({})   # 空参数 → 全默认（与表单 schema 默认一致）
+    assert set(th) == {"add", "hold", "reduce"}
+    assert th["add"] == score_strategy.TH_BUY
+    assert th["hold"] == 0.0
+    assert th["reduce"] == score_strategy.TH_SELL
+    # 契约：默认阈值下四档边界分档不抛 KeyError 且结果正确
+    assert score_strategy.bucket_by_threshold(score_strategy.TH_BUY, th) == "加仓"
+    assert score_strategy.bucket_by_threshold(0.0, th) == "观望"
+    assert score_strategy.bucket_by_threshold(score_strategy.TH_SELL, th) == "减仓"
+    assert score_strategy.bucket_by_threshold(score_strategy.TH_SELL - 1, th) == "清仓"
+    # 自定义参数透传
+    th2 = score_strategy.threshold_from_params({"th_add": 50, "th_hold": 5, "th_reduce": -30})
+    assert th2 == {"add": 50.0, "hold": 5.0, "reduce": -30.0}
+
+
 # ------------------------------------------------------------------ 盘口策略纯函数
 
 def test_signal_labels():
