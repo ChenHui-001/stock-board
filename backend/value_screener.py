@@ -440,6 +440,30 @@ async def _fetch_board_flow(limit: int = 100) -> dict[str, dict[str, Any]]:
         return {}
 
 
+async def board_flow_leaders(limit: int = 50) -> list[dict[str, Any]]:
+    """板块资金流龙头下钻（热点追踪 P1-2 公开包装）。
+
+    复用 _fetch_board_flow（内部已做 "-" → None 清洗），拍平为按板块逐条的
+    leaders 列表：[{board, code, name, pct_chg, main_net, leader_name,
+    leader_code, leader_pct}]。上游拉取失败时 _fetch_board_flow 返回 {} →
+    本函数静默返回 []，不阻塞热点聚合主流程。
+    """
+    flow = await _fetch_board_flow(limit)
+    return [
+        {
+            "board": b.get("name") or name,
+            "code": b.get("bk_code") or "",
+            "name": b.get("name") or name,
+            "pct_chg": b.get("chg"),
+            "main_net": b.get("main_today"),
+            "leader_name": b.get("leader_name"),
+            "leader_code": b.get("leader_code"),
+            "leader_pct": b.get("leader_chg"),
+        }
+        for name, b in flow.items()
+    ]
+
+
 async def _fetch_main_inflow(cands: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """push2delay 批量实时资金：f62 主净 / f184 净比 / f8 换手 / f10 量比。
 

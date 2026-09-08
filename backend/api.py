@@ -310,6 +310,10 @@ async def hotspot(
 
     保留原始媒体署名（彭博社/财联社/财新/澎湃等），命中重点媒体名单的条目
     带 media_badge 标记；结果整体缓存 HOTSPOT_TTL 秒避免反复打外部快讯接口。
+    meta.sector_heat 按发酵强度分排序（heat/heat_norm/slope/rank_score，
+    trend 为斜率阈值判定的 up|flat|down）；meta.leaders 为板块资金流龙头
+    下钻列表（board/code/pct_chg/main_net/leader_*，拉取失败为空数组）；
+    items[].tags 含标签级 sentiment 与 score/hit/src，items[].dups 为去重合并数。
     """
     return await hotspot_mod.get_hotspot(minutes=minutes, force=refresh)
 

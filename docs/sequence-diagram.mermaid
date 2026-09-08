@@ -1,0 +1,18 @@
+sequenceDiagram
+    participant FE as page-hotspot.js(60s轮询)
+    participant API as api.py /api/hotspot
+    participant HS as hotspot.py
+    participant AI as hotspot_ai.py
+    participant VS as value_screener.py
+
+    FE->>API: GET /api/hotspot?minutes=N
+    API->>HS: get_hotspot(minutes, force)
+    HS->>HS: _fetch_all → _merge(条件A指纹 + 条件B bigram Dice≥0.62)
+    HS->>AI: _extract_item_tags(title, summary) ×N条
+    AI-->>HS: tags[{name,sentiment,score,hit,src}]
+    HS->>HS: _compute_sector_heat(衰减×信源×情绪→heat_norm/slope/trend, rank_score排序)
+    HS->>VS: board_flow_leaders(50)（异步，失败跳过）
+    VS-->>HS: leaders[{board,leader_name,leader_code,leader_pct,...}]
+    HS-->>API: {items(+dups,tags), meta(sector_heat,leaders)}
+    API-->>FE: HotspotResp(_AllowExtra)
+    FE->>FE: chips按trend分组 + heat_norm热度条 + slope箭头 + leaders下钻(包含匹配)

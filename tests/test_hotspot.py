@@ -295,6 +295,13 @@ def test_hotspot_ai() -> None:
         orig_search, orig_quotes, orig_avail = (
             hotspot_ai._search_one, hotspot_ai._with_quotes, llm.available,
         )
+        orig_get_quotes = service.get_quotes
+
+        async def _no_quotes(keys, force=False):
+            # 行情快照失败 → _resolve_stocks 降级「命中数 + 检索序」原排序
+            return {}
+
+        service.get_quotes = _no_quotes
         llm.available = lambda: False
         try:
             async def fake_search(kw: str) -> tuple:
@@ -333,6 +340,7 @@ def test_hotspot_ai() -> None:
         finally:
             hotspot_ai._search_one = orig_search
             hotspot_ai._with_quotes = orig_quotes
+            service.get_quotes = orig_get_quotes
             llm.available = orig_avail
             _cache.drop_prefix("hotspot_ai:")
 
@@ -359,5 +367,323 @@ def test_hotspot_ai() -> None:
 
     empty = asyncio.run(hotspot_ai.analyze_news("  "))
     assert (empty["ok"] is False), str(empty)
+
+
+def test_hotspot_dedup_similar() -> None:
+    """双条件去重：条件A 指纹精确 + 条件B bigram Dice 相似（误并/漏并两方向 + 回滚开关）。"""
+    now_ts = int(time.time())
+
+    # 漏并方向（应合并）：改写式标题，条件A 指纹不同，条件B Dice≈0.93 ≥ 0.62
+    a = {"id": "a", "title": "央行开展5000亿元逆回购操作", "ts": now_ts - 100}
+    b = {"id": "b", "title": "央行开展5000亿元逆回购操作规模", "ts": now_ts - 50}
+    assert (hotspot._title_fp(a["title"]) != hotspot._title_fp(b["title"])), ""
+    assert (hotspot._title_similar(a["title"], b["title"]) >= hotspot.HEAT_SIM_TH), \
+        hotspot._title_similar(a["title"], b["title"])
+    merged = hotspot._merge([a, b])
+    assert (len(merged) == 1 and merged[0]["id"] == "b" and merged[0]["dups"] == 1), str(merged)
+
+    # 误并方向（不应合并）：同桶（首8字相同）但内容发散，Dice≈0.58 < 0.62（宁漏合不误合）
+    c = {"id": "c", "title": "光伏产业政策落地，组件价格回升", "ts": now_ts - 40}
+    d = {"id": "d", "title": "光伏产业政策落地时间推迟", "ts": now_ts - 30}
+    sim_cd = hotspot._title_similar(c["title"], d["title"])
+    assert (sim_cd < hotspot.HEAT_SIM_TH), sim_cd
+    merged2 = hotspot._merge([c, d])
+    assert (len(merged2) == 2), str(merged2)
+
+    # 条件A 仍生效：标点差异合并，dups 记录被合并条数（不含代表自身）
+    dup = [
+        {"id": "t1", "title": "央行开展逆回购操作", "ts": now_ts - 100},
+        {"id": "e1", "title": "央行开展逆回购操作！", "ts": now_ts - 50},
+        {"id": "w1", "title": "央行开展逆回购操作，", "ts": now_ts - 20},
+    ]
+    m3 = hotspot._merge(dup)
+    assert (len(m3) == 1 and m3[0]["id"] == "w1" and m3[0]["dups"] == 2), str(m3)
+
+    # 回滚开关：HEAT_SIM_TH > 1 关闭条件B（只留条件A）
+    orig_th = hotspot.HEAT_SIM_TH
+    try:
+        hotspot.HEAT_SIM_TH = 2.0
+        m4 = hotspot._merge([a, b])
+        assert (len(m4) == 2), str(m4)
+    finally:
+        hotspot.HEAT_SIM_TH = orig_th
+
+    # 相似度对称、空串/单字安全（无 bigram → 0）
+    assert (hotspot._title_similar("央行开展逆回购操作", "央行开展逆回购操作") >= 0.99), ""
+    assert (hotspot._title_similar("", "央行") == 0.0), ""
+    assert (hotspot._title_similar("央视", "") == 0.0), ""
+
+
+def test_hotspot_tag_engine() -> None:
+    """标签引擎：标题×3 权重 / 泛词仅标题命中 / 父子去重 / 标签级情绪 / 输出结构。"""
+    from backend.hotspot_ai import _tag_sentiment
+
+    # 标题命中 ×3，摘要命中 ×1；双命中取大并标 src
+    tags = hotspot._extract_item_tags("光伏组件涨价", "光伏产业链价格企稳")
+    t = {x["name"]: x for x in tags}
+    assert ("光伏" in t and t["光伏"]["score"] == hotspot.HEAT_TITLE_W), str(tags)
+    assert (t["光伏"]["src"] == "title+summary" and t["光伏"]["hit"] == "光伏"), str(tags)
+
+    tags2 = hotspot._extract_item_tags("", "光伏产业链价格企稳")
+    t2 = {x["name"]: x for x in tags2}
+    assert (t2["光伏"]["score"] == 1.0 and t2["光伏"]["src"] == "summary"), str(tags2)
+
+    # 父子去重：命中子概念（光伏）时父概念（新能源）不计数
+    tags3 = hotspot._extract_item_tags("光伏组件涨价", "")
+    assert ([x["name"] for x in tags3] == ["光伏"]), str(tags3)
+    # 父有独立核心词（风电）命中时父保留
+    tags4 = hotspot._extract_item_tags("光伏组件涨价，风电装机创新高", "")
+    names4 = [x["name"] for x in tags4]
+    assert ("光伏" in names4 and "新能源" in names4), str(tags4)
+
+    # 泛词门槛：泛词（券商"证券"）仅在标题命中才计分
+    assert (not any(x["name"] == "券商"
+                    for x in hotspot._extract_item_tags("", "某证券公司发布研报"))), ""
+    assert (any(x["name"] == "券商"
+                for x in hotspot._extract_item_tags("证券行业利好", ""))), ""
+
+    # 输出结构：{name, sentiment, score, hit, src} 齐全，情绪枚举合法
+    tags5 = hotspot._extract_item_tags("光伏板块大涨，订单爆满", "")
+    g = tags5[0]
+    assert (set(g.keys()) == {"name", "sentiment", "score", "hit", "src"}), str(g)
+    assert (g["sentiment"] in ("利好", "利空", "中性")), str(g)
+    assert (g["sentiment"] == "利好"), str(g)  # 邻近窗口内"大涨" → 标签级利好
+
+    # 标签级情绪：邻近窗口判定（非整条资讯情绪）
+    assert (_tag_sentiment("光伏板块大涨", "", "光伏") == "利好"), ""
+    assert (_tag_sentiment("光伏板块大跌", "", "光伏") == "利空"), ""
+    # 利好/利空词混在窗口内 → 中性
+    assert (_tag_sentiment("光伏板块大涨，个股大跌", "", "光伏") == "中性"), ""
+    # 利好词距离命中词超过 HEAT_SENT_WINDOW 字 → 中性
+    far = "光伏行业年度技术交流会今日举行，会上讨论了规范化议题"
+    assert (_tag_sentiment(far, "", "光伏") == "中性"), far
+
+
+def test_hotspot_sector_heat() -> None:
+    """发酵强度分：fresh 衰减 / heat 归一 / slope 趋势 / rank 公式（固定时间戳）。"""
+    now_ts = 1_000_000
+    minutes = 30
+    window_start = now_ts - minutes * 60
+
+    def _item(ts: int, name: str, score: float, sent: str = "中性", source: str = "同花顺") -> dict:
+        return {"ts": ts, "source": source,
+                "tags": [{"name": name, "sentiment": sent, "score": score}]}
+
+    items = [
+        # A 发酵：4 条集中在最新子窗（财联社 ×1.3、利好 ×1.2）
+        *(_item(now_ts - 10, "发酵板块", 1.0, "利好", "财联社") for _ in range(4)),
+        # B 退潮：8 条集中在最老子窗（久远 → fresh 衰减 + 负斜率）
+        *(_item(window_start + 1, "退潮板块", 2.0) for _ in range(8)),
+        # C 持平：新旧两端对称布点（等权）→ slope ≈ 0
+        _item(window_start + 1, "持平板块", 8.0),
+        _item(window_start + 1, "持平板块", 8.0),
+        _item(now_ts - 1, "持平板块", 1.0),
+        _item(now_ts - 1, "持平板块", 1.0),
+    ]
+
+    heat = hotspot._compute_sector_heat(items, minutes, now_ts)
+    by = {h["name"]: h for h in heat}
+    a, b, c = by["发酵板块"], by["退潮板块"], by["持平板块"]
+
+    # 排序 = rank_score 降序；heat 归一后最高者 100
+    scores = [h["rank_score"] for h in heat]
+    assert (scores == sorted(scores, reverse=True)), str(heat)
+    assert (a["heat_norm"] == 100.0), str(a)
+    # 趋势判定（斜率阈值）
+    assert (a["trend"] == "up" and a["slope"] > 0), str(a)
+    assert (b["trend"] == "down" and b["slope"] < 0), str(b)
+    assert (c["trend"] == "flat" and abs(c["slope"]) < hotspot.HEAT_TREND_TH), str(c)
+    # fresh 衰减：A 单条有效权重 > B 单条有效权重（同源同时长下更晚提及更热）
+    assert (a["heat"] / 4 > b["heat"] / 8), (a["heat"], b["heat"])
+    # rank 公式：rank_score = heat_norm × (1 + HEAT_SLOPE_W × slope)
+    for h in heat:
+        expect = h["heat_norm"] * (1 + hotspot.HEAT_SLOPE_W * h["slope"])
+        assert (abs(h["rank_score"] - expect) < 0.6), (h, expect)
+
+    # 回滚开关：HEAT_SLOPE_W = 0 → 退化为纯热度排序
+    orig_w = hotspot.HEAT_SLOPE_W
+    try:
+        hotspot.HEAT_SLOPE_W = 0.0
+        heat2 = hotspot._compute_sector_heat(items, minutes, now_ts)
+        assert ([h["rank_score"] for h in heat2] == [h["heat_norm"] for h in heat2]), str(heat2)
+    finally:
+        hotspot.HEAT_SLOPE_W = orig_w
+
+    # 兼容旧数据：tags 缺 score/sentiment 字段时按 1.0/中性 兜底
+    legacy = [{"ts": now_ts - 5, "source": "财联社", "tags": [{"name": "旧数据板块"}]}]
+    heat3 = hotspot._compute_sector_heat(legacy, minutes, now_ts)
+    assert (heat3[0]["name"] == "旧数据板块" and heat3[0]["total"] == 1), str(heat3)
+
+
+def test_hotspot_ai_quote_rank() -> None:
+    """相关股行情信号：_quote_rank 公式 + 行情重排 + 600s 缓存 + 失败降级。"""
+    from backend.cache import cache as _cache
+    from backend.providers.base import Quote as _Q
+    from backend.providers.base import SearchItem
+
+    # rank 公式：kw_hits×2 + clamp(pct,-5,10)×0.8 + clamp(vol_ratio,0,5)×0.6
+    top = hotspot_ai._quote_rank({"keywords": ["光伏", "储能"], "change_pct": 20.0, "volume_ratio": 9.0})
+    assert (abs(top - (4 + 0.8 * 10 + 0.6 * 5)) < 1e-9), top
+    low = hotspot_ai._quote_rank({"keywords": [], "change_pct": -99.0, "volume_ratio": -1.0})
+    assert (abs(low - (0 + 0.8 * -5 + 0.6 * 0)) < 1e-9), low
+    missing = hotspot_ai._quote_rank({"keywords": ["x"]})
+    assert (missing == 2.0), missing  # 行情字段缺失不惩罚
+
+    async def _run() -> None:
+        orig_search = hotspot_ai._search_one
+        orig_get_quotes = service.get_quotes
+
+        async def fake_search(kw: str) -> tuple:
+            if kw == "光伏":
+                return ([SearchItem(code="600438", market="SH", name="通威股份")], "东方财富")
+            return ([SearchItem(code="601012", market="SH", name="隆基绿能")], "同花顺")
+
+        calls = {"n": 0}
+
+        async def fake_quotes(keys, force=False):
+            calls["n"] += 1
+            return {"600438.SH": _Q(code="600438", market="SH", name="通威股份",
+                                    price=24.5, change_pct=9.9, volume_ratio=5.0)}
+
+        hotspot_ai._search_one = fake_search
+        service.get_quotes = fake_quotes
+        try:
+            stocks = await hotspot_ai._resolve_stocks(["光伏", "储能"])
+            # 通威：1 命中 + 涨幅/量比信号满格 → rank 反超 2 命中但无行情信号的隆基
+            assert (stocks[0]["code"] == "600438"), str(stocks)
+            assert (stocks[0]["rank_score"] > stocks[1]["rank_score"]), str(stocks)
+            assert (calls["n"] == 1), calls
+            # 二次调用走 600s 行情缓存（不再打行情接口）
+            await hotspot_ai._resolve_stocks(["光伏", "储能"])
+            assert (calls["n"] == 1), calls
+        finally:
+            hotspot_ai._search_one = orig_search
+            service.get_quotes = orig_get_quotes
+            _cache.drop_prefix("hotspot_ai:quotes")
+
+    asyncio.run(_run())
+
+    # 行情快照失败 → 降级「命中数 + 检索序」原排序
+    async def _run_degrade() -> None:
+        orig_search = hotspot_ai._search_one
+        orig_get_quotes = service.get_quotes
+
+        async def fake_search(kw: str) -> tuple:
+            return ([SearchItem(code="601012", market="SH", name="隆基绿能")], "同花顺")
+
+        async def boom(keys, force=False):
+            raise RuntimeError("quotes down")
+
+        hotspot_ai._search_one = fake_search
+        service.get_quotes = boom
+        try:
+            stocks = await hotspot_ai._resolve_stocks(["光伏", "储能"])
+            assert (len(stocks) == 1 and stocks[0]["code"] == "601012"), str(stocks)
+            assert ("rank_score" not in stocks[0]), str(stocks)
+        finally:
+            hotspot_ai._search_one = orig_search
+            service.get_quotes = orig_get_quotes
+            _cache.drop_prefix("hotspot_ai:quotes")
+
+    asyncio.run(_run_degrade())
+
+
+def test_board_flow_leaders() -> None:
+    """board_flow_leaders：字段映射 + "-"→None 清洗 + 失败静默为空。"""
+    from backend import value_screener as vs
+
+    payload = {"data": {"diff": [
+        {"f12": "BK0475", "f14": "银行", "f3": 1.23, "f62": 5.6e8,
+         "f164": 1.2e9, "f204": "工商银行", "f205": "601398", "f206": 2.1},
+        {"f12": "BK0478", "f14": "证券", "f3": "-", "f62": "-",
+         "f164": "-", "f204": "-", "f205": "", "f206": "-"},
+    ]}}
+
+    class _Resp:
+        def json(self) -> dict:
+            return payload
+
+    async def _fake_fetch(url: str, *, headers=None, **kwargs):
+        return _Resp()
+
+    orig_fetch = vs.fetch
+    vs.fetch = _fake_fetch
+    try:
+        leaders = asyncio.run(vs.board_flow_leaders())
+        assert (len(leaders) == 2), str(leaders)
+        bank = leaders[0]
+        assert (bank["board"] == "银行" and bank["code"] == "BK0475"
+              and bank["pct_chg"] == 1.23 and bank["main_net"] == 5.6e8
+              and bank["leader_name"] == "工商银行" and bank["leader_code"] == "601398"
+              and bank["leader_pct"] == 2.1), str(bank)
+        # 上游 "-" → None（无数据清洗惯例）
+        sec = leaders[1]
+        assert (sec["pct_chg"] is None and sec["main_net"] is None
+              and sec["leader_name"] is None and sec["leader_code"] is None
+              and sec["leader_pct"] is None), str(sec)
+    finally:
+        vs.fetch = orig_fetch
+
+    # 失败静默：上游抛错 → []
+    async def _boom(url: str, *, headers=None, **kwargs):
+        raise RuntimeError("network down")
+
+    vs.fetch = _boom
+    try:
+        assert (asyncio.run(vs.board_flow_leaders()) == []), "failure should degrade to []"
+    finally:
+        vs.fetch = orig_fetch
+
+
+def test_hotspot_load_leaders() -> None:
+    """_load 把板块龙头挂到 meta.leaders；拉取失败静默为空数组。"""
+    from backend.cache import cache as _cache
+
+    items = [{
+        "id": "x1", "title": "银行板块逆市走强", "summary": "", "ts": int(time.time()) - 30,
+        "source": "财联社", "origin": "财联社", "url": "",
+    }]
+
+    async def _fake_fetch_all(minutes: int) -> tuple:
+        return items, [{"name": "财联社", "ok": True, "count": 1, "error": ""}]
+
+    async def _leaders(limit: int = 50) -> list:
+        return [{"board": "银行", "code": "BK0475", "name": "银行", "pct_chg": 1.1,
+                 "main_net": 1e8, "leader_name": "工商银行", "leader_code": "601398",
+                 "leader_pct": 2.0}]
+
+    orig_fetch_all = hotspot._fetch_all
+    orig_board = hotspot.value_screener.board_flow_leaders
+    hotspot._fetch_all = _fake_fetch_all
+    hotspot.value_screener.board_flow_leaders = _leaders
+    try:
+        result = asyncio.run(hotspot._load(30))
+        assert (result["meta"]["leaders"]
+              and result["meta"]["leaders"][0]["board"] == "银行"), str(result["meta"])
+        heat_names = [h["name"] for h in result["meta"]["sector_heat"]]
+        assert ("银行" in heat_names), str(heat_names)
+        # 新字段齐全：tags 结构 + dups 默认 0
+        item = result["items"][0]
+        assert (item["tags"]
+              and set(item["tags"][0].keys()) == {"name", "sentiment", "score", "hit", "src"}), str(item)
+        assert (item.get("dups", 0) == 0), str(item)
+    finally:
+        hotspot._fetch_all = orig_fetch_all
+        hotspot.value_screener.board_flow_leaders = orig_board
+        _cache.drop("hotspot:30")
+
+    # 失败静默：leaders 拉取抛错 → meta.leaders == []（不阻塞主聚合）
+    async def _boom(limit: int = 50) -> list:
+        raise RuntimeError("leaders down")
+
+    hotspot._fetch_all = _fake_fetch_all
+    hotspot.value_screener.board_flow_leaders = _boom
+    try:
+        result2 = asyncio.run(hotspot._load(31))
+        assert (result2["meta"]["leaders"] == []), str(result2["meta"].get("leaders"))
+    finally:
+        hotspot._fetch_all = orig_fetch_all
+        hotspot.value_screener.board_flow_leaders = orig_board
+        _cache.drop("hotspot:31")
 
 

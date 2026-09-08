@@ -1,0 +1,54 @@
+classDiagram
+    class hotspot {
+        +HEAT_* 常量区
+        +_title_fp(title) str
+        +_title_similar(a, b) float
+        +_merge(items) list
+        +_extract_item_tags(title, summary) list~dict~
+        +_compute_sector_heat(items, minutes, now_ts) list~dict~
+        +get_hotspot(minutes, force) dict
+        +_load(minutes) dict
+    }
+    class hotspot_ai {
+        +SECTOR_* 常量区
+        +_SECTOR_DICT dict
+        +_tag_sentiment(title, summary, kw, ctx) str
+        +_extract_keywords(text) list~str~
+        +rule_analyze(title, summary) tuple
+        +_resolve_stocks(...) list
+        +analyze_news(...) dict
+    }
+    class value_screener {
+        +_fetch_board_flow(limit) dict
+        +board_flow_leaders(limit) list
+    }
+    class Tag {
+        +name: str
+        +sentiment: str
+        +score: float
+        +hit: str
+        +src: str
+    }
+    class SectorHeat {
+        +name: str
+        +heat: float
+        +heat_norm: float
+        +slope: float
+        +trend: str
+        +total: int
+        +bull: int
+        +bear: int
+        +neutral: int
+    }
+    class Leader {
+        +board: str
+        +leader_name: str
+        +leader_code: str
+        +leader_pct: float
+        +main_net: float
+    }
+    hotspot --> hotspot_ai : _extract_item_tags/_tag_sentiment
+    hotspot --> value_screener : board_flow_leaders()
+    hotspot ..> Tag : items[].tags[]
+    hotspot ..> SectorHeat : meta.sector_heat[]
+    value_screener ..> Leader : meta.leaders[]

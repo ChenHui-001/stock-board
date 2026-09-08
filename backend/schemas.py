@@ -172,7 +172,14 @@ class HotResp(_AllowExtra):
 
 
 class HotspotResp(_AllowExtra):
-    """GET /api/hotspot 与 GET /api/hotspot/search —— 快讯列表（同一 shape）。"""
+    """GET /api/hotspot 与 GET /api/hotspot/search —— 快讯列表（同一 shape）。
+
+    meta.sector_heat[] 新增 heat/heat_norm/slope/rank_score（发酵强度模型），
+    trend 语义改为斜率阈值判定（up|flat|down 枚举不变）；meta.leaders 为
+    板块资金流龙头下钻列表（可为空数组）；items[].tags[] 新增 score/hit/src
+    且 sentiment 为标签级情绪；items[] 新增 dups（被去重合并条数，默认 0）。
+    全部新字段由后端给默认值、前端 ?? 兜底，旧缓存数据向后兼容。
+    """
 
     items: list[dict[str, Any]]
     meta: dict[str, Any]

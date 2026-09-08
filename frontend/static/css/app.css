@@ -5992,3 +5992,172 @@ a.hotspot-title:hover {
   border-left: 3px solid var(--up);
   background: rgba(245, 70, 93, .04);
 }
+
+/* 热点追踪：时效三档中间档（≤10min）——淡底色，无红条 */
+.hotspot-item-mid {
+  background: rgba(148, 163, 184, .05);
+}
+
+/* 热点追踪：跨源去重合并计数徽标 */
+.hotspot-dups {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 5px;
+  line-height: 14px;
+}
+
+/* 热点追踪：trend 三组分区标签（发酵中/持平/退潮） */
+.sector-heat-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 8px 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sector-heat-group-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+  opacity: .6;
+}
+
+.sector-group-up { color: var(--up); }
+.sector-group-down { color: var(--down); }
+.sector-group-flat { color: var(--text-dim); }
+
+/* 热度条斜率色阶：up 红 / flat 灰 / down 绿（A股红涨绿跌） */
+.sector-chip-heatbar.sector-bar-up {
+  background: linear-gradient(90deg, var(--up), rgba(245, 70, 93, .18));
+}
+
+.sector-chip-heatbar.sector-bar-flat {
+  background: linear-gradient(90deg, rgba(148, 163, 184, .8), rgba(148, 163, 184, .15));
+}
+
+.sector-chip-heatbar.sector-bar-down {
+  background: linear-gradient(90deg, var(--down), rgba(23, 178, 106, .18));
+}
+
+/* 选中态仍以主题色高亮（放在色阶规则之后保证优先级） */
+.sector-chip.active .sector-chip-heatbar {
+  background: linear-gradient(90deg, var(--accent), rgba(59, 130, 246, .3));
+}
+
+/* 热点追踪：板块资金流龙头下钻面板 */
+.sector-leaders {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-elev-1);
+  padding: 8px 10px;
+}
+
+.sector-leaders-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.sector-leaders-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sector-leader-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.sector-leader-board {
+  font-weight: 600;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sector-leader-chg {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.sector-leader-net {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.sector-leader-stock {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sector-leader-link {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.sector-leader-link:hover {
+  text-decoration: underline;
+}
+
+/* 热点追踪：移动端 ≤480px 收紧——chip 缩小、分组两行布局、下钻面板降字号 */
+@media (max-width: 480px) {
+  .sector-chip {
+    padding: 4px 8px;
+    font-size: 11px;
+    gap: 4px;
+    border-radius: 14px;
+  }
+
+  .sector-chip-name {
+    max-width: 72px;
+  }
+
+  .sector-heat-row {
+    gap: 6px;
+  }
+
+  .sector-heat-group-label {
+    font-size: 10px;
+    margin: 6px 0 4px;
+  }
+
+  .hotspot-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hotspot-filter-right {
+    flex-wrap: wrap;
+  }
+
+  .hotspot-search {
+    width: 100%;
+  }
+
+  .sector-leader-row {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    font-size: 11px;
+  }
+
+  .sector-leaders {
+    padding: 6px 8px;
+  }
+}

@@ -6,7 +6,10 @@
 - 新浪财经 7x24    zhibo.sina.com.cn/api/zhibo/feed
 - 华尔街见闻 7x24  api-one.wallstcn.com/apiv1/content/lives
 
-各源并行抓取 → 统一成条目 → 按时间窗过滤 → 按标题指纹去重 → 按时间倒序。
+各源并行抓取 → 统一成条目 → 按时间窗过滤 → 双条件去重（标题指纹精确 +
+bigram Dice 相似兜底）→ 按时间倒序。概念标签经标签引擎（标题×3/泛词门槛/
+父子去重/标签级情绪）产出，概念热度按发酵强度模型（时效半衰期 + 情绪/信源
+加权 + 子窗 log 斜率趋势）排序，见模块顶部 HEAT_* 常量区。
 媒体署名（彭博社/财联社/财新/澎湃等）保留在 source 字段，命中《重点媒体》
 名单的条目加 media_badge 标记，便于前端优先突出展示。
 
@@ -18,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 from datetime import datetime, timedelta
@@ -26,17 +30,36 @@ from urllib.parse import urlencode
 
 from .cache import cache
 from .config import settings
-from .hotspot_ai import _SECTORS
-from .news import rule_interpret
+from .hotspot_ai import _SECTOR_DICT, _tag_sentiment
 from .providers.base import ProviderError, fetch
 from .utils import TZ, now
-from . import metrics
+from . import metrics, value_screener
 
 log = logging.getLogger("hotspot")
 
 HOTSPOT_MINUTES = settings.HOTSPOT_MINUTES  # 默认时间窗（分钟，环境变量可配）
 HOTSPOT_LIMIT = 40        # 单次最多返回条数
 TTL = settings.HOTSPOT_TTL  # 聚合结果缓存（秒，环境变量可配）
+
+# ------------------------------------------------------------------ HEAT_* 发酵强度模型常量区
+# 热度/趋势/去重全部可调参数集中此处，调参只改这里（约定：一律 HEAT_ 前缀）。
+# 回滚开关：HEAT_SIM_TH > 1 → 关闭相似度合并（条件B）；HEAT_SLOPE_W = 0 → 退化为纯热度排序。
+HEAT_HALF_LIFE_S = 600.0   # 时效半衰期（秒）：10 分钟前的提及权重减半
+HEAT_TITLE_W = 3.0         # 标题命中权重（摘要命中 ×1）
+HEAT_EMO_W = {"利好": 1.2, "中性": 1.0, "利空": 0.8}          # 标签级情绪权重
+# 信源权重（以 _FEEDS 实际源名为准；架构师默认值：财联社 1.3 / 华尔街见闻 1.2 /
+# 新浪·东财 1.0 / 其余 0.8。同花顺与新浪/东财同为一线 7x24 源，按 1.0 计。
+HEAT_SOURCE_W: dict[str, float] = {
+    "财联社": 1.3, "华尔街见闻": 1.2,
+    "同花顺": 1.0, "东方财富": 1.0, "新浪财经": 1.0,
+    "金十数据": 0.8,
+}
+HEAT_SOURCE_W_DEFAULT = 0.8  # 未登记信源（如全网检索来源）的缺省权重
+HEAT_SLOPE_K = 4            # 斜率子窗数：窗口均分 K 份做 log 线性回归
+HEAT_TREND_TH = 0.15        # trend 判定阈值：slope ≥ +0.15 up / ≤ −0.15 down / 其余 flat
+HEAT_SLOPE_W = 0.5          # rank_score 中斜率项权重；置 0 退化为纯热度排序
+HEAT_SIM_TH = 0.62          # 标题 bigram Dice 相似度合并阈值（>1 即关闭条件B）
+HEAT_SENT_WINDOW = 12       # 标签级情绪邻近窗口（命中词前后字数），传入 _tag_sentiment
 
 # 用户点名的重点媒体：命中即标 media_badge（彭博社/财联社/财新/澎湃/同花顺/东方财富…）
 _HOT_MEDIA = (
@@ -568,95 +591,247 @@ async def _fetch_all(minutes: int) -> tuple[list[dict[str, Any]], list[dict[str,
 _TITLE_STRIP = set(" \u3000，。！？、；：（）()【】[]·—-") | {chr(34), chr(39)}
 
 
-def _title_fp(title: str) -> str:
-    """标题指纹：去掉【】包裹/前缀与常见标点、空白，取前 24 字，用于跨源去重。
-
-    同一条新闻在多个源标题略有差异（如新浪带【】包裹、东财多感叹号），
-    归一后指纹一致即可合并；正文不同的新闻指纹不同，不会被误合并。
-    """
+def _norm_title(title: str) -> str:
+    """标题归一：去掉【】包裹/前缀与常见标点、空白（与 _title_fp 同一口径）。"""
     t = title or ""
     m = _RICH_RE.match(t)
     if m:
         # 【标题】整条包裹 → 取标题；【前缀】正文 → 取正文
         t = m.group(2) or m.group(1)
-    t = "".join(ch for ch in t if ch not in _TITLE_STRIP and not ch.isspace())
-    raw = t[:24].encode("utf-8")
-    return hashlib.md5(raw).hexdigest()[:16]
+    return "".join(ch for ch in t if ch not in _TITLE_STRIP and not ch.isspace())
+
+
+def _title_fp(title: str) -> str:
+    """标题指纹：归一后取前 24 字 md5，用于跨源精确去重（条件A）。
+
+    同一条新闻在多个源标题略有差异（如新浪带【】包裹、东财多感叹号），
+    归一后指纹一致即可合并；正文不同的新闻指纹不同，不会被误合并。
+    """
+    return hashlib.md5(_norm_title(title)[:24].encode("utf-8")).hexdigest()[:16]
+
+
+def _title_similar(a: str, b: str) -> float:
+    """标题相似度：字符 bigram Dice 系数（改写式标题兜底，条件B）。
+
+    不用编辑距离：O(L²)/对在大文本上浪费；Dice 对中文短标题区分度足够且
+    O(L)/对。空串/单字无 bigram 时返回 0（宁漏合不误合）。
+    """
+    def grams(t: str) -> set[str]:
+        t = _norm_title(t)
+        if len(t) < 2:
+            return {t} if t else set()
+        return {t[i:i + 2] for i in range(len(t) - 1)}
+
+    ga, gb = grams(a), grams(b)
+    if not ga or not gb:
+        return 0.0
+    inter = len(ga & gb)
+    return 2.0 * inter / (len(ga) + len(gb))
 
 
 def _merge(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """按标题指纹去重（同一条新闻跨源重复），保留最新时间，再按时间倒序。"""
+    """双条件去重合并（同一条新闻跨源/改写式重复），保留最新时间，按时间倒序。
+
+    条件A（精确）：_title_fp 前 24 字指纹相等即合并；
+    条件B（相似）：标题 bigram Dice ≥ HEAT_SIM_TH 即合并，按归一标题首 8 字
+    分桶、仅桶内两两比较（全量 O(n²) → 桶内近似线性）。
+    合并保留 ts 最新的代表条目，被合并条数记入代表条目 ``dups`` 字段
+    （仅记录可观测，不进热度公式）。HEAT_SIM_TH > 1 时关闭条件B（回滚开关）。
+    """
+    # ---- 条件A：指纹精确合并
     best: dict[str, dict[str, Any]] = {}
+    fp_counts: dict[str, int] = {}
     for it in items:
         fp = _title_fp(it["title"])
+        fp_counts[fp] = fp_counts.get(fp, 0) + 1
         cur = best.get(fp)
         if cur is None or it["ts"] > cur["ts"]:
             best[fp] = it
-    ordered = sorted(best.values(), key=lambda x: x["ts"], reverse=True)
+    reps = list(best.values())
+    for r in reps:
+        # 同指纹被合并掉条数（不含代表自身）
+        r["dups"] = fp_counts[_title_fp(r["title"])] - 1
+
+    # ---- 条件B：首 8 字分桶 + 桶内 Dice 相似合并
+    kept_ids: set[int] = {id(r) for r in reps}
+    if HEAT_SIM_TH <= 1.0:
+        buckets: dict[str, list[dict[str, Any]]] = {}
+        for r in reps:
+            buckets.setdefault(_norm_title(r["title"])[:8], []).append(r)
+        for group in buckets.values():
+            if len(group) < 2:
+                continue
+            group.sort(key=lambda r: r["ts"], reverse=True)
+            anchors: list[dict[str, Any]] = []
+            for cand in group:
+                placed = False
+                for a in anchors:
+                    if _title_similar(a["title"], cand["title"]) >= HEAT_SIM_TH:
+                        a["dups"] += 1 + cand.get("dups", 0)
+                        kept_ids.discard(id(cand))
+                        placed = True
+                        break
+                if not placed:
+                    anchors.append(cand)
+
+    ordered = sorted(
+        (r for r in reps if id(r) in kept_ids),
+        key=lambda x: x["ts"], reverse=True,
+    )
     return ordered[:HOTSPOT_LIMIT]
 
 
-def _extract_item_tags(title: str, summary: str) -> list[dict[str, str]]:
-    """为单条快讯打概念标签：从现有行业词典匹配，并继承整体情绪。"""
-    text = f"{title} {summary}"
-    sentiment = rule_interpret({"title": title, "summary": summary}).get("sentiment", "中性")
-    seen: set[str] = set()
-    tags: list[dict[str, str]] = []
-    for industry, kws in _SECTORS:
-        if industry in seen:
-            continue
-        if any(kw in text for kw in kws):
-            tags.append({"name": industry, "sentiment": sentiment})
-            seen.add(industry)
+def _extract_item_tags(title: str, summary: str) -> list[dict[str, Any]]:
+    """为单条快讯打概念标签（标签引擎重写版）。
+
+    匹配：遍历 _SECTOR_DICT 全量多模式子串匹配（纯 str.find，≤200 条毫秒级）。
+    - 标题命中 ×HEAT_TITLE_W，摘要命中 ×1；同一概念双命中取大；
+    - 泛词（generic 登记）仅在标题命中时才计分（泛词门槛）；
+    - 父子去重：命中子概念时父概念不计数，除非父有独立核心词（非泛词、
+      且不与已命中子概念共享关键词）命中；
+    - 标签级情绪：_tag_sentiment 取命中词邻近窗口判定（LLM 扩展点）。
+
+    输出结构：[{"name", "sentiment", "score", "hit", "src"}]，
+    src ∈ "title" | "summary" | "title+summary"（最优命中的来源）。
+    """
+    title_s = title or ""
+    summary_s = summary or ""
+
+    # 第一遍：全量匹配，每个概念记录最优命中与全部命中词
+    raw: dict[str, dict[str, Any]] = {}
+    for name, cfg in _SECTOR_DICT.items():
+        best: dict[str, Any] | None = None
+        hits: list[str] = []
+        for kw in cfg["keywords"]:
+            in_title = kw in title_s
+            in_summary = kw in summary_s
+            if not (in_title or in_summary):
+                continue
+            if cfg["generic"].get(kw) and not in_title:
+                continue  # 泛词门槛：仅标题命中才计分
+            hits.append(kw)
+            weight = HEAT_TITLE_W if in_title else 1.0
+            src = "title+summary" if (in_title and in_summary) else ("title" if in_title else "summary")
+            if best is None or weight > best["score"]:
+                best = {"score": weight, "hit": kw, "src": src}
+        if best is not None:
+            best["hits"] = hits
+            raw[name] = best
+
+    # 第二遍：父子去重。子概念命中后，父概念仅在有「独立核心词」命中时保留。
+    # 独立核心词 = 父的命中词既不是泛词，也不出现在任何已命中子概念的关键词表里。
+    child_kws: dict[str, set[str]] = {}
+    for cname, cinfo in raw.items():
+        parent = _SECTOR_DICT[cname]["parent"]
+        if parent:
+            child_kws.setdefault(parent, set()).update(_SECTOR_DICT[cname]["keywords"])
+
+    tags: list[dict[str, Any]] = []
+    for name, info in raw.items():
+        cfg = _SECTOR_DICT[name]
+        if name in child_kws:
+            # 本概念是某个已命中子概念的父：仅独立核心词命中才保留
+            independent = [
+                kw for kw in info["hits"]
+                if not cfg["generic"].get(kw) and kw not in child_kws[name]
+            ]
+            if not independent:
+                continue
+        sentiment = _tag_sentiment(
+            title_s, summary_s, info["hit"], ctx={"window": HEAT_SENT_WINDOW}
+        )
+        tags.append({
+            "name": name,
+            "sentiment": sentiment,
+            "score": round(float(info["score"]), 3),
+            "hit": info["hit"],
+            "src": info["src"],
+        })
     return tags
 
 
 def _compute_sector_heat(
     items: list[dict[str, Any]], minutes: int, now_ts: int
 ) -> list[dict[str, Any]]:
-    """统计近 N 分钟概念热度与趋势。
+    """发酵强度分 + 斜率趋势（重写版）。
 
-    趋势逻辑：把窗口平分为「前半窗」与「后半窗」，比较同一概念在两半窗的提及次数：
-    - 后半窗 >= 前半窗 * 1.2 → 发酵 ↑
-    - 后半窗 <= 前半窗 * 0.8 → 退潮 ↓
-    - 否则 → 持平 →
+    fresh(t) = 2^(−(now−t)/HEAT_HALF_LIFE_S)：半衰期 600s 的时效衰减；
+    w_item = tag.score × fresh × HEAT_EMO_W[情绪] × HEAT_SOURCE_W[信源]；
+    heat = Σ w_item；heat_norm = 100 × heat / max（相对归一，抗绝对值漂移）；
+    slope：窗口均分 HEAT_SLOPE_K 子窗各得 w_k，对 log(w_k+1) 最小二乘斜率，
+           除以全表最大 |斜率| 归一到 [-1, 1]；
+    trend：slope ≥ HEAT_TREND_TH → up / ≤ −TH → down / 其余 flat；
+    rank_score = heat_norm × (1 + HEAT_SLOPE_W × slope)，按其降序输出。
     """
-    half = minutes * 60 // 2
+    window_s = max(minutes * 60, 1)
+    window_start = now_ts - window_s
+    k = HEAT_SLOPE_K
+    sub = window_s / k
+    half = window_s // 2
     recent_ts = now_ts - half
-    older_ts = now_ts - minutes * 60
 
-    counts: dict[str, dict[str, int]] = {}
+    agg: dict[str, dict[str, Any]] = {}
     for it in items:
+        ts = it["ts"]
+        age = max(now_ts - ts, 0)
+        fresh = 2.0 ** (-age / HEAT_HALF_LIFE_S)
+        src_w = HEAT_SOURCE_W.get(
+            (it.get("source") or it.get("origin") or "").strip(),
+            HEAT_SOURCE_W_DEFAULT,
+        )
         for tag in (it.get("tags") or []):
-            name = tag["name"]
+            name = str(tag.get("name") or "").strip()
+            if not name:
+                continue
             sentiment = tag.get("sentiment", "中性")
-            bucket = counts.setdefault(name, {"total": 0, "bull": 0, "bear": 0, "neutral": 0,
-                                              "recent": 0, "older": 0})
-            bucket["total"] += 1
+            score = float(tag.get("score", 1.0) or 1.0)
+            w = score * fresh * HEAT_EMO_W.get(sentiment, 1.0) * src_w
+            b = agg.setdefault(name, {
+                "total": 0, "bull": 0, "bear": 0, "neutral": 0,
+                "recent": 0, "older": 0, "w": 0.0, "wsub": [0.0] * k,
+            })
+            b["total"] += 1
             if sentiment == "利好":
-                bucket["bull"] += 1
+                b["bull"] += 1
             elif sentiment == "利空":
-                bucket["bear"] += 1
+                b["bear"] += 1
             else:
-                bucket["neutral"] += 1
-            if it["ts"] >= recent_ts:
-                bucket["recent"] += 1
-            elif it["ts"] >= older_ts:
-                bucket["older"] += 1
+                b["neutral"] += 1
+            if ts >= recent_ts:
+                b["recent"] += 1
+            elif ts >= window_start:
+                b["older"] += 1
+            b["w"] += w
+            # 子窗归属：越界（窗口外残留/时间漂移）夹到首尾子窗
+            idx = min(k - 1, max(0, int((ts - window_start) // sub)))
+            b["wsub"][idx] += w
 
+    # 全表最大 |斜率|，用于把 slope 归一到 [-1, 1]
+    slopes: dict[str, float] = {}
+    max_abs = 0.0
+    xs = list(range(k))
+    x_mean = (k - 1) / 2.0
+    y_den = sum((x - x_mean) ** 2 for x in xs) or 1.0
+    for name, b in agg.items():
+        ys = [math.log(w + 1.0) for w in b["wsub"]]
+        y_mean = sum(ys) / k
+        slope = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys)) / y_den
+        slopes[name] = slope
+        max_abs = max(max_abs, abs(slope))
+
+    max_heat = max((b["w"] for b in agg.values()), default=0.0)
     out: list[dict[str, Any]] = []
-    for name, b in counts.items():
-        recent, older = b["recent"], b["older"]
-        if older == 0:
-            trend = "up" if recent > 0 else "flat"
+    for name, b in agg.items():
+        slope_norm = slopes[name] / max_abs if max_abs > 0 else 0.0
+        heat = b["w"]
+        heat_norm = 100.0 * heat / max_heat if max_heat > 0 else 0.0
+        if slope_norm >= HEAT_TREND_TH:
+            trend = "up"
+        elif slope_norm <= -HEAT_TREND_TH:
+            trend = "down"
         else:
-            ratio = recent / older
-            if ratio >= 1.2:
-                trend = "up"
-            elif ratio <= 0.8:
-                trend = "down"
-            else:
-                trend = "flat"
+            trend = "flat"
+        rank_score = heat_norm * (1.0 + HEAT_SLOPE_W * slope_norm)
         out.append({
             "name": name,
             "total": b["total"],
@@ -664,10 +839,14 @@ def _compute_sector_heat(
             "bear": b["bear"],
             "neutral": b["neutral"],
             "trend": trend,
-            "recent": recent,
-            "older": older,
+            "recent": b["recent"],
+            "older": b["older"],
+            "heat": round(heat, 4),
+            "heat_norm": round(heat_norm, 2),
+            "slope": round(slope_norm, 4),
+            "rank_score": round(rank_score, 2),
         })
-    out.sort(key=lambda x: (x["total"], x["bull"]), reverse=True)
+    out.sort(key=lambda x: x["rank_score"], reverse=True)
     return out
 
 
@@ -705,6 +884,12 @@ async def _load(minutes: int) -> dict[str, Any]:
         it["media_badge"] = is_hot_media(it["source"])
         it["tags"] = _extract_item_tags(it["title"], it.get("summary", ""))
     sector_heat = _compute_sector_heat(merged, minutes, now_ts)
+    # 板块资金流龙头（P1-2 下钻）：独立请求路径 + 上游静默容错，不在热度热路径
+    try:
+        leaders = await value_screener.board_flow_leaders(limit=50)
+    except Exception as exc:  # noqa: BLE001 - leaders 失败不阻塞主聚合
+        log.info("热点板块龙头下钻数据获取失败（忽略）：%s", exc)
+        leaders = []
     return {
         "items": merged,
         "meta": {
@@ -714,5 +899,6 @@ async def _load(minutes: int) -> dict[str, Any]:
             "since": (now() - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S"),
             "sources": sources,
             "sector_heat": sector_heat,
+            "leaders": leaders,
         },
     }

@@ -127,6 +127,14 @@ import { AI } from './ai.js';
   }
 
   // 热点概念榜单：从 meta.sector_heat 渲染可点击的概念 chips，点击后过滤当前快讯流。
+  // 发酵强度模型（后端 HEAT_* 常量）：chips 按 trend 三组分区（发酵中/持平/退潮），
+  // 热度条宽度 = heat_norm（旧缓存缺字段时回退 total 相对占比），斜率决定条色阶。
+  const TREND_GROUPS = [
+    { key: 'up', label: '发酵中', icon: '▲' },
+    { key: 'flat', label: '持平', icon: '—' },
+    { key: 'down', label: '退潮', icon: '▼' }
+  ];
+
   function renderSectorHeat() {
     const heat = (state.meta && state.meta.sector_heat) || [];
     const wrap = U.el('div', 'sector-heat');
@@ -138,7 +146,7 @@ import { AI } from './ai.js';
     heatIcon.appendChild(U.icon('flame', { size: 14 }));
     titleWrap.appendChild(heatIcon);
     titleWrap.appendChild(U.el('span', 'sector-heat-title', '热点概念'));
-    titleWrap.appendChild(U.el('span', 'sector-heat-sub', heat.length ? '近 ' + state.minutes + ' 分钟提及趋势' : ''));
+    titleWrap.appendChild(U.el('span', 'sector-heat-sub', heat.length ? '近 ' + state.minutes + ' 分钟发酵强度' : ''));
     head.appendChild(titleWrap);
     if (state.sector) {
       const clear = U.el('button', 'sector-heat-clear', '清除');
@@ -165,40 +173,106 @@ import { AI } from './ai.js';
       render();
     };
     row.appendChild(allChip);
-
-    // 热度条基准：以当前榜内最高提及数为 100%（chip 底部红条宽度 = 相对热度）
-    const maxTotal = heat.reduce(function (mx, s) { return Math.max(mx, s.total || 0); }, 1);
-    heat.slice(0, 12).forEach(function (s) {
-      const cls = 'sector-chip' + (state.sector === s.name ? ' active' : '')
-        + ' sector-trend-' + (s.trend || 'flat');
-      const chip = U.el('button', cls);
-      const trendIcon = { up: '▲', down: '▼', flat: '—' }[s.trend || 'flat'];
-      const trendLabel = { up: '发酵', down: '退潮', flat: '持平' }[s.trend || 'flat'];
-      chip.appendChild(U.el('span', 'sector-chip-trend', trendIcon));
-      chip.appendChild(U.el('span', 'sector-chip-name', s.name));
-      // 情绪计数直显：短线用户不用悬浮就能看到利好/利空倾向
-      if (s.bull > 0 || s.bear > 0) {
-        const sent = U.el('span', 'sector-chip-sent');
-        if (s.bull > 0) sent.appendChild(U.el('span', 'sector-chip-sent-bull', '+' + s.bull));
-        if (s.bull > 0 && s.bear > 0) sent.appendChild(document.createTextNode(' '));
-        if (s.bear > 0) sent.appendChild(U.el('span', 'sector-chip-sent-bear', '-' + s.bear));
-        chip.appendChild(sent);
-      }
-      chip.appendChild(U.el('span', 'sector-chip-count', String(s.total)));
-      // 相对热度底条
-      const bar = U.el('i', 'sector-chip-heatbar');
-      bar.style.width = Math.max(8, Math.round((s.total || 0) / maxTotal * 100)) + '%';
-      chip.appendChild(bar);
-      chip.title = s.name + '：' + s.total + ' 条，趋势' + trendLabel
-        + '（利好 ' + s.bull + ' / 利空 ' + s.bear + ' / 中性 ' + s.neutral + '）';
-      chip.onclick = function () {
-        state.sector = state.sector === s.name ? null : s.name;
-        render();
-      };
-      row.appendChild(chip);
-    });
     wrap.appendChild(row);
+
+    // 热度条兜底基准：旧缓存条目缺 heat_norm 时以 total 相对占比代替
+    const maxTotal = heat.reduce(function (mx, s) { return Math.max(mx, s.total || 0); }, 1);
+    const top = heat.slice(0, 12);
+    TREND_GROUPS.forEach(function (g) {
+      const list = top.filter(function (s) { return (s.trend || 'flat') === g.key; });
+      if (!list.length) return;
+      wrap.appendChild(U.el('div', 'sector-heat-group-label sector-group-' + g.key,
+        g.icon + ' ' + g.label + ' · ' + list.length));
+      const grow = U.el('div', 'sector-heat-row sector-row-' + g.key);
+      list.forEach(function (s) { grow.appendChild(renderSectorChip(s, maxTotal)); });
+      wrap.appendChild(grow);
+    });
+
+    // 下钻面板：选中概念且能匹配到板块资金流龙头时渲染（无匹配 = 隐藏入口）
+    if (state.sector) {
+      const matched = matchLeaders(state.sector);
+      if (matched.length) wrap.appendChild(renderLeadersPanel(state.sector, matched));
+    }
     return wrap;
+  }
+
+  // 单个概念 chip：趋势图标 + 名称 + 情绪计数 + 提及数 + 热度底条（宽度=heat_norm，色阶=斜率）。
+  // 所有 heat/slope 字段 ?? 兜底：旧缓存（无发酵强度分）自动回退旧渲染路径。
+  function renderSectorChip(s, maxTotal) {
+    const trend = s.trend || 'flat';
+    const chip = U.el('button', 'sector-chip'
+      + (state.sector === s.name ? ' active' : '') + ' sector-trend-' + trend);
+    const trendIcon = { up: '▲', down: '▼', flat: '—' }[trend];
+    const trendLabel = { up: '发酵', down: '退潮', flat: '持平' }[trend];
+    chip.appendChild(U.el('span', 'sector-chip-trend', trendIcon));
+    chip.appendChild(U.el('span', 'sector-chip-name', s.name));
+    // 情绪计数直显：短线用户不用悬浮就能看到利好/利空倾向
+    const bull = s.bull ?? 0, bear = s.bear ?? 0;
+    if (bull > 0 || bear > 0) {
+      const sent = U.el('span', 'sector-chip-sent');
+      if (bull > 0) sent.appendChild(U.el('span', 'sector-chip-sent-bull', '+' + bull));
+      if (bull > 0 && bear > 0) sent.appendChild(document.createTextNode(' '));
+      if (bear > 0) sent.appendChild(U.el('span', 'sector-chip-sent-bear', '-' + bear));
+      chip.appendChild(sent);
+    }
+    chip.appendChild(U.el('span', 'sector-chip-count', String(s.total)));
+    // 相对热度底条：宽度 = heat_norm（0-100），缺字段回退 total/maxTotal；色阶随斜率
+    const bar = U.el('i', 'sector-chip-heatbar sector-bar-' + trend);
+    const pct = U.isNum(s.heat_norm)
+      ? Math.max(8, Math.round(s.heat_norm))
+      : Math.max(8, Math.round((s.total || 0) / (maxTotal || 1) * 100));
+    bar.style.width = pct + '%';
+    chip.appendChild(bar);
+    const slopeTxt = U.isNum(s.slope) ? '，斜率 ' + s.slope : '';
+    chip.title = s.name + '：' + s.total + ' 条，趋势' + trendLabel + slopeTxt
+      + '（利好 ' + bull + ' / 利空 ' + bear + ' / 中性 ' + (s.neutral ?? 0) + '）';
+    chip.onclick = function () {
+      state.sector = state.sector === s.name ? null : s.name;
+      render();
+    };
+    return chip;
+  }
+
+  // 下钻匹配：板块名与 leaders.board 双向包含匹配；board 为空的记录不算命中。
+  function matchLeaders(sectorName) {
+    if (!sectorName) return [];
+    const leaders = (state.meta && state.meta.leaders) || [];
+    return leaders.filter(function (l) {
+      const b = String(l.board || '').trim();
+      if (!b) return false;
+      return b.indexOf(sectorName) >= 0 || sectorName.indexOf(b) >= 0;
+    });
+  }
+
+  // 板块资金流龙头下钻面板：主力净流入前列板块 + 领涨股（可点击跳详情）。
+  function renderLeadersPanel(sectorName, matched) {
+    const panel = U.el('div', 'sector-leaders');
+    panel.appendChild(U.el('div', 'sector-leaders-title',
+      '「' + sectorName + '」相关板块资金 · 主力净流入前 ' + matched.length + ' 名'));
+    const list = U.el('div', 'sector-leaders-list');
+    matched.slice(0, 6).forEach(function (l) {
+      const row = U.el('div', 'sector-leader-row');
+      row.appendChild(U.el('span', 'sector-leader-board', l.board || l.name || '--'));
+      if (U.isNum(l.pct_chg)) {
+        row.appendChild(U.el('span', 'sector-leader-chg ' + U.tone(l.pct_chg), U.pct(l.pct_chg)));
+      }
+      if (U.isNum(l.main_net)) {
+        row.appendChild(U.el('span', 'sector-leader-net', U.signedMoney(l.main_net)));
+      }
+      const leader = U.el('span', 'sector-leader-stock',
+        '领涨 ' + (l.leader_name || '--')
+        + (U.isNum(l.leader_pct) ? ' ' + U.pct(l.leader_pct) : '')
+        + (l.leader_code ? ' · ' + l.leader_code : ''));
+      if (l.leader_code) {
+        leader.className += ' sector-leader-link';
+        leader.title = '查看 ' + (l.leader_name || l.leader_code) + ' 详情';
+        leader.onclick = function () { location.hash = '#/stock/' + l.leader_code; };
+      }
+      row.appendChild(leader);
+      list.appendChild(row);
+    });
+    panel.appendChild(list);
+    return panel;
   }
 
   function renderFilters() {
@@ -446,13 +520,21 @@ import { AI } from './ai.js';
       const list = buckets[g.key];
       if (!list.length) return;
       host.appendChild(U.el('div', 'hotspot-group-label', g.label + ' · ' + list.length + ' 条'));
-      const fresh = g.key === 'just';  // 2 分钟内新快讯高亮，短线扫读一眼定位最新
-      list.forEach(function (it) { host.appendChild(renderItem(it, fresh)); });
+      list.forEach(function (it) { host.appendChild(renderItem(it)); });
     });
   }
 
-  function renderItem(it, fresh) {
-    const row = U.el('div', 'hotspot-item' + (fresh ? ' hotspot-item-fresh' : ''));
+  // 时效三档：≤2min 亮（红条 + 浅底）/ ≤10min 中（淡底色）/ 更早 暗（默认样式）。
+  function freshTierClass(ts) {
+    const age = Date.now() / 1000 - (ts || 0);
+    if (age <= 120) return 'hotspot-item-fresh';
+    if (age <= 600) return 'hotspot-item-mid';
+    return '';
+  }
+
+  function renderItem(it) {
+    const tier = freshTierClass(it.ts);
+    const row = U.el('div', 'hotspot-item' + (tier ? ' ' + tier : ''));
 
     const time = U.el('div', 'hotspot-time', (it.time || '').slice(11, 16) || '--');
     row.appendChild(time);
@@ -465,6 +547,12 @@ import { AI } from './ai.js';
     metaLine.appendChild(src);
     const origin = U.el('span', 'hotspot-origin', it.origin || '');
     metaLine.appendChild(origin);
+    // 跨源去重计数：与多少条相似快讯合并展示（仅可观测，不影响热度分）
+    if ((it.dups ?? 0) > 0) {
+      const dupTag = U.el('span', 'hotspot-dups', '合' + it.dups);
+      dupTag.title = '已合并 ' + it.dups + ' 条相似快讯';
+      metaLine.appendChild(dupTag);
+    }
     body.appendChild(metaLine);
 
     // 操作按钮：AI 分析 + 相关股，统一放在右上角
