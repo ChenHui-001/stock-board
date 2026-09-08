@@ -202,6 +202,27 @@ globalThis.fetch = async (path) => {
   if (/\/api\/backtest\/run\/[^/?]+$/.test(url)) { bump('bt_status'); return json({ status: 'running', progress: 0.3, stage: '取数中' }); }
   if (url.indexOf('/api/watchlist') >= 0) { bump('watchlist'); return json({ rows: [], updated_at: '' }); }
   // 注意顺序：/api/hotspot 必须在 /api/hot 之前匹配（否则被 '/api/hot' 前缀吞掉）
+  if (url.indexOf('/api/hotspot/community') >= 0) {
+    bump('hotspot_community');
+    // 社区讨论热度 payload：板块聚合 + 代表股 + sources 登记表（含 missing 项）
+    return json({
+      items: [
+        { name: '农产品加工', heat: 5.0, heat_norm: 100, stock_count: 1, avg_chg: 8.72,
+          stocks: [{ code: '600127', name: '金健米业', rank: 1, weight: 5, chg_pct: 8.72 }] },
+        { name: '元件', heat: 5.0, heat_norm: 100, stock_count: 2, avg_chg: 9.99,
+          stocks: [{ code: '002579', name: '中京电子', rank: 2, weight: 4, chg_pct: 9.99 },
+                   { code: '600001', name: '甲乙丙', rank: 5, weight: 1, chg_pct: null }] },
+      ],
+      meta: {
+        generated_at: '2026-01-01 10:00:00', pool_size: 5, matched: 4, ttl_minutes: 30,
+        sources: [
+          { name: '东方财富·股吧人气榜', status: 'ok', note: 'ok' },
+          { name: '同花顺·热帖', status: 'missing', note: '【数据缺失】无公开接口，暂未接入' },
+          { name: '雪球·热股', status: 'missing', note: '【数据缺失】接口需登录 token，暂未接入' },
+        ],
+      },
+    });
+  }
   if (url.indexOf('/api/hotspot/analyze') >= 0) { bump('hotspot_analyze'); return json({ ok: false, error: 'smoke' }); }
   if (url.indexOf('/api/hotspot') >= 0) {
     bump('hotspot');
@@ -406,6 +427,28 @@ for (const [hash, label] of ROUTES) {
   } else {
     check('热点页：无匹配 leaders 的 chip 不显示下钻面板', false, '未找到退潮组 chip');
   }
+
+  // 11. 社区讨论热度榜（股吧人气榜聚合板块，懒加载区块）
+  const comm = view.querySelector('.hs-community');
+  const commRows = view.querySelectorAll('.hs-community-row');
+  check('热点页：社区讨论热度榜渲染（板块行 ≥2）',
+    !!comm && commRows.length >= 2, commRows.length + ' 行');
+  const commNames = view.querySelectorAll('.hs-community-name, .hs-community-stock-name')
+    .map((n) => String(n.textContent)).join('|');
+  check('热点页：社区热度榜板块与代表股渲染（金健米业/中京电子）',
+    commNames.indexOf('农产品加工') >= 0 && commNames.indexOf('元件') >= 0
+      && commNames.indexOf('金健米业') >= 0 && commNames.indexOf('中京电子') >= 0,
+    commNames);
+  const missingBadges = view.querySelectorAll('.hs-src-missing')
+    .map((n) => String(n.textContent)).join('|');
+  check('热点页：未接入社区源如实标注【数据缺失】',
+    missingBadges.indexOf('数据缺失') >= 0 && missingBadges.indexOf('雪球') >= 0
+      && missingBadges.indexOf('同花顺') >= 0,
+    missingBadges || '无徽标');
+  const commBar = comm ? comm.querySelector('.hs-community-barfill') : null;
+  check('热点页：社区热度条宽度 = heat_norm（最高热度 100%）',
+    !!commBar && String(commBar.style.width) === '100%',
+    commBar ? String(commBar.style.width) : '无热度条');
 
   await goto('#/search');
 }

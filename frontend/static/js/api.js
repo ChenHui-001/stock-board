@@ -92,6 +92,10 @@
       if (limit != null) q.push('limit=' + limit);
       return request('/api/hotspot/search?' + q.join('&'));
     },
+    hotspotCommunity: function (refresh) {
+      // 社区讨论热度榜：股吧人气榜聚合板块（后端缓存 30 分钟）。
+      return request('/api/hotspot/community' + (refresh ? '?refresh=1' : ''));
+    },
     hotspotAnalyze: function (item, refresh) {
       // 单条快讯 AI 分析：利好/利空行业 + 关联度最高股票。
       // 标题/摘要截断到后端字段上限内，避免超长快讯摘要触发 422

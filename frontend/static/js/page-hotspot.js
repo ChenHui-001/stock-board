@@ -25,7 +25,9 @@ import { AI } from './ai.js';
       error: null
     },
     // 行内相关股面板
-    inline: { item: null, loading: false, data: null, error: null }
+    inline: { item: null, loading: false, data: null, error: null },
+    // 社区讨论热度榜（股吧人气榜聚合板块，后端缓存 30 分钟，懒加载）
+    community: { loading: false, data: null, error: null }
   };
 
 
@@ -64,6 +66,7 @@ import { AI } from './ai.js';
     root.innerHTML = '';
     const card = U.el('div', 'card');
     card.appendChild(renderHead());
+    card.appendChild(renderCommunity());
     card.appendChild(renderSectorHeat());
     card.appendChild(renderFilters());
     const listHost = U.el('div', 'hotspot-list');
@@ -273,6 +276,107 @@ import { AI } from './ai.js';
     });
     panel.appendChild(list);
     return panel;
+  }
+
+  // ---------------------------------------------------------------- 社区讨论热度
+
+  // 懒加载社区讨论热度榜：与主快讯流独立请求，后端缓存 30 分钟（抓取频率不用太高）。
+  function loadCommunity(force) {
+    if (state.community.loading) return;
+    state.community.loading = true;
+    API.hotspotCommunity(force).then(function (data) {
+      state.community.data = data || null;
+      state.community.error = null;
+    }).catch(function (err) {
+      // 保留旧数据只提示，避免源抖动清空已渲染榜单
+      state.community.error = err.message || String(err);
+      if (!state.community.data && isCurrent()) {
+        U.toast('社区热度加载失败：' + state.community.error, 'err');
+      }
+    }).finally(function () {
+      state.community.loading = false;
+      if (isCurrent()) render();
+    });
+  }
+
+  // 社区讨论热度榜：板块热度条 + 代表股（股吧人气榜聚合；同花顺/雪球标注数据缺失）。
+  function renderCommunity() {
+    const wrap = U.el('div', 'hs-community');
+    const head = U.el('div', 'sector-heat-head hs-community-head');
+    const titleWrap = U.el('div', 'sector-heat-title-wrap');
+    const heatIcon = U.el('span', 'sector-heat-icon');
+    heatIcon.appendChild(U.icon('flame', { size: 14 }));
+    titleWrap.appendChild(heatIcon);
+    titleWrap.appendChild(U.el('span', 'sector-heat-title', '社区讨论热度'));
+    const c = state.community;
+    const meta = (c.data && c.data.meta) || {};
+    let subText = '';
+    if (c.loading && !c.data) subText = '加载中…';
+    else if (c.data) {
+      subText = '股吧人气榜前 ' + (meta.pool_size || 0) + ' 名聚合 · 缓存 '
+        + (meta.ttl_minutes || 30) + ' 分钟'
+        + (meta.generated_at ? ' · 更新于 ' + String(meta.generated_at).slice(11, 19) : '');
+    }
+    titleWrap.appendChild(U.el('span', 'sector-heat-sub', subText));
+    head.appendChild(titleWrap);
+    // 数据源登记徽标：已接入绿色，未接入灰色带【数据缺失】
+    const srcWrap = U.el('div', 'hs-community-sources');
+    ((meta.sources) || []).forEach(function (s) {
+      const ok = s.status === 'ok';
+      const badge = U.el('span', 'hs-community-src ' + (ok ? 'hs-src-ok' : 'hs-src-missing'),
+        s.name + (ok ? '' : ' ' + (s.note || '【数据缺失】')));
+      head.appendChild(srcWrap);
+      srcWrap.appendChild(badge);
+    });
+    wrap.appendChild(head);
+
+    const items = ((c.data && c.data.items) || []);
+    if (!items.length) {
+      const empty = U.el('div', 'sector-heat-empty',
+        (c.data && meta.error) ? meta.error : (c.loading ? '社区讨论热度加载中…' : '暂无数据'));
+      wrap.appendChild(empty);
+      return wrap;
+    }
+
+    const list = U.el('div', 'hs-community-list');
+    items.forEach(function (b, idx) {
+      const row = U.el('div', 'hs-community-row');
+      row.appendChild(U.el('span', 'hs-community-rank', String(idx + 1)));
+      const main = U.el('div', 'hs-community-main');
+      const top = U.el('div', 'hs-community-top');
+      top.appendChild(U.el('span', 'hs-community-name', b.name || '--'));
+      if (U.isNum(b.stock_count)) {
+        top.appendChild(U.el('span', 'hs-community-count', b.stock_count + ' 只在榜'));
+      }
+      if (U.isNum(b.avg_chg)) {
+        top.appendChild(U.el('span', 'hs-community-avgchg ' + U.tone(b.avg_chg), U.pct(b.avg_chg)));
+      }
+      main.appendChild(top);
+      const bar = U.el('div', 'hs-community-bar');
+      const fill = U.el('div', 'hs-community-barfill');
+      fill.style.width = Math.max(4, Math.min(100, U.isNum(b.heat_norm) ? b.heat_norm : 0)) + '%';
+      bar.appendChild(fill);
+      main.appendChild(bar);
+      row.appendChild(main);
+      const stocks = U.el('div', 'hs-community-stocks');
+      (b.stocks || []).forEach(function (s) {
+        const chip = U.el('span', 'hs-community-stock');
+        chip.appendChild(U.el('span', 'hs-community-stock-name', s.name || s.code || '--'));
+        if (U.isNum(s.chg_pct)) {
+          chip.appendChild(U.el('span', 'hs-community-stock-chg ' + U.tone(s.chg_pct), U.pct(s.chg_pct)));
+        }
+        if (s.code) {
+          chip.title = (s.name || s.code) + ' · 人气榜第 ' + s.rank + ' 名，点击查看详情';
+          chip.className += ' hs-community-stock-link';
+          chip.onclick = function () { location.hash = '#/stock/' + s.code; };
+        }
+        stocks.appendChild(chip);
+      });
+      row.appendChild(stocks);
+      list.appendChild(row);
+    });
+    wrap.appendChild(list);
+    return wrap;
   }
 
   function renderFilters() {
@@ -939,10 +1043,15 @@ import { AI } from './ai.js';
       state.search.error = null;
       state.search.loading = false;
       state.error = null;
+      state.community = { loading: false, data: null, error: null };
       render();
+      loadCommunity(false);   // 社区热度榜懒加载，不阻塞主快讯流
       return load(false);
     },
-    refresh: function () { return load(true); },
+    refresh: function () {
+      loadCommunity(false);   // 后端 30 分钟缓存，手动刷新走缓存即可
+      return load(true);
+    },
     tick: function () {
       // 正在搜索时不自动刷新：整页重绘会顶掉搜索框焦点与光标
       if ((state.q || '').trim()) return;

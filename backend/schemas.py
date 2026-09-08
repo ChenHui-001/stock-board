@@ -189,6 +189,20 @@ class HotspotAnalyzeResp(_AllowExtra):
     """POST /api/hotspot/analyze —— 快讯 AI 分析（结构随引擎动态变化）。"""
 
 
+class CommunityHeatResp(_AllowExtra):
+    """GET /api/hotspot/community —— 社区讨论热度榜（股吧人气榜板块聚合）。
+
+    items[]: {name, heat, heat_norm, stock_count, avg_chg,
+              stocks: [{code, name, rank, weight, chg_pct}]}；
+    meta: {generated_at, pool_size, matched, ttl_minutes, sources, error?}。
+    sources[].status = ok|missing（同花顺/雪球暂未接入，missing 项前端
+    标【数据缺失】）。字段给默认值，降级路径 items 为空数组。
+    """
+
+    items: list[dict[str, Any]] = []
+    meta: dict[str, Any] = {}
+
+
 class ValueScreenResp(_AllowExtra):
     """GET /api/value/screen —— 价值选股聚合结果（市场环境/板块强度/分级池等）。"""
 

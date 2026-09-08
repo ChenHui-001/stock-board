@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import analysis, hotspot as hotspot_mod, hotspot_ai, hotspot_search, llm, llmcfg, news as news_mod, opportunity_screener, reports as reports_mod, scorecfg, service, storage, value_screener, valuecfg
+from . import analysis, community_heat, hotspot as hotspot_mod, hotspot_ai, hotspot_search, llm, llmcfg, news as news_mod, opportunity_screener, reports as reports_mod, scorecfg, service, storage, value_screener, valuecfg
 from .api_deps import (
 REPORT_SCHEMA_VERSION,
 _BLANK_LLM_REASON_RE,  # noqa: F401
@@ -316,6 +316,19 @@ async def hotspot(
     items[].tags 含标签级 sentiment 与 score/hit/src，items[].dups 为去重合并数。
     """
     return await hotspot_mod.get_hotspot(minutes=minutes, force=refresh)
+
+
+@router.get("/hotspot/community", response_model=schemas.CommunityHeatResp)
+async def hotspot_community(refresh: bool = Query(False)) -> dict[str, Any]:
+    """社区讨论热度榜：股吧人气榜前 100 名按所属板块聚合讨论热度。
+
+    板块热度 = Σ(POOL+1-rank)（人气排名越靠前贡献越大），heat_norm 为
+    0~100 归一分；每板块附代表股（热度贡献 top3：code/name/rank/chg_pct）
+    与入榜股数、平均涨幅。meta.sources 登记各社区接入状态——同花顺/雪球
+    无公开接口或需登录 token，status=missing 前端标【数据缺失】。
+    结果缓存 30 分钟（社区热度变化慢，抓取频率不用太高）。
+    """
+    return await community_heat.get_community_heat(force=refresh)
 
 
 @router.get("/hotspot/search", response_model=schemas.HotspotResp)
