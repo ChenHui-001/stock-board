@@ -134,20 +134,8 @@ def to_num(v: Any) -> float | None:
 
 # --------------------------------------------------------------------- 长历史日线
 
-def load_kline(code: str, limit: int) -> pd.DataFrame:
-    """取前复权日线（带本地缓存，避免重复打接口）。
-
-    westock kline 输出为**倒序**（最新在前），这里统一翻转为升序；
-    收盘列叫 `last`、换手列叫 `exchange`，不要按关键词猜。
-    返回列：date / open / close / high / low / volume / turnover。
-    """
-    cache = CACHE_DIR / f"kline_{code}_{limit}.csv"
-    if cache.exists() and _fresh(cache, KLINE_MAX_AGE):
-        try:
-            return pd.read_csv(cache)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("%s 异常，按空数据继续: %s", "load_kline", exc)
-            cache.unlink(missing_ok=True)
+def _westock_kline(code: str, limit: int) -> pd.DataFrame:
+    """westock CLI 取日线（原始路径）。CLI 不可用时抛异常，由 load_kline 兜底。"""
     out = run_cli([
         "kline", code, "--period", "day", "--limit", str(limit), "--fq", "qfq",
     ])
@@ -166,7 +154,70 @@ def load_kline(code: str, limit: int) -> pd.DataFrame:
         "volume": df["volume"].map(to_num) if "volume" in df.columns else None,
         "turnover": df["exchange"].map(to_num) if "exchange" in df.columns else None,
     })
-    out_df = out_df.iloc[::-1].reset_index(drop=True)   # 倒序 → 升序
+    return out_df.iloc[::-1].reset_index(drop=True)   # 倒序 → 升序
+
+
+def _providers_kline(code: str, limit: int) -> pd.DataFrame:
+    """进程内 providers 取日线（生产 registry，含熔断/限流/故障转移）。
+
+    Docker 容器内没有 westock-data CLI（三条解析路径全缺失），score_threshold
+    曾因此在容器里必然「无有效事件」。这里复用 intraday_signal 同款取数通道，
+    Bar → 统一列名 DataFrame（同步线程内无运行中 loop，asyncio.run 安全）。
+    """
+    from ..providers import registry
+    from ..utils import resolve_market
+
+    async def _a() -> tuple[list[Any], str]:
+        bars, src = await registry().kline(code, resolve_market(code), limit)
+        return list(bars or []), src
+
+    try:
+        bars, src = asyncio.run(_a())
+    except RuntimeError as exc:  # 已有运行中 loop 的线程里不可 asyncio.run
+        log.warning("providers kline 需在无 loop 线程调用（%s）", exc)
+        return pd.DataFrame()
+    except Exception as exc:  # noqa: BLE001 - 全源失败按空数据降级
+        log.warning("providers kline 失败 %s: %s", code, exc)
+        return pd.DataFrame()
+    log.info("providers kline %s：来源=%s，%d 根", code, src, len(bars))
+    if not bars:
+        return pd.DataFrame()
+    out_df = pd.DataFrame([{
+        "date": b.date,
+        "open": b.open,
+        "close": b.close,
+        "high": b.high,
+        "low": b.low,
+        "volume": b.volume,
+        "turnover": b.turnover,
+    } for b in bars])
+    return out_df.dropna(subset=["close"]).reset_index(drop=True)
+
+
+def load_kline(code: str, limit: int) -> pd.DataFrame:
+    """取日线（带本地缓存，避免重复打接口）。
+
+    双通道：优先 westock CLI（本机开发环境），不可用（容器内无该命令）
+    自动回退生产 providers。westock 输出为**倒序**（最新在前），统一翻转
+    为升序；CLI 收盘列叫 `last`、换手列叫 `exchange`，不要按关键词猜。
+    返回列：date / open / close / high / low / volume / turnover。
+    """
+    cache = CACHE_DIR / f"kline_{code}_{limit}.csv"
+    if cache.exists() and _fresh(cache, KLINE_MAX_AGE):
+        try:
+            return pd.read_csv(cache)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s 异常，按空数据继续: %s", "load_kline", exc)
+            cache.unlink(missing_ok=True)
+    try:
+        out_df = _westock_kline(code, limit)
+    except Exception as exc:  # noqa: BLE001 - CLI 缺失/失败 → providers 兜底
+        log.warning("westock CLI 不可用（%s），回退 providers：%s", code, exc)
+        out_df = pd.DataFrame()
+    if out_df.empty:
+        out_df = _providers_kline(code, limit)
+    if out_df.empty:
+        return out_df
     out_df = out_df.dropna(subset=["close"]).reset_index(drop=True)
     out_df.to_csv(cache, index=False)
     return out_df
