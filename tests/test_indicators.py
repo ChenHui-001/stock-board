@@ -836,12 +836,13 @@ def test_watch_monitor() -> None:
     )
     assert (no_avail["action"] == "可加仓"), str(no_avail)
 
-    # 资金流非当日: fresh=False → reason 标注(近5日)
+    # 资金流非当日: fresh=False → reason 带真实日期标注（main_last 是单日口径，
+    # 旧文案「（近5日）」误标，v5 改为「截至MM-DD」与两融风格一致）
     stale = service.watch_monitor(
         {"status": "normal", "change_pct": 1.5, "volume_ratio": 1.0},
         flow=_flow("主力抢筹", 5e6, streak=3, streak_dir="流入", fresh=False),
     )
-    assert (stale["action"] == "主力抢筹" and "近5日" in stale["reason"]), str(stale)
+    assert (stale["action"] == "主力抢筹" and "截至08-28" in stale["reason"]), str(stale)
 
     old_trading, old_session = service.is_trading_now, service.session_state
     try:
@@ -925,3 +926,61 @@ def test_summarize_flow_fresh_uses_real_today() -> None:
     rows_today = rows + [FlowDay(date="2026-09-09", main=2.0e8, sm=0, md=0, lg=0, xl=1.2e8)]
     after = summarize_flow(rows_today, ref_date="2026-09-09")
     assert after["fresh"] is True and after["state"] == "主力净流入（当日）", after["state"]
+
+
+def test_watch_monitor_v5() -> None:
+    """v5：涨停融合信号（连板+资金流）与 VWAP 分时位置信号。"""
+    # 连板股涨停 → 「连板涨停」up，reason 带连板数
+    lianban = service.watch_monitor(
+        {"status": "normal", "change_pct": 10.02, "market": "SZ", "code": "000523"},
+        zt={"lianban": 2, "label": "2连板"},
+    )
+    assert (lianban["action"] == "连板涨停" and lianban["tone"] == "up"), str(lianban)
+    assert "2连板" in lianban["reason"], lianban["reason"]
+
+    # 涨停 + 主力大幅流出 → reason 警示开板分歧
+    out_flow = service.watch_monitor(
+        {"status": "normal", "change_pct": 9.98, "market": "SH", "code": "600000"},
+        flow={"available": True, "main_last": -5e7, "fresh": True, "state": "主力净流出"},
+    )
+    assert (out_flow["action"] == "涨停关注" and "开板分歧" in out_flow["reason"]), str(out_flow)
+
+    # 涨停 + 主力大幅流入 → reason 提示资金接力
+    in_flow = service.watch_monitor(
+        {"status": "normal", "change_pct": 9.98, "market": "SH", "code": "600000"},
+        flow={"available": True, "main_last": 8e7, "fresh": True, "state": "主力净流入"},
+    )
+    assert "资金接力" in in_flow["reason"], str(in_flow)
+
+    # 涨停但无资金流/连板数据 → 退化为「涨停关注」（向后兼容）
+    plain = service.watch_monitor(
+        {"status": "normal", "change_pct": 10.02, "market": "SH", "code": "600000"},
+    )
+    assert (plain["action"] == "涨停关注" and plain["tone"] == "warn"), str(plain)
+
+    # 涨但价在分时均价线下方 1.5%+ → 「冲高回落」warn
+    fade = service.watch_monitor(
+        {"status": "normal", "change_pct": 2.5, "volume_ratio": 1.0,
+         "vwap": 10.5, "deviation_pct": -2.1},
+    )
+    assert (fade["action"] == "冲高回落" and fade["tone"] == "warn"), str(fade)
+
+    # 跌但站回分时均价线上方 → 「探底回升」up
+    recover = service.watch_monitor(
+        {"status": "normal", "change_pct": -1.8, "volume_ratio": 1.0,
+         "vwap": 10.0, "deviation_pct": 2.0},
+    )
+    assert (recover["action"] == "探底回升" and recover["tone"] == "up"), str(recover)
+
+    # 偏离在 ±1.5% 死区内 → 不触发 VWAP 信号，回落到原逻辑
+    neutral = service.watch_monitor(
+        {"status": "normal", "change_pct": 1.2, "volume_ratio": 1.0,
+         "vwap": 10.0, "deviation_pct": 0.5},
+    )
+    assert neutral["action"] == "继续观察", str(neutral)
+
+    # 无 vwap 数据 → 完全跳过 VWAP 分支（向后兼容）
+    no_vwap = service.watch_monitor(
+        {"status": "normal", "change_pct": 2.5, "volume_ratio": 1.0},
+    )
+    assert no_vwap["action"] == "继续观察", str(no_vwap)

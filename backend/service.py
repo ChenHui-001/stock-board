@@ -148,6 +148,9 @@ WM_HOT_TURNOVER = 10.0          # 高换手线(%)
 WM_MILD_DROP_HI = -1.5          # 温和回调/偏弱趋势的跌幅上界(%)
 WM_MILD_MIN_VR = 1.0            # 温和回调量比门槛（低于即偏弱趋势）
 WM_ILLIQUID_TURNOVER = 0.3      # 流动性低换手线(%)
+# v5：VWAP 分时维度 + 涨停融合信号
+WM_VWAP_DEV_GATE = 1.5          # VWAP 偏离门槛：|偏离| 低于此值不判分时强弱(%)
+WM_LIMIT_FLOW_GATE = 2e7        # 涨停融合信号的主力净额门槛(±2000万)
 
 
 def _watch_monitor_flow(data: dict[str, Any], change: float,
@@ -173,7 +176,16 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
     streak = flow.get("streak") or 0
     streak_dir = flow.get("streak_dir") or ""
     fresh = bool(flow.get("fresh"))
-    date_tag = "" if fresh else "（近5日）"
+    # main_last 是「最近已披露交易日」的单日净额，不是近5日（main_last5 才是）——
+    # 旧文案 fresh=False 时写「（近5日）」是误标，改为带真实日期，
+    # 与两融情绪「截至 09-08」风格一致（2026-09-09 核查发现）
+    last_date = (flow.get("last_date") or "")[:10]
+    if fresh:
+        date_tag = ""
+    elif last_date:
+        date_tag = f"（截至{last_date[5:]}）"
+    else:
+        date_tag = "（前一交易日）"
 
     has_main = isinstance(main_last, (int, float))
     main_wan = f"{main_last / 1e4:+.0f}万" if has_main else ""
@@ -286,34 +298,37 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
 # ------------------------------------------------------------------ 自选股看板
 
 def watch_monitor(data: dict[str, Any], atr: float | None = None,
-                  flow: dict[str, Any] | None = None) -> dict[str, str]:
-    """根据实时行情 + 资金流生成首页关键监测提示。
+                  flow: dict[str, Any] | None = None,
+                  zt: dict[str, Any] | None = None) -> dict[str, str]:
+    """根据实时行情 + 资金流 + 分时 + 涨停基因生成首页关键监测提示。
 
-    v4 多维度策略（信号优先级从高到低）：
-      1. 行情状态异常            → 继续观察(warn)
-      2. 涨跌停                  → 涨停关注 / 跌停风险
-      3. 量价背离                → 量价背离(warn)        [v4 新]
-      4. 主力抢筹                → 主力抢筹(up)          [v4 新]
-      5. 主力出货                → 主力出货(down)        [v4 新]
-      6. 主力护盘                → 主力护盘(up)          [v4 新]
-      7. 持续流入(连 3 日流入)     → 持续流入(up)          [v4 新]
-      8. 持续流出(连 3 日流出)     → 持续流出(down)        [v4 新]
-      9. 应减仓                  → 应减仓(down)          [v3]
-      10. ATR 放量上涨           → 可加仓(up)            [v2]
-      11. 放量上行(1%≤x<3% 量比≥2) → 放量上行(up)          [v3]
-      12. 异动放量(量比 ≥ 3 方向不明) → 异动放量(warn)
-      13. 高换手 ≥ 10%           → 高换手出货 / 高换手活跃
-      14. 温和回调(-3<x≤-1.5% 量比≥1) → 温和回调(warn)      [v3]
-      15. 流动性极低(换手 < 0.3%) → 流动性低(warn)
-      16. 缩量阴跌               → 继续观察(地量阴跌)
-      17. 偏弱趋势               → 谨慎持有
-      18. 默认                   → 继续观察
+    v5 多维度策略（信号优先级从高到低）：
+      1.  行情状态异常            → 继续观察(warn)
+      2.  涨跌停                  → 连板涨停(up)/涨停关注(warn) [v5 融合资金流+连板] / 跌停风险
+      3.  量价背离                → 量价背离(warn)        [v4]
+      4.  主力抢筹                → 主力抢筹(up)          [v4]
+      5.  主力出货                → 主力出货(down)        [v4]
+      6.  主力护盘                → 主力护盘(up)          [v4]
+      7.  持续流入(连 3 日流入)     → 持续流入(up)          [v4]
+      8.  持续流出(连 3 日流出)     → 持续流出(down)        [v4]
+      9.  VWAP 分时位置           → 冲高回落(warn)/探底回升(up) [v5 新]
+      10. 应减仓                  → 应减仓(down)          [v3]
+      11. ATR 放量上涨           → 可加仓(up)            [v2]
+      12. 放量上行(1%≤x<3% 量比≥2) → 放量上行(up)          [v3]
+      13. 异动放量(量比 ≥ 3 方向不明) → 异动放量(warn)
+      14. 高换手 ≥ 10%           → 高换手出货 / 高换手活跃
+      15. 温和回调(-3<x≤-1.5% 量比≥1) → 温和回调(warn)      [v3]
+      16. 流动性极低(换手 < 0.3%) → 流动性低(warn)
+      17. 缩量阴跌               → 继续观察(地量阴跌)
+      18. 偏弱趋势               → 谨慎持有
+      19. 默认                   → 继续观察
 
     涨跌停限制按板块差异化（ST 5% / 创业板·科创板 20% / 北交所 30% / 主板 10%），
-    容忍 ±0.3% 抖动。「可加仓」沿用 v2 的 ATR 归一化 + 量比过滤（无量拉升不算）。
+    容忍 ±0.3% 抖动。v5 起涨停分支融合 zt_pool 连板标注（连板≥2 → 「连板涨停」）
+    与主力资金读数（净流入→资金接力 / 净流出→警惕开板分歧）。
     v4 起,资金流信号(via indicators.summarize_flow 的 state/state_grade/streak_dir 等)
     优先级高于量比信号——"谁在买"比"成交多不多"更早一步指示意图。
-    flow=None 或 flow['available']=False 时,资金流信号全部跳过,向后兼容。
+    flow=None / zt=None 或数据缺失时对应信号全部跳过,向后兼容。
     """
     status = data.get("status") or "unknown"
     if status != "normal":
@@ -335,15 +350,28 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
     to_text = f"，换手 {turnover:.2f}%" if has_to else ""
 
     # ---- 1. 涨跌停：板块差异化 + ±0.3% 抖动容忍
+    # v5：涨停融合信号——涨停股的关键恰恰是资金接力与连板基因，单纯「涨停关注」
+    # 会掩盖这些信息。融合 zt_pool 连板标注 + 资金流读数后输出。
     limit_pct = _limit_pct(data.get("market"), data.get("code"), data.get("name"))
     near_limit = limit_pct - WM_LIMIT_TOLERANCE
     if change >= near_limit:
+        zt_lianban = (zt or {}).get("lianban") or 0
+        is_lianban = zt_lianban >= 2
+        flow_txt = ""
+        if flow and flow.get("available") and isinstance(flow.get("main_last"), (int, float)):
+            main = flow["main_last"]
+            flow_tag = "" if flow.get("fresh") else "（近5日）"
+            if main >= WM_LIMIT_FLOW_GATE:
+                flow_txt = f"，主力净流入 {main / 1e4:+.0f}万{flow_tag}，资金接力"
+            elif main <= -WM_LIMIT_FLOW_GATE:
+                flow_txt = f"，主力净流出 {main / 1e4:+.0f}万{flow_tag}，警惕开板分歧"
+        zt_txt = f"，{zt_lianban}连板" if is_lianban else ""
         return {
-            "action": "涨停关注",
-            "tone": "warn",
+            "action": "连板涨停" if is_lianban else "涨停关注",
+            "tone": "up" if is_lianban else "warn",
             "reason": (
-                f"涨幅 {change:+.2f}%，触及涨停 ±{limit_pct:.0f}%，"
-                "次日溢价/分歧需关注"
+                f"涨幅 {change:+.2f}%{zt_txt}，触及涨停 ±{limit_pct:.0f}%，"
+                f"关注次日溢价/分歧{flow_txt}"
             ),
         }
     if change <= -near_limit:
@@ -362,6 +390,33 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
     flow_signal = _watch_monitor_flow(data, change, flow)
     if flow_signal is not None:
         return flow_signal
+
+    # ---- 1.6. VWAP 分时位置（v5 新增，分时体系核心维度）----
+    # 价与分时均价线的相对位置比「涨跌幅」更早反映分时强弱：
+    #   - 涨但在均价线下方 → 冲高回落形态（涨是假的，抛压未消化）
+    #   - 跌但站回均价线上方 → 探底回升形态（跌是暂时的，承接已出现）
+    # 偏离门槛 1.5% 过滤在均价线附近横盘的噪声。
+    vwap = data.get("vwap")
+    dev = data.get("deviation_pct")
+    if isinstance(vwap, (int, float)) and vwap > 0 and isinstance(dev, (int, float)):
+        if change > 0 and dev <= -WM_VWAP_DEV_GATE:
+            return {
+                "action": "冲高回落",
+                "tone": "warn",
+                "reason": (
+                    f"涨 {change:+.2f}% 但价低于分时均价线 {abs(dev):.1f}%，"
+                    "分时走弱，谨防尾盘跳水"
+                ),
+            }
+        if change < 0 and dev >= WM_VWAP_DEV_GATE:
+            return {
+                "action": "探底回升",
+                "tone": "up",
+                "reason": (
+                    f"跌 {change:+.2f}% 但价站上分时均价线 {dev:+.1f}%，"
+                    "承接转强，关注能否收复失地"
+                ),
+            }
 
     # ---- 2. 应减仓：跌幅 ≤ -3% 且量比 ≥ 0.8（缩量阴跌属空头衰竭，不触发减仓）
     if change <= WM_REDUCE_DROP and (not has_vr or vr >= WM_REDUCE_MIN_VR):
@@ -626,6 +681,7 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
             data["zt"] = zt_info
         data["monitor"] = watch_monitor(
             data, atr=atr_by_key.get(key), flow=flow_by_key.get(key),
+            zt=zt_info,
         )
         data["sort_no"] = row["sort_no"]
         items.append(data)
