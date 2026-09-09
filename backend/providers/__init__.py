@@ -70,6 +70,10 @@ class Registry(QuoteRaceMixin, HealthMixin):
         self._fail: dict[str, int] = {}
         self._blocked_until: dict[str, float] = {}
         self._stats: dict[str, ProviderStats] = {}
+        # K 线源粘性：记录 (cap, code.market) → 上次成功的源名。
+        # 各源前复权口径不一致（实弹实测 601179 同日 chg_60d 在 -15.9 与 -22.7
+        # 之间漂移），频繁切换会让趋势/支撑结论翻转；同源优先比轮换更正确。
+        self._sticky: dict[str, str] = {}
         for name in settings.PROVIDER_ORDER:
             factory = _FACTORIES.get(name)
             if not factory:
@@ -89,9 +93,16 @@ class Registry(QuoteRaceMixin, HealthMixin):
         call: Callable[[Provider], Coroutine[Any, Any, Any]],
         *,
         empty_ok: bool = False,
+        prefer: str | None = None,
+        sticky_key: str | None = None,
     ) -> tuple[Any, str]:
         errors: list[str] = []
-        for provider in self._available(cap):
+        providers = self._available(cap)
+        if prefer:
+            # 源粘性：优先复用上次成功的源，失败仍按原顺序回退；
+            # 熔断/不可用的源不在 _available 里，排序天然安全
+            providers = sorted(providers, key=lambda p: p.name != prefer)
+        for provider in providers:
             start = time.monotonic()
             quote_time = ""
             try:
@@ -121,6 +132,8 @@ class Registry(QuoteRaceMixin, HealthMixin):
                 if best:
                     quote_time = best.quote_time or best.trade_date
             self._stat(provider.name).record(True, latency_ms, quote_time)
+            if sticky_key:
+                self._sticky[sticky_key] = provider.name
             return result, provider.name
         raise ProviderError(f"{cap} 全部数据源失败 -> " + "; ".join(errors or ["无可用源"]))
 
@@ -134,7 +147,12 @@ class Registry(QuoteRaceMixin, HealthMixin):
         return await self._first("search", lambda p: p.search(keyword, limit))
 
     async def kline(self, code: str, market: str, limit: int) -> tuple[list[Bar], str]:
-        bars, src = await self._first("kline", lambda p: p.kline(code, market, limit))
+        # K 线源粘性：同源优先（复权口径一致），源失败自动回退并更新粘性目标
+        key = f"kline:{code}.{market}"
+        bars, src = await self._first(
+            "kline", lambda p: p.kline(code, market, limit),
+            prefer=self._sticky.get(key), sticky_key=key,
+        )
         return bars, src
 
     async def kline_min(self, code: str, market: str, limit: int,

@@ -533,11 +533,14 @@ def _grade_flow_state(main_last: float, streak: int, streak_dir: str,
 # ------------------------------------------------------------------ 资金流向
 
 def summarize_flow(rows: Sequence[FlowDay], ref_date: str | None = None) -> dict[str, Any]:
-    """资金流向汇总。ref_date 传已知最近交易日（如 K 线最新日期）用于判断
-    「当日资金流向是否已发布」——东财/新浪的日级资金流向通常在收盘后
-    16 点前后才更新当日数据，盘中及 16 点前最后一行是前一交易日。
-    此时把 rows[-1] 当「当日」会误导（把昨天数据标成今天），
-    因此降级为近5日/累计口径并在 fresh=False 中标注。
+    """资金流向汇总。ref_date 传「今天真实日期」（而非 K 线最新日期），
+    fresh 判定语义 = 「资金流是否已包含今天这一行」——东财/新浪的日级资金流
+    通常在收盘后 16 点前后才更新当日数据，盘中最后一行是前一交易日。
+
+    为什么不能用 K 线最新日期当参照（2026-09-09 核查）：同花顺日线盘中不含
+    当日 K，参照会退回昨天，把昨日资金流行误判为「当日」（state 标
+    「主力净流出（当日）」实际是 09-08 数据）。此时降级为近5日口径
+    并在 fresh=False 中标注。
     """
     if not rows:
         return {"available": False, "trend": "无数据", "days": 0}
@@ -985,17 +988,21 @@ def intraday_state_from_quote(quote: Quote) -> dict[str, str]:
     amp = (hi - lo) / prev * 100                  # %
     candidates: list[tuple[int, str, str]] = []  # (|score|, label, tone)
 
-    # 盘中位置 × 涨跌方向
-    if pos >= 75:
-        if chg > 0:
-            candidates.append((3, f"高位强势（{pos:.0f}%）", "up"))
-        else:
-            candidates.append((4, f"冲高回落（{pos:.0f}%）", "down"))
-    elif pos <= 25:
-        if chg < 0:
-            candidates.append((4, f"弱势探底（{pos:.0f}%）", "down"))
-        else:
-            candidates.append((2, f"空头衰竭（{pos:.0f}%）", "up"))
+    # 盘中位置 × 涨跌方向。
+    # 振幅门槛 3%：当日高低差极小时 pos 的分母过小，价格动 3 分钱就能让
+    # 「88% 高位」跌到 75%，此时「高位强势/弱势探底」是纯噪声
+    # （2026-09-09 核查：601179 振幅 1.9% 被标「高位强势 88%」与空头趋势并存）
+    if amp >= 3:
+        if pos >= 75:
+            if chg > 0:
+                candidates.append((3, f"高位强势（{pos:.0f}%）", "up"))
+            else:
+                candidates.append((4, f"冲高回落（{pos:.0f}%）", "down"))
+        elif pos <= 25:
+            if chg < 0:
+                candidates.append((4, f"弱势探底（{pos:.0f}%）", "down"))
+            else:
+                candidates.append((2, f"空头衰竭（{pos:.0f}%）", "up"))
 
     # 量比 × 涨跌方向
     if vr is not None:
@@ -1061,7 +1068,7 @@ def intraday_consistency(trend_label: str, intraday: dict[str, Any] | None) -> d
     # 一致性映射：昨日"上涨/多头" vs 盘中"上涨"；昨日"下跌/空头" vs 盘中"下跌"
     up_keys = {"上涨"}
     down_keys = {"下跌"}
-    flat_keys = {"震荡"}
+    flat_keys = {"震荡", "震荡整理"}
     if trend_label in ("多头趋势", "短期上涨", "多头排列", "短期多头") and intra_label in up_keys:
         return {"aligned": True, "hint": "盘中延续涨势", "chg": intra_chg}
     if trend_label in ("空头趋势", "短期下跌", "空头排列", "短期空头") and intra_label in down_keys:
@@ -1072,7 +1079,12 @@ def intraday_consistency(trend_label: str, intraday: dict[str, Any] | None) -> d
         return {"aligned": False, "hint": "昨日空头盘中反弹", "chg": intra_chg}
     if trend_label == "震荡整理" and intra_label in flat_keys:
         return {"aligned": True, "hint": "盘中维持震荡", "chg": intra_chg}
-    # 其他组合：涨跌 vs 震荡、震荡 vs 涨跌 等"中性分歧"
+    # 中性组合不判背离：空头盘中横盘、多头盘中横盘、震荡股盘中涨跌都是常态，
+    # 旧逻辑一律落到「盘中日线趋势分歧」warn 横幅，把噪音当风险警示
+    # （2026-09-09 用户核查：601179 空头+60分线震荡被判背离）。方向相反才是真背离。
+    if trend_label in flat_keys or intra_label in flat_keys:
+        return {"aligned": None, "hint": "", "chg": intra_chg}
+    # 剩余组合（多头+下跌 / 空头+上涨 等）才是方向相反的真背离
     return {"aligned": False, "hint": "盘中日线趋势分歧", "chg": intra_chg}
 
 

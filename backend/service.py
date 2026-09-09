@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import asdict
+from datetime import date
 from typing import Any
 
 from . import indicators, storage, zt_pool
@@ -552,12 +553,11 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
         *(_flow(r["code"], r["market"], False) for r in rows),
         return_exceptions=True,
     )
-    # 以 K 线最新交易日作为「资金流 fresh」参照,避免把昨日数据当今日
-    ref_date_by_key: dict[str, str] = {
-        full_code(r["code"], r["market"]): (kp.get("last_date") or "")
-        for r, kp in zip(rows, kline_results)
-        if not isinstance(kp, BaseException) and kp
-    }
+    # 以「今天真实日期」作为资金流 fresh 参照：昨日 K 线源（如同花顺）盘中
+    # 不含当日 K，若拿 K 线最新日期当参照，会把昨日资金流行误判为「当日」
+    # （2026-09-09 核查：flow 只到 09-08 却标「主力净流出（当日）」）。
+    # fresh 判定语义 = 「资金流是否已包含今天这一行」。
+    flow_ref_date = date.today().strftime("%Y-%m-%d")
     for r, fp in zip(rows, flow_results):
         key = full_code(r["code"], r["market"])
         if isinstance(fp, BaseException) or not fp:
@@ -566,7 +566,7 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
         try:
             flow_by_key[key] = indicators.summarize_flow(
                 fp.get("rows") or [],
-                ref_date=ref_date_by_key.get(key) or None,
+                ref_date=flow_ref_date,
             )
         except Exception as exc:
             log.warning("watchlist 资金流汇总失败 %s: %s", key, exc)
@@ -874,9 +874,11 @@ async def stock_detail(code: str, market: str | None = None, force: bool = False
     # P2-7：盘中 60 分钟趋势（数据不足/源不支持时 available=False）
     intraday = indicators.intraday_trend_state(kline_min_pack.get("bars") or [])
     last_bar_date = bars[-1].date if bars else ""
-    # ref_date=K线最新日期：资金流向当日数据未发布（盘中/16点前）时
-    # summarize_flow 据此降级判定并标注，避免把昨日数据当「当日」
-    flow_summary = indicators.summarize_flow(flow_pack["rows"], ref_date=last_bar_date)
+    # ref_date=今天真实日期：fresh 判定 =「资金流是否已含今日行」。
+    # 不可用 K 线最新日期当参照——同花顺日线盘中不含当日 K，会把昨日资金流
+    # 误判为「当日」（2026-09-09 核查发现，标签写「当日」实际是 09-08 数据）
+    flow_summary = indicators.summarize_flow(
+        flow_pack["rows"], ref_date=date.today().strftime("%Y-%m-%d"))
     margin_summary = indicators.summarize_margin(margin_pack["rows"])
     # P0-1/P0-3：盘前 9:30 之前所有数据类标签统一降级为"待开盘"；
     # P0-3 数据延迟时给所有标签 warn 染色避免静默误导。

@@ -210,3 +210,52 @@ def test_board_roundtrip_through_cache_pack() -> None:
     assert _board_names(decoded) == _board_names(original)
     assert decoded[0].change_pct == 1.97
     assert decoded[1].code == "BK1610"
+
+
+def test_kline_source_sticky() -> None:
+    """K 线源粘性：同源优先，避免各源复权口径不同导致趋势结论漂移。
+
+    2026-09-09 实弹：601179 同日不同次调用 chg_60d 在 -15.9 与 -22.7 间漂移
+    （ths vs eastmoney 复权口径不同）。
+    """
+    from backend.providers import registry
+    from backend.providers.base import Bar, ProviderError
+
+    bars_a = [Bar(date="2026-09-08", open=1, close=1, high=1, low=1)]
+    bars_b = [Bar(date="2026-09-08", open=2, close=2, high=2, low=2)]
+
+    class FakeP:
+        def __init__(self, name, bars):
+            self.name = name
+            self.caps = ["kline"]
+            self.bars = bars
+            self.calls = 0
+        async def kline(self, code, market, limit):
+            self.calls += 1
+            if self.bars is None:
+                raise ProviderError("源故障")
+            return self.bars, self.name
+
+    reg = registry()
+    pa, pb = FakeP("fake-a", bars_a), FakeP("fake-b", bars_b)
+    orig_providers = reg.providers
+    reg.providers = [pa, pb]
+    try:
+        # 第一次：按顺序命中 fake-a，粘性记录 fake-a
+        bars1, src1 = asyncio.run(reg.kline("600000", "SH", 10))
+        assert src1 == "fake-a" and pa.calls == 1, (src1, pa.calls)
+        # 第二次：即使把顺序反转（fake-b 排前），粘性仍优先 fake-a
+        reg.providers = [pb, pa]
+        bars2, src2 = asyncio.run(reg.kline("600000", "SH", 10))
+        assert src2 == "fake-a" and pb.calls == 0, (src2, pb.calls)
+        # 粘性源故障 → 正常回退 fake-b 并更新粘性
+        reg.providers = [pa_broken := FakeP("fake-a", None), pb]
+        bars3, src3 = asyncio.run(reg.kline("600000", "SH", 10))
+        assert src3 == "fake-b", (src3, pa_broken.calls)
+        # 下次粘性目标已是 fake-b
+        reg.providers = [pa, pb]
+        _bars4, src4 = asyncio.run(reg.kline("600000", "SH", 10))
+        assert src4 == "fake-b", src4
+    finally:
+        reg.providers = orig_providers
+        reg._sticky.clear()

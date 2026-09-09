@@ -852,3 +852,76 @@ def test_watch_monitor() -> None:
         service.is_trading_now, service.session_state = old_trading, old_session
 
 
+
+
+def test_intraday_consistency_neutral_for_choppy() -> None:
+    """横盘对任何日线趋势都是中性：空头+震荡 / 多头+震荡 / 震荡+涨跌 不判背离。
+
+    2026-09-09 用户核查发现：601179 日线空头 + 60分线震荡被判「盘中日线趋势
+    分歧」warn 横幅，把常态当风险警示。只有方向相反（空头+上涨 / 多头+下跌）
+    才是真背离。
+    """
+    from backend.indicators import intraday_consistency
+
+    # 中性组合 → aligned=None，不出横幅
+    assert intraday_consistency("空头趋势", {"available": True, "label": "震荡", "chg": 0.48})["aligned"] is None
+    assert intraday_consistency("多头趋势", {"available": True, "label": "震荡", "chg": -0.2})["aligned"] is None
+    assert intraday_consistency("震荡整理", {"available": True, "label": "上涨", "chg": 1.0})["aligned"] is None
+    assert intraday_consistency("空头趋势", {"available": True, "label": "震荡", "chg": 0.5})["hint"] == ""
+    # 真背离：方向相反
+    assert intraday_consistency("空头趋势", {"available": True, "label": "上涨", "chg": 1.2})["aligned"] is False
+    assert intraday_consistency("多头趋势", {"available": True, "label": "下跌", "chg": -1.0})["aligned"] is False
+    # 同向：一致
+    assert intraday_consistency("空头趋势", {"available": True, "label": "下跌", "chg": -1.0})["aligned"] is True
+
+
+def test_intraday_state_amp_gate() -> None:
+    """盘口位置标签需要振幅 ≥3%：小振幅时 pos 分母过小是纯噪声。
+
+    2026-09-09 核查：601179 振幅 1.9% 被标「高位强势（88%）」与空头趋势并存。
+    """
+    from types import SimpleNamespace
+    from backend.indicators import intraday_state_from_quote
+
+    # 振幅 1.9%、pos 88% → 不出「高位强势」
+    q_small = SimpleNamespace(price=12.57, prev_close=12.42, high=12.60, low=12.36,
+                              change_pct=1.21, volume_ratio=None)
+    out = intraday_state_from_quote(q_small)
+    assert "高位强势" not in out["label"], out
+    # 同样 pos 但振幅 6% → 「高位强势」成立
+    q_big = SimpleNamespace(price=13.00, prev_close=12.42, high=13.16, low=12.42,
+                            change_pct=4.67, volume_ratio=None)
+    out_big = intraday_state_from_quote(q_big)
+    assert "高位强势" in out_big["label"], out_big
+    # 量比信号不受振幅门槛影响
+    q_vr = SimpleNamespace(price=12.57, prev_close=12.42, high=12.60, low=12.36,
+                           change_pct=1.21, volume_ratio=2.5)
+    out_vr = intraday_state_from_quote(q_vr)
+    assert "放量上攻" in out_vr["label"], out_vr
+
+
+def test_summarize_flow_fresh_uses_real_today() -> None:
+    """fresh 参照必须是「今天真实日期」而非 K 线最新日期。
+
+    2026-09-09 核查：同花顺日线盘中不含当日 K（最新 09-08），flow 也到 09-08，
+    旧调用把 K 线日期当 ref_date → 昨日资金流被判「当日」。
+    """
+    from backend.indicators import summarize_flow
+    from backend.providers.base import FlowDay
+
+    rows = [
+        FlowDay(date="2026-09-04", main=1.0e8, sm=0, md=0, lg=0, xl=0.5e8),
+        FlowDay(date="2026-09-08", main=-1.44e8, sm=0, md=0, lg=0, xl=-0.8e8),
+    ]
+    # 错误用法（旧代码）：ref_date=K线最新日期 09-08 → 昨日被当「当日」
+    wrong = summarize_flow(rows, ref_date="2026-09-08")
+    assert wrong["fresh"] is True
+    # 正确用法：ref_date=今天（09-09 盘中）→ flow 未含今日行 → fresh=False 降级近5日
+    right = summarize_flow(rows, ref_date="2026-09-09")
+    assert right["fresh"] is False, right["fresh"]
+    assert right["state"] == "主力净流出（近5日）", right["state"]
+    assert right["last_date"] == "2026-09-08"
+    # 收盘后 flow 更新今日行 → fresh=True
+    rows_today = rows + [FlowDay(date="2026-09-09", main=2.0e8, sm=0, md=0, lg=0, xl=1.2e8)]
+    after = summarize_flow(rows_today, ref_date="2026-09-09")
+    assert after["fresh"] is True and after["state"] == "主力净流入（当日）", after["state"]
