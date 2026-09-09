@@ -6254,3 +6254,4 @@ a.hotspot-title:hover {
   color: var(--text-faint);
 }
 .hs-community-toggle:hover .hs-community-chevron { color: var(--accent); }
+.val-market-prehint { color: var(--warn); }

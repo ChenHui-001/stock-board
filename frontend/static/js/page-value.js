@@ -224,6 +224,11 @@ import { API } from './api.js';
     [attack, zt, cand].filter(Boolean).forEach(function (t) {
       ban.appendChild(U.el('span', 'val-market-meta', t));
     });
+    // 盘前/数据未就绪提示：板块维度按中性计，评分偏低属正常（?? 兜底旧缓存）
+    if (mkt.board_ready === false) {
+      ban.appendChild(U.el('span', 'val-market-meta val-market-prehint',
+        '盘前/数据未就绪：板块维度按中性计，评分偏低属正常，建议 9:35 后刷新'));
+    }
     return ban;
   }
 

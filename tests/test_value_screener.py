@@ -639,9 +639,9 @@ def test_board_score_fund_flow() -> None:
     """板块评分叠加板块主力资金流：强度 0-7 + 资金 0-3（今日/5日双正确认）。"""
     from backend import value_screener as vs
 
-    # 资金缺失 → 退回纯强度（×7），不奖不罚并如实标注
+    # 资金缺失 → 纯强度（×7）+ 资金子项中性 1.5，如实标注（缺失不罚分）
     r = vs._board_score({"board": "AI"}, {"AI": 0.8}, board_flow={})
-    assert r["score"] == 5.6 and "【数据缺失】" in r["detail"], str(r)
+    assert r["score"] == 7.1 and "按中性计" in r["detail"], str(r)
 
     # 今日主净 ≥5 亿 + 5 日双正 → 满额资金 3 分
     r2 = vs._board_score({"board": "AI"}, {"AI": 0.8},
@@ -658,9 +658,9 @@ def test_board_score_fund_flow() -> None:
                          board_flow={"AI": {"main_today": -3e8, "main_5d": -5e8}})
     assert r4["score"] == 5.6, str(r4)
 
-    # 无强度数据 → 恒 3 分兜底不受资金影响
+    # 无强度数据 → 中性 5 分兜底（缺失不罚分），不受资金数据影响
     r5 = vs._board_score({"board": "冷板"}, {}, board_flow={"冷板": {"main_today": 8e8, "main_5d": 1e9}})
-    assert r5["score"] == 3, str(r5)
+    assert r5["score"] == 5 and "按中性计" in r5["detail"], str(r5)
 
 
 def test_flow_score_realtime_confirm() -> None:
@@ -702,3 +702,26 @@ def test_signal_trigger_map() -> None:
     for sig in ("VALUE_BUY", "QUALITY_HOLD", "BREAKOUT_BUY", "PULLBACK_BUY",
                 "BUY", "WATCH", "AVOID", "EXIT", "REDUCE"):
         assert vs._SIGNAL_TRIGGERS.get(sig), sig
+
+
+def test_advice_for_avoid_disambiguation() -> None:
+    """AVOID 文案二分：风险否决=「不参与」，低分无风险=「未达观察线」。
+
+    回归：此前两种成因混用「不参与」+「风险>60」触发说明，盘前低分股
+    （risk=0）会显示误导性文案，用户误以为全部有风险。
+    """
+    from backend import value_screener as vs
+
+    amap = {"AVOID": "不参与", "WATCH": "观察确认"}
+    # 低分无风险 → 未达观察线 + 对应说明（不得出现「风险>60」字样）
+    sig, advice, trigger = vs._advice_for("AVOID", 0, amap)
+    assert (sig, advice) == ("AVOID", "未达观察线"), (sig, advice)
+    assert "60% 观察线" in trigger and "风险>60" not in trigger, trigger
+    # 边界：risk=60 仍属低分路径
+    assert vs._advice_for("AVOID", 60, amap)[1] == "未达观察线"
+    # 风险否决 → 不参与 + 原触发说明
+    sig2, advice2, trigger2 = vs._advice_for("AVOID", 65, amap)
+    assert (sig2, advice2) == ("AVOID", "不参与")
+    assert "风险>60" in trigger2, trigger2
+    # 其他信号走原映射
+    assert vs._advice_for("WATCH", 0, amap) == ("WATCH", "观察确认", vs._SIGNAL_TRIGGERS["WATCH"])

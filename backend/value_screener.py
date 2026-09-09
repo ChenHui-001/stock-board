@@ -880,10 +880,13 @@ def _board_score(
     """
     b = profile.get("board") or ""
     if not b:
-        return {"score": 0, "detail": "板块未知", "completeness": 0}
+        # 盘前/候选缺板块字段属数据缺失：按中性 5/10 计，不罚分
+        # （此前给 0 分，叠加阈值固定占比导致盘前全市场数学性 AVOID）
+        return {"score": 5, "detail": "板块未知【数据缺失】按中性计", "completeness": 0}
     strength = board_strength.get(b)
     if strength is None:
-        return {"score": 3, "detail": f"板块「{b}」无强度数据", "completeness": 0}
+        return {"score": 5, "detail": f"板块「{b}」无强度数据【数据缺失】按中性计",
+                "completeness": 0}
     pts = max(0.0, min(7.0, strength * 7))
     detail = f"板块强度 {strength:.2f}"
     fl = (board_flow or {}).get(b) or {}
@@ -901,8 +904,8 @@ def _board_score(
             fund_pts = min(3.0, fund_pts + 0.5)  # 今日与 5 日双正 → 持续性确认
         detail += f" · 板块主净{mt / 1e8:.1f}亿"
     else:
-        fund_pts = 0.0
-        detail += " · 板块资金【数据缺失】"
+        fund_pts = 1.5   # 板块资金【数据缺失】按子项满分 3 的中性计，不罚分
+        detail += " · 板块资金【数据缺失】按中性计"
     score = max(0.0, min(10.0, round(pts + fund_pts, 1)))
     return {"score": score, "detail": detail, "completeness": 1}
 
@@ -919,7 +922,9 @@ def _flow_score(profile: dict[str, Any]) -> dict[str, Any]:
     """
     flow = profile.get("flow") or []
     if len(flow) < 2:
-        return {"score": 0, "detail": "资金数据缺失", "completeness": 0}
+        # 盘前/接口全空属数据缺失：按中性 6/12 计，不罚分
+        # （此前给 0 分，叠加阈值固定占比导致盘前全市场数学性 AVOID）
+        return {"score": 6, "detail": "资金【数据缺失】按中性计", "completeness": 0}
     last5 = flow[-5:]
     main_1 = sum(d["main"] for d in last5[-1:])
     main_3 = sum(d["main"] for d in last5[-3:])
@@ -1344,6 +1349,23 @@ _SIGNAL_TRIGGERS = {
 }
 
 
+def _advice_for(
+    signal: str, risk: int, advice_map: dict[str, str]
+) -> tuple[str, str, str]:
+    """信号 → (signal, advice, trigger)。纯函数便于契约测试。
+
+    AVOID 有两种成因，文案必须区分（此前混用「不参与」+「风险>60」触发说明，
+    低分无风险的股票会显示误导性文案）：
+    - risk > 60 → 真风险否决：「不参与」+ 原触发说明；
+    - risk ≤ 60 → 只是总分未达 60% 观察线：「未达观察线」+ 对应说明。
+    """
+    if signal == "AVOID" and risk <= 60:
+        return (signal, "未达观察线",
+                "总分未达 60% 观察线（无风险否决）；盘前/弱市板块与情绪维度缺数据时"
+                "评分普遍偏低属正常，等待资金或板块确认后再看")
+    return (signal, advice_map.get(signal, "—"), _SIGNAL_TRIGGERS.get(signal, ""))
+
+
 def _signal(
     profile: dict[str, Any], total: float, buy: int, risk: int,
     value_metrics: "dict[str, Any] | None" = None,
@@ -1484,6 +1506,8 @@ async def _analyze_one(
         "WATCH": "观察确认",
         "REDUCE": "建议减仓",
     }
+    signal, advice, trigger = _advice_for(
+        signal, risk["score"], advice_map)
     return {
         "code": profile["code"], "market": profile["market"],
         "name": profile["name"], "board": profile["board"],
@@ -1502,8 +1526,8 @@ async def _analyze_one(
         "risk_notes": risk.get("notes", []),
         "total_score": total, "buy_score": buy["score"], "trade_score": trade,
         "grade": grade, "grade_name": grade_name,
-        "signal": signal, "advice": advice_map.get(signal, "—"),
-        "signal_trigger": _SIGNAL_TRIGGERS.get(signal, ""),
+        "signal": signal, "advice": advice,
+        "signal_trigger": trigger,
         "completeness": completeness,
     }
 
@@ -1777,6 +1801,9 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
             "zb_count": zb.get("count") or 0,
             "zb_rate": market.get("zb_rate") or 0,
             "candidate_count": len(candidates),
+            # 板块维度就绪标志：涨停池与板块强度全空（盘前/数据未更新）时
+            # 板块维度按中性计，评分普遍偏低属正常，前端据此刻画提示条
+            "board_ready": bool(board_strength) or bool(zt.get("count")),
         },
         "board_top": [{"name": b, "strength": s} for b, s in board_top],
         "pools": {
