@@ -434,6 +434,21 @@ import { App } from './app.js';
       badge.style.fontWeight = '400';
       nameLine.appendChild(badge);
     }
+    // 涨停板标注：连板数 / 几天几板（数据来自东财涨停池，未涨停不显示）
+    const zt = item.zt;
+    if (zt && zt.label) {
+      const ztBadge = U.el('span', 'tag zt-badge', zt.label);
+      const tips = ['今日涨停'];
+      if (zt.lianban >= 2) tips.push('连板 ' + zt.lianban + ' 天');
+      if (zt.zttj_days && zt.zttj_ct && zt.zttj_days > zt.zttj_ct) {
+        tips.push('近 ' + zt.zttj_days + ' 个交易日 ' + zt.zttj_ct + ' 次涨停');
+      }
+      if (zt.board) tips.push('板块 ' + zt.board);
+      if (U.isNum(zt.seal_amount)) tips.push('封单 ' + U.money(zt.seal_amount));
+      ztBadge.title = tips.join(' · ');
+      ztBadge.style.marginLeft = '6px';
+      nameLine.appendChild(ztBadge);
+    }
     cell.appendChild(nameLine);
     cell.appendChild(U.el('div', 'stock-code', item.code));
     row.appendChild(cell);

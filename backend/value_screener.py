@@ -17,7 +17,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from . import cache as cache_mod, service, valuecfg
+from . import cache as cache_mod, service, valuecfg, zt_pool
 from .config import settings
 
 _cache = cache_mod.cache
@@ -176,39 +176,8 @@ async def _fetch_index_quotes() -> list[dict[str, Any]]:
 
 
 async def _fetch_zt_pool() -> dict[str, Any]:
-    """东财涨停池（含连板/板块/换手）。失败返回空结构。"""
-    try:
-        resp = await fetch(
-            "https://push2ex.eastmoney.com/getTopicZTPool",
-            params={
-                "ut": "7eea3edcaed734bea9cbfc24409ed989", "dpt": "wz.ztzt",
-                "Pageindex": 0, "pagesize": 400, "sort": "fbt:asc",
-                "date": datetime.now().strftime("%Y%m%d"),
-            },
-            headers={"Referer": "https://quote.eastmoney.com/ztb/"},
-        )
-        data = (resp.json() or {}).get("data") or {}
-        pool = data.get("pool") or []
-        rows: list[dict[str, Any]] = []
-        for r in pool:
-            code = str(r.get("c") or "")
-            if len(code) != 6:
-                continue
-            market = "SH" if code.startswith(("6", "9", "5")) else "SZ"
-            rows.append({
-                "code": code, "market": market,
-                "name": r.get("n") or "",
-                "change_pct": round((r.get("zdp") or 0) / 100, 2),
-                "turnover": r.get("hs"),
-                "volume_ratio": r.get("lb"),
-                "lianban": r.get("lbc"),           # 连板数
-                "seal_amount": r.get("fund"),        # 封单额
-                "board": r.get("hybk") or "",        # 所属板块
-            })
-        return {"count": data.get("tc") or len(rows), "rows": rows}
-    except Exception as exc:  # noqa: BLE001
-        log.warning("涨停池获取失败：%s", exc)
-        return {"count": 0, "rows": []}
+    """东财涨停池（含连板/板块/换手）——委托 zt_pool 共享模块（与首页共用缓存）。"""
+    return await zt_pool.get_zt_pool()
 
 
 async def _fetch_zb_pool() -> dict[str, Any]:

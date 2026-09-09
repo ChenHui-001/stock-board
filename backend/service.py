@@ -6,7 +6,7 @@ import logging
 from dataclasses import asdict
 from typing import Any
 
-from . import indicators, storage
+from . import indicators, storage, zt_pool
 from .cache import cache
 from .config import settings
 from .providers import Bar, Board, FinancialPeriod, FlowDay, ProviderError, Quote, registry
@@ -582,6 +582,14 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
             missing.append((r["code"], r["market"]))
     board_map = await _industry_map(missing) if missing else {}
 
+    # 涨停标注：复用 zt_pool 共享缓存（60s TTL，与价值投资候选池同一份数据），
+    # 命中今日涨停池的自选股带连板数/几天几板标签，失败静默降级为无标注
+    try:
+        zt_map = zt_pool.match_zt(await zt_pool.get_zt_pool())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("自选股涨停标注失败：%s", exc)
+        zt_map = {}
+
     # 回写攒批：原来在循环里逐行 update_meta，50 只自选股就是最多 100 次
     # 「抢锁 + 开事务 + commit 落 WAL」。攒成一批后只有 1 次。
     # 顺序与原来的逐条调用一致（同一行先回写名称、再回写板块），
@@ -613,6 +621,9 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
         if board and board != row.get("board"):
             pending_meta.append((row["code"], None, board))
         data["board"] = board
+        zt_info = zt_map.get(row["code"])
+        if zt_info:
+            data["zt"] = zt_info
         data["monitor"] = watch_monitor(
             data, atr=atr_by_key.get(key), flow=flow_by_key.get(key),
         )

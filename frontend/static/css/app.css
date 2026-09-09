@@ -895,6 +895,14 @@ main {
   white-space: nowrap;
 }
 
+/* 涨停板标注（首页自选股）：首板/N连板/X天Y板 */
+.tag.zt-badge {
+  background: rgba(245, 70, 93, .12);
+  color: var(--up);
+  border-color: rgba(245, 70, 93, .35);
+  font-weight: 600;
+}
+
 .tag.up {
   border-color: rgba(245, 70, 93, .3);
   background: rgba(245, 70, 93, .1);
