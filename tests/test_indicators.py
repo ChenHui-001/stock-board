@@ -928,8 +928,10 @@ def test_summarize_flow_fresh_uses_real_today() -> None:
     assert after["fresh"] is True and after["state"] == "主力净流入（当日）", after["state"]
 
 
-def test_watch_monitor_v5() -> None:
+def test_watch_monitor_v5(monkeypatch) -> None:
     """v5：涨停融合信号（连板+资金流）与 VWAP 分时位置信号。"""
+    # VWAP 分时信号仅盘中生效（v5.1：收盘后快照冻结会误导，见 601086 案例）
+    monkeypatch.setattr(service, "is_trading_now", lambda: True)
     # 连板股涨停 → 「连板涨停」up，reason 带连板数
     lianban = service.watch_monitor(
         {"status": "normal", "change_pct": 10.02, "market": "SZ", "code": "000523"},
@@ -984,3 +986,12 @@ def test_watch_monitor_v5() -> None:
         {"status": "normal", "change_pct": 2.5, "volume_ratio": 1.0},
     )
     assert no_vwap["action"] == "继续观察", str(no_vwap)
+
+    # v5.1：收盘后（is_trading_now=False）VWAP 分时信号不再输出——
+    # 尾盘脉冲会把「高开跳水→弱势震荡→尾盘偷袭」的票定格成「探底回升」
+    monkeypatch.setattr(service, "is_trading_now", lambda: False)
+    closed = service.watch_monitor(
+        {"status": "normal", "change_pct": -0.47, "volume_ratio": 1.22,
+         "vwap": 14.4975, "deviation_pct": 2.638},
+    )
+    assert closed["action"] != "探底回升", str(closed)

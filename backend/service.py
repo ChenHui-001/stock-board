@@ -396,9 +396,13 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
     #   - 涨但在均价线下方 → 冲高回落形态（涨是假的，抛压未消化）
     #   - 跌但站回均价线上方 → 探底回升形态（跌是暂时的，承接已出现）
     # 偏离门槛 1.5% 过滤在均价线附近横盘的噪声。
+    # v5.1：仅盘中生效。收盘后快照冻结，尾盘脉冲（如 601086 高开跳水 -6% 后
+    # 尾盘 30 分钟拉升 2.4% 站上均价线）会把全天弱势震荡的票定格成
+    # 「探底回升」并挂着盘中文案，误导用户（2026-09-09 用户核查）。
     vwap = data.get("vwap")
     dev = data.get("deviation_pct")
-    if isinstance(vwap, (int, float)) and vwap > 0 and isinstance(dev, (int, float)):
+    if is_trading_now() and isinstance(vwap, (int, float)) and vwap > 0 \
+            and isinstance(dev, (int, float)):
         if change > 0 and dev <= -WM_VWAP_DEV_GATE:
             return {
                 "action": "冲高回落",
