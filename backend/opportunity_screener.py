@@ -29,7 +29,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import cache as cache_mod, service
+from . import cache as cache_mod, service, zt_pool
 from .providers import registry
 from .providers.base import fetch
 from .providers.eastmoney import clean_em, search_articles
@@ -634,7 +634,10 @@ async def _fetch_min5(code: str, market: str) -> list[dict[str, Any]]:
     if hit and time.time() - hit[0] < ttl:
         return hit[1]
     try:
-        bars = await registry().kline_min(code, market, 48, klt=5)
+        # registry().kline_min 返回 (bars, 源名) 元组——直接迭代会在第二个元素
+        # (str) 上抛 AttributeError 被吞掉，导致分时数据 100% 缺失、composite
+        # 恒丢 35 分，页面永远空仓（2026-09-09 实弹确诊的历史性 Bug）
+        bars, _src = await registry().kline_min(code, market, 48, klt=5)
         rows = [{"date": b.date, "open": b.open, "close": b.close, "high": b.high,
                  "low": b.low, "volume": b.volume, "amount": b.amount}
                 for b in bars]
@@ -888,7 +891,14 @@ def _plan(profile: dict[str, Any], min5: dict[str, Any] | None,
 # ------------------------------------------------------------------ 主流程
 
 def _candidate_base(zt: dict[str, Any], hot: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """候选池：涨停池（含炸板回封观察）+ 热门榜，去重。上限 60。"""
+    """候选池：**昨日**涨停池（今日分歧转强买点）+ 热门榜，去重。上限 60。
+
+    为什么用昨日池：策略买的是「昨日涨停、今日 3~8% 分歧转强」，硬筛的
+    涨幅 3~8% 区间天然排除今日已涨停股（+10%/+20cm）——候选若来自今日
+    涨停池，会在数学上 100% 被硬筛清零（2026-09-09 实弹：60 候选 58 只
+    死于「涨幅不在3~8%」，hard_passed=0）。lianban/zttj 取昨日口径，
+    正是妖股评分需要的「昨日连板高度」。
+    """
     out: dict[str, dict[str, Any]] = {}
     for r in (zt.get("rows") or []):
         code = r.get("code") or ""
@@ -952,9 +962,40 @@ def _chg_n(bars: list[dict[str, Any]], n: int) -> float | None:
     return round((last / base - 1) * 100, 2)
 
 
+def _prev_trade_dates(today: datetime | None = None, back: int = 5) -> list[str]:
+    """自昨日往前的候选交易日列表（YYYYMMDD，含周末自动跳过的余地）。
+
+    不引入完整交易日历：东财池接口对非交易日返回空，逐日回退即可命中最
+    近一个真实交易日（节假日最多连休 8 天，back=5 覆盖绝大多数场景）。
+    """
+    base = today or datetime.now()
+    return [(base - timedelta(days=i)).strftime("%Y%m%d") for i in range(1, back + 1)]
+
+
+async def _fetch_prev_zt_pool() -> dict[str, Any]:
+    """昨日（最近一个已收盘交易日）涨停池，供「昨日涨停今日分歧」候选。"""
+    for d in _prev_trade_dates():
+        pool = await zt_pool.get_zt_pool(trade_date=d)
+        if (pool.get("count") or 0) > 0:
+            return pool
+    return {"count": 0, "rows": []}
+
+
+def _pick_watch(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """观察名单：未全过三重准入但综合分≥80，≤2 只。
+
+    策略「宁缺毋滥」的透明化——让用户看到今日最接近达标者与差距，
+    明确不构成买入建议；与 final 互斥（not _all_pass）。
+    注意不再要求无排除项：情绪 D（排除7）本就否决买入，若连观察都清空，
+    弱市页面只剩一句空话、用户无从知道「差在哪」（2026-09-09 用户反馈）。
+    排除原因仍完整展示在 action_reason 里。
+    """
+    return [r for r in results if not r["_all_pass"] and r["composite"] >= 80][:2]
+
+
 async def run_screen(force: bool = False) -> dict[str, Any]:
     """机会投资完整流水线（聚合缓存 10 分钟）。"""
-    key = "opportunity:screen:v8"
+    key = "opportunity:screen:v9"
     if not force:
         cached = _cache.peek(key)
         if cached:
@@ -979,7 +1020,9 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     boards_top = [{k: v for k, v in b.items() if k != "top_leader_chg"} for b in boards_top]
 
     # ---- 候选池 + 批量行情
-    cands = _candidate_base(zt, hot)
+    # 候选用「昨日涨停池」（分歧转强），市场情绪/板块周期仍用今日池（当日市况）
+    zt_prev = await _fetch_prev_zt_pool()
+    cands = _candidate_base(zt_prev, hot)
     if cands:
         keys = [(c["code"], c["market"]) for c in cands]
         try:
@@ -1036,14 +1079,17 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
     sem = asyncio.Semaphore(6)
     await asyncio.gather(*[_stock_deep(c, sem) for c in passed])
     # 5/20日涨幅复核 + 流通市值过滤（<300亿优先，非绝对淘汰则放宽到 <600 后降妖股分）
+    # chg5 上限 35 / chg20 上限 60：2~3 连板妖股的近端涨幅天然 >20%（20cm 双板
+    # 甚至 >40%），旧阈值(20/30)会把「分歧转强」的目标群体在数学上清零，
+    # 与策略妖股基因直接矛盾；上限仍是风险护栏（排除已翻倍的高位股）
     filtered: list[dict[str, Any]] = []
     for c in passed:
         bars = c.get("bars") or []
         c["chg5"] = _chg_n(bars, 5)
         c["chg20"] = _chg_n(bars, 20)
-        if c["chg5"] is None or not (-5 <= c["chg5"] <= 20):
+        if c["chg5"] is None or not (-5 <= c["chg5"] <= 35):
             continue
-        if c["chg20"] is None or not (-15 <= c["chg20"] <= 30):
+        if c["chg20"] is None or not (-15 <= c["chg20"] <= 60):
             continue
         fm = c.get("float_mv")
         if fm is not None and fm > 600:
@@ -1159,10 +1205,7 @@ async def run_screen(force: bool = False) -> dict[str, Any]:
         r.pop("_sort", None)
         r.pop("_all_pass", None)
     empty = not final
-    # 观察名单：未全过三重准入但综合分≥80且无排除项（action=观察），≤2 只。
-    # 策略「宁缺毋滥」的透明化——让用户看到今日最接近达标者与差距，
-    # 明确不构成买入建议；与 final 互斥（not _all_pass）。
-    watch = [r for r in results if not r["_all_pass"] and r["action"] == "观察"][:2]
+    watch = _pick_watch(results)
     for i, r in enumerate(watch, 1):
         r["rank"] = i
         r.pop("_sort", None)

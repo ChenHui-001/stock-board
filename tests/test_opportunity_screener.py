@@ -333,3 +333,69 @@ def test_chg_n() -> None:
     bars = [{"close": 10.0}] * 5 + [{"close": 11.0}]
     assert ops._chg_n(bars, 5) == 10.0
     assert ops._chg_n(bars[:5], 5) is None  # 数据不足
+
+
+def test_prev_trade_dates_fallback() -> None:
+    """候选交易日自昨日回退；昨日池为空（周末/节假日）时逐日前探。"""
+    from backend import opportunity_screener as ops
+    from datetime import datetime
+
+    dates = ops._prev_trade_dates(datetime(2026, 9, 9, 13, 0))
+    assert dates[0] == "20260908" and len(dates) == 5, dates
+
+    # 昨日空 → 前日命中即返回；全空 → 空结构
+    called = []
+
+    async def fake_get(force=False, trade_date=None):
+        called.append(trade_date)
+        if trade_date == "20260907":
+            return {"count": 73, "rows": [{"code": "600001", "market": "SH"}]}
+        return {"count": 0, "rows": []}
+
+    orig = ops.zt_pool.get_zt_pool
+    ops.zt_pool.get_zt_pool = fake_get
+    try:
+        out = asyncio.run(ops._fetch_prev_zt_pool())
+    finally:
+        ops.zt_pool.get_zt_pool = orig
+    assert out["count"] == 73, out
+    assert called == ["20260908", "20260907"], called
+
+
+def test_pick_watch_keeps_excluded_high_score() -> None:
+    """观察名单不再因排除项（如情绪D）清空：composite≥80 即入选，含排除原因。"""
+    from backend import opportunity_screener as ops
+
+    results = [
+        {"code": "600001", "_all_pass": False, "composite": 82.0,
+         "action_reason": "排除7：市场情绪D级禁止追涨"},
+        {"code": "600002", "_all_pass": False, "composite": 75.0,
+         "action_reason": "三重准入未全部通过。"},
+        {"code": "600003", "_all_pass": True, "composite": 90.0},
+    ]
+    watch = ops._pick_watch(results)
+    assert [r["code"] for r in watch] == ["600001"], watch
+    assert watch[0]["action_reason"].startswith("排除7")
+
+
+def test_fetch_min5_unpacks_registry_tuple(monkeypatch) -> None:
+    """registry().kline_min 返回 (bars, 源名) 元组——历史 Bug：直接迭代导致
+    AttributeError 被吞、5分钟K 100% 缺失、composite 恒丢 35 分永远空仓。"""
+    from backend import opportunity_screener as ops
+    from backend.providers.base import Bar
+
+    bars = [Bar(date="2026-09-09 13:30", open=10.0, close=10.5, high=10.6,
+                low=9.9, volume=1000, amount=1e6) for _ in range(12)]
+
+    class FakeRegistry:
+        async def kline_min(self, code, market, limit, klt=60):
+            return bars, "fake-source"
+
+    monkeypatch.setattr(ops, "registry", lambda: FakeRegistry())
+    monkeypatch.setattr(ops, "_min5_cache", {})
+    rows = asyncio.run(ops._fetch_min5("002286", "SZ"))
+    assert len(rows) == 12, rows
+    assert rows[0]["close"] == 10.5
+    # 有了分时数据，分时特征/评分不再恒 None
+    feat = ops._intraday_features(rows, {"prev_close": 10.0})
+    assert feat is not None and feat["n_bars"] == 12

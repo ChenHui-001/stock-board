@@ -27,8 +27,6 @@ _CACHE_KEY = "zt_pool:shared"
 _CACHE_TTL = 60.0  # 盘中 1 分钟足够；封单/连板数变化频率低于行情
 
 _MARKET_PREFIXES = ("6", "9", "5")  # 沪市：60x/68x/9xx/5xx 基金；其余按深市
-
-
 def zt_label(lianban: int | None, days: int | None, ct: int | None) -> str:
     """把连板数 + 涨停统计转成「首板 / N连板 / X天Y板」标签。
 
@@ -67,23 +65,29 @@ def match_zt(pool: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     return out
 
 
-async def get_zt_pool(force: bool = False) -> dict[str, Any]:
-    """东财涨停池（含连板/几天几板/封单），TTL 缓存共享。失败返回空结构。"""
+async def get_zt_pool(force: bool = False, trade_date: str | None = None) -> dict[str, Any]:
+    """东财涨停池（含连板/几天几板/封单），TTL 缓存共享。失败返回空结构。
+
+    ``trade_date`` 为 ``YYYYMMDD``；None = 今日。历史日期实测可用
+    （2026-09-08 curl 返回 tc=73），供「昨日涨停今日分歧」类策略取昨日池；
+    缓存 key 按日期隔离，今日池与历史池互不污染。
+    """
 
     async def _load() -> dict[str, Any]:
-        return await _fetch_zt_pool()
+        return await _fetch_zt_pool(trade_date)
 
-    return await _cache.get_or_set(_CACHE_KEY, _CACHE_TTL, _load, force=force)
+    key = _CACHE_KEY if not trade_date else f"{_CACHE_KEY}:{trade_date}"
+    return await _cache.get_or_set(key, _CACHE_TTL, _load, force=force)
 
 
-async def _fetch_zt_pool() -> dict[str, Any]:
+async def _fetch_zt_pool(trade_date: str | None = None) -> dict[str, Any]:
     try:
         resp = await fetch(
             "https://push2ex.eastmoney.com/getTopicZTPool",
             params={
                 "ut": "7eea3edcaed734bea9cbfc24409ed989", "dpt": "wz.ztzt",
                 "Pageindex": 0, "pagesize": 400, "sort": "fbt:asc",
-                "date": datetime.now().strftime("%Y%m%d"),
+                "date": trade_date or datetime.now().strftime("%Y%m%d"),
             },
             headers={"Referer": "https://quote.eastmoney.com/ztb/"},
         )
