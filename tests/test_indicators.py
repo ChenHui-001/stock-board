@@ -995,3 +995,75 @@ def test_watch_monitor_v5(monkeypatch) -> None:
          "vwap": 14.4975, "deviation_pct": 2.638},
     )
     assert closed["action"] != "探底回升", str(closed)
+
+
+def test_tail_rush_pct_formats() -> None:
+    """尾盘拉升幅度：兼容 tencent（202609091500）与 eastmoney（2026-09-09 15:00）两种日期格式。"""
+    from backend.service import _tail_rush_pct
+    from backend.providers.base import Bar
+
+    def bars_tencent():
+        return [
+            Bar(date="202609091400", open=14.5, close=14.5, high=14.5, low=14.5),
+            Bar(date="202609091430", open=14.5, close=14.52, high=14.55, low=14.48),
+            Bar(date="202609091435", open=14.6, close=14.70, high=14.72, low=14.58),
+            Bar(date="202609091500", open=14.8, close=14.88, high=14.90, low=14.79),
+        ]
+
+    def bars_eastmoney():
+        return [
+            Bar(date="2026-09-09 14:00", open=14.5, close=14.5, high=14.5, low=14.5),
+            Bar(date="2026-09-09 14:30", open=14.5, close=14.52, high=14.55, low=14.48),
+            Bar(date="2026-09-09 14:35", open=14.6, close=14.70, high=14.72, low=14.58),
+            Bar(date="2026-09-09 15:00", open=14.8, close=14.88, high=14.90, low=14.79),
+        ]
+
+    # 基准 = 14:30 收盘 14.52 → 现价 14.88 = +2.48%
+    for bars in (bars_tencent(), bars_eastmoney()):
+        r = _tail_rush_pct(bars, today="20260909")
+        assert r is not None and abs(r - 2.48) < 0.01, r
+    # 无今日数据 → None；只有 14:30 前数据 → 拉升 0.0（未开盘尾盘窗口）
+    assert _tail_rush_pct([], today="20260909") is None
+    assert _tail_rush_pct([bars_tencent()[0]], today="20260909") == 0.0
+    # 今日缺早盘（第一根就是 14:35）→ 无 14:30 基准 → None
+    late_only = [Bar(date="202609091435", open=14.6, close=14.7, high=14.72, low=14.58)]
+    assert _tail_rush_pct(late_only, today="20260909") is None
+
+
+def test_watch_monitor_tail_rush(monkeypatch) -> None:
+    """v5.2 尾盘偷袭：仅盘中 14:30 后且拉升 ≥2% 触发，优先于 VWAP。"""
+    monkeypatch.setattr(service, "is_trading_now", lambda: True)
+
+    # 尾盘 14:31 + 拉升 2.5% → 触发
+    monkeypatch.setattr(service, "_now_hhmm", lambda: "1431")
+    hit = service.watch_monitor(
+        {"status": "normal", "change_pct": 1.0, "volume_ratio": 1.0,
+         "vwap": 10.0, "deviation_pct": 2.0},
+        tail_rush=2.5,
+    )
+    assert (hit["action"] == "尾盘偷袭" and hit["tone"] == "warn"), str(hit)
+    assert "14:30" in hit["reason"], hit["reason"]
+
+    # 拉升不足 2% → 不触发
+    small = service.watch_monitor(
+        {"status": "normal", "change_pct": 1.0, "volume_ratio": 1.0},
+        tail_rush=1.2,
+    )
+    assert small["action"] != "尾盘偷袭", str(small)
+
+    # 14:30 前（时间窗未开）→ 不触发
+    monkeypatch.setattr(service, "_now_hhmm", lambda: "1400")
+    early = service.watch_monitor(
+        {"status": "normal", "change_pct": 1.0, "volume_ratio": 1.0},
+        tail_rush=3.0,
+    )
+    assert early["action"] != "尾盘偷袭", str(early)
+
+    # 收盘后 → 不触发（is_trading_now=False）
+    monkeypatch.setattr(service, "_now_hhmm", lambda: "1431")
+    monkeypatch.setattr(service, "is_trading_now", lambda: False)
+    closed = service.watch_monitor(
+        {"status": "normal", "change_pct": 1.0, "volume_ratio": 1.0},
+        tail_rush=2.5,
+    )
+    assert closed["action"] != "尾盘偷袭", str(closed)

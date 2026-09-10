@@ -335,7 +335,7 @@ def test_chg_n() -> None:
     assert ops._chg_n(bars[:5], 5) is None  # 数据不足
 
 
-def test_prev_trade_dates_fallback() -> None:
+def test_prev_trade_dates_fallback(monkeypatch) -> None:
     """候选交易日自昨日回退；昨日池为空（周末/节假日）时逐日前探。"""
     from backend import opportunity_screener as ops
     from datetime import datetime
@@ -343,6 +343,9 @@ def test_prev_trade_dates_fallback() -> None:
     dates = ops._prev_trade_dates(datetime(2026, 9, 9, 13, 0))
     assert dates[0] == "20260908" and len(dates) == 5, dates
 
+    # 固定候选日序列：_fetch_prev_zt_pool 内部用真实时钟，不固定会随日期漂移
+    monkeypatch.setattr(ops, "_prev_trade_dates",
+                        lambda today=None, back=5: ["20260908", "20260907", "20260906"])
     # 昨日空 → 前日命中即返回；全空 → 空结构
     called = []
 

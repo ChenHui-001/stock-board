@@ -4,8 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import asdict
-from datetime import date
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Sequence
 
 from . import indicators, storage, zt_pool
 from .cache import cache
@@ -151,6 +151,40 @@ WM_ILLIQUID_TURNOVER = 0.3      # 流动性低换手线(%)
 # v5：VWAP 分时维度 + 涨停融合信号
 WM_VWAP_DEV_GATE = 1.5          # VWAP 偏离门槛：|偏离| 低于此值不判分时强弱(%)
 WM_LIMIT_FLOW_GATE = 2e7        # 涨停融合信号的主力净额门槛(±2000万)
+WM_TAIL_RUSH_GATE = 2.0         # 尾盘偷袭：14:30 后拉升幅度门槛(%)
+WM_TAIL_RUSH_FROM = "1425"      # 尾盘偷袭检测的启用时刻（提前 5 分钟拉基准）
+
+
+def _now_hhmm() -> str:
+    """当前时刻 HHMM（模块级辅助，便于测试 monkeypatch 时间窗）。"""
+    return datetime.now().strftime("%H%M")
+
+
+def _tail_rush_pct(bars: Sequence[Any], today: str | None = None) -> float | None:
+    """尾盘拉升幅度：今日 14:30 前最后一根收盘 → 现价的涨幅（%）。
+
+    「尾盘偷袭」游资形态特征：全天不显山露水，尾盘 30 分钟快速拉升做图形。
+    数据兼容两种分钟K日期格式：tencent ``202609091500``（无分隔符）与
+    eastmoney ``2026-09-09 15:00``。数据不足 / 14:30 基准缺失返回 None。
+    """
+    day = (today or datetime.now().strftime("%Y%m%d")).replace("-", "")
+    # 分钟K日期两种格式：tencent「202609091500」/ eastmoney「2026-09-09 15:00」
+    # ——统一剥掉 -、空格、: 后再切片，否则冒号参与字符比较会把基准判错
+    def _norm(b: Any) -> str:
+        return str(getattr(b, "date", "")).replace("-", "").replace(" ", "").replace(":", "")
+
+    tds = [b for b in (bars or []) if _norm(b)[:8] == day]
+    if not tds:
+        return None
+    base: float | None = None
+    for b in tds:
+        if _norm(b)[8:12] <= "1430":
+            base = b.close
+        else:
+            break
+    if not base or base <= 0:
+        return None
+    return round((tds[-1].close / base - 1) * 100, 2)
 
 
 def _watch_monitor_flow(data: dict[str, Any], change: float,
@@ -171,7 +205,9 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
     if not flow or not flow.get("available"):
         return None
     main_last = flow.get("main_last")
-    state = flow.get("state") or ""
+    # state 在 fresh=False 时自带「（近5日）」后缀（_grade_flow_state 拼的），
+    # 与下方 date_tag「（截至MM-DD）」重复 → 统一剥掉，口径标注由 date_tag 全权负责
+    state = (flow.get("state") or "").replace("（近5日）", "")
     state_grade = flow.get("state_grade") or ""
     streak = flow.get("streak") or 0
     streak_dir = flow.get("streak_dir") or ""
@@ -299,7 +335,8 @@ def _watch_monitor_flow(data: dict[str, Any], change: float,
 
 def watch_monitor(data: dict[str, Any], atr: float | None = None,
                   flow: dict[str, Any] | None = None,
-                  zt: dict[str, Any] | None = None) -> dict[str, str]:
+                  zt: dict[str, Any] | None = None,
+                  tail_rush: float | None = None) -> dict[str, str]:
     """根据实时行情 + 资金流 + 分时 + 涨停基因生成首页关键监测提示。
 
     v5 多维度策略（信号优先级从高到低）：
@@ -311,17 +348,18 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
       6.  主力护盘                → 主力护盘(up)          [v4]
       7.  持续流入(连 3 日流入)     → 持续流入(up)          [v4]
       8.  持续流出(连 3 日流出)     → 持续流出(down)        [v4]
-      9.  VWAP 分时位置           → 冲高回落(warn)/探底回升(up) [v5 新]
-      10. 应减仓                  → 应减仓(down)          [v3]
-      11. ATR 放量上涨           → 可加仓(up)            [v2]
-      12. 放量上行(1%≤x<3% 量比≥2) → 放量上行(up)          [v3]
-      13. 异动放量(量比 ≥ 3 方向不明) → 异动放量(warn)
-      14. 高换手 ≥ 10%           → 高换手出货 / 高换手活跃
-      15. 温和回调(-3<x≤-1.5% 量比≥1) → 温和回调(warn)      [v3]
-      16. 流动性极低(换手 < 0.3%) → 流动性低(warn)
-      17. 缩量阴跌               → 继续观察(地量阴跌)
-      18. 偏弱趋势               → 谨慎持有
-      19. 默认                   → 继续观察
+      9.  尾盘偷袭(14:30后拉升≥2%)   → 尾盘偷袭(warn)       [v5.2]
+      10. VWAP 分时位置           → 冲高回落(warn)/探底回升(up) [v5]
+      11. 应减仓                  → 应减仓(down)          [v3]
+      12. ATR 放量上涨           → 可加仓(up)            [v2]
+      13. 放量上行(1%≤x<3% 量比≥2) → 放量上行(up)          [v3]
+      14. 异动放量(量比 ≥ 3 方向不明) → 异动放量(warn)
+      15. 高换手 ≥ 10%           → 高换手出货 / 高换手活跃
+      16. 温和回调(-3<x≤-1.5% 量比≥1) → 温和回调(warn)      [v3]
+      17. 流动性极低(换手 < 0.3%) → 流动性低(warn)
+      18. 缩量阴跌               → 继续观察(地量阴跌)
+      19. 偏弱趋势               → 谨慎持有
+      20. 默认                   → 继续观察
 
     涨跌停限制按板块差异化（ST 5% / 创业板·科创板 20% / 北交所 30% / 主板 10%），
     容忍 ±0.3% 抖动。v5 起涨停分支融合 zt_pool 连板标注（连板≥2 → 「连板涨停」）
@@ -390,6 +428,21 @@ def watch_monitor(data: dict[str, Any], atr: float | None = None,
     flow_signal = _watch_monitor_flow(data, change, flow)
     if flow_signal is not None:
         return flow_signal
+
+    # ---- 1.55. 尾盘偷袭（v5.2 新增，游资形态特征）----
+    # 14:30 后从尾盘基准价拉升 ≥2%：全天不显山露水、尾盘快速拉起做图形。
+    # 优先于 VWAP 信号——尾盘脉冲同样会把价格推上均价线（601086 案例），
+    # 此时「尾盘偷袭」比「探底回升」更接近事实。仅盘中尾盘时段生效。
+    if tail_rush is not None and tail_rush >= WM_TAIL_RUSH_GATE \
+            and is_trading_now() and _now_hhmm() >= "1430":
+        return {
+            "action": "尾盘偷袭",
+            "tone": "warn",
+            "reason": (
+                f"较 14:30 拉升 {tail_rush:+.2f}%，尾盘快速拉起，"
+                "警惕次日高开出货；若有消息面配合则关注明日量能持续性"
+            ),
+        }
 
     # ---- 1.6. VWAP 分时位置（v5 新增，分时体系核心维度）----
     # 价与分时均价线的相对位置比「涨跌幅」更早反映分时强弱：
@@ -641,6 +694,20 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
             missing.append((r["code"], r["market"]))
     board_map = await _industry_map(missing) if missing else {}
 
+    # 尾盘偷袭检测（v5.2）：仅尾盘时段（14:25 起）拉 5 分钟K 算拉升幅度，
+    # 复用 _kline_min 的 30s 盘中缓存；全天其余时间零额外请求。
+    tail_by_key: dict[str, float | None] = {}
+    if is_trading_now() and _now_hhmm() >= WM_TAIL_RUSH_FROM:
+        tail_results = await asyncio.gather(
+            *(_kline_min(r["code"], r["market"], False) for r in rows),
+            return_exceptions=True,
+        )
+        for r, kp in zip(rows, tail_results):
+            key = full_code(r["code"], r["market"])
+            if isinstance(kp, BaseException) or not kp:
+                continue
+            tail_by_key[key] = _tail_rush_pct(kp.get("bars") or [])
+
     # 涨停标注：复用 zt_pool 共享缓存（60s TTL，与价值投资候选池同一份数据），
     # 命中今日涨停池的自选股带连板数/几天几板标签，失败静默降级为无标注
     try:
@@ -685,7 +752,7 @@ async def watchlist_board(force: bool = False) -> dict[str, Any]:
             data["zt"] = zt_info
         data["monitor"] = watch_monitor(
             data, atr=atr_by_key.get(key), flow=flow_by_key.get(key),
-            zt=zt_info,
+            zt=zt_info, tail_rush=tail_by_key.get(key),
         )
         data["sort_no"] = row["sort_no"]
         items.append(data)
