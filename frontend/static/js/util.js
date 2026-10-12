@@ -109,6 +109,12 @@
   function toast(message, kind) {
     const root = document.getElementById('toast-root');
     if (!root) return;
+    // 体检 L6：同文案去重 + 上限 3 条——轮询报错场景 2.6s 窗口内不再堆满 toast-root
+    const nodes = root.childNodes || [];
+    for (let i = 0; i < nodes.length; i++) {
+      if (nodes[i] && nodes[i].textContent === message) return;
+    }
+    while (nodes.length >= 3 && root.removeChild) root.removeChild(nodes[0]);
     const node = el('div', 'toast' + (kind ? ' ' + kind : ''), message);
     root.appendChild(node);
     setTimeout(function () {

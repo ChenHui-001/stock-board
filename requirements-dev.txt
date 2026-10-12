@@ -3,5 +3,7 @@
 #   pip install -r requirements.txt -r requirements-dev.txt
 pytest==8.3.4
 pytest-asyncio==0.24.0
+# 覆盖率：本地 `pytest --cov=backend --cov-report=term` 查看行覆盖（体检 L4）
+pytest-cov==7.0.0
 # tests/test_compose_parity.py 用它解析两份 compose 文件做一致性断言
 pyyaml==6.0.3

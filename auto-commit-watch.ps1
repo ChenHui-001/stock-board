@@ -110,7 +110,14 @@ function Invoke-AutoCommit {
     if ($files.Length -gt 80) { $files = $files.Substring(0, 77) + "..." }
     $msg = Get-CommitMessage -Files $files
 
-    git add -u 2>&1 | Out-Null
+    # 白名单式暂存（体检 L6 修正）：只收业务代码与测试，不吞 docs/脚本/研究产物
+    # 等无关变更；git add -u 的全量暂存曾把任何已跟踪文件改动都卷进单条提交。
+    git add backend/ frontend/ tests/ requirements.txt requirements-dev.txt 2>&1 | Out-Null
+    $staged = git diff --cached --name-only 2>$null
+    if (-not $staged) {
+        Write-Log "Changes outside whitelist (backend/frontend/tests/requirements*), skip commit"
+        return
+    }
     Write-Log "git commit..."
     git commit -m "$msg" 2>&1 | ForEach-Object { Write-Log "  $_" }
     if ($LASTEXITCODE -ne 0) {
