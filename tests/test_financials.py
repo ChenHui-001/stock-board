@@ -77,3 +77,63 @@ def test_financials() -> None:
     assert ("缓存数据" in stale_fb["fundamental"]["summary"]), str(stale_fb["fundamental"])
 
 
+
+
+def test_webparse_edges() -> None:
+    """webparse 边界分支：负数/单位换算、无效行过滤、过期新闻、缺 infoCode 降级。"""
+    import backend.providers.webparse as wp
+
+    # ---- _number：括号负数 / 亿 / 万 / 无效占位 ----
+    assert wp._number("(3.5万)") == -35000.0
+    assert wp._number("1.2亿") == 1.2e8
+    assert wp._number("1,234.5") == 1234.5
+    assert wp._number("--") is None and wp._number("暂无") is None and wp._number(None) is None
+
+    # ---- parse_financial_html：无 main JSON → ValueError；烂 JSON → ValueError ----
+    for bad in ("<html>没有财报</html>", '<p id="main">not-json</p>',
+                '<p id="main">{"title":[],"report":[]}</p>'):
+        try:
+            wp.parse_financial_html(bad, "ths")
+            raise AssertionError(f"应抛 ValueError: {bad[:30]}")
+        except ValueError:
+            pass
+
+    # 无效科目行被跳过；全 None 的日期列不产出；日期倒序
+    ths = (
+        '<p id="main">{"title":["科目",["乱写的科目"],["营业总收入"]],'
+        '"report":[["2026-06-30","2026-03-31"],["x-y-z"],["5亿","4亿"]]}</p>'
+    )
+    rows = wp.parse_financial_html(ths, "ths")
+    assert [r.date for r in rows] == ["2026-06-30", "2026-03-31"], str(rows)
+    assert rows[0].revenue == 5e8 and rows[1].revenue == 4e8
+
+    # ---- parse_news_html：过期/短标题/无链接/坏 ctime 过滤，日期倒序 + limit ----
+    now_ts = int(time.time())
+    mk = lambda seq, t, title, curl: f'{{"seq":{seq},"ctime":{t},"curl":"{curl}","title":"{title}","source":"测"}}'
+    news_html = (
+        '<div id="linkagedata">['
+        + mk(1, now_ts, "新公告标题甲", "http://x/1.shtml") + ","
+        + mk(2, now_ts - 86400 * 40, "四十字前的旧闻标题", "http://x/2.shtml") + ","   # 超 30 天
+        + mk(3, now_ts, "短", "http://x/3.shtml") + ","                               # 标题<4
+        + mk(4, now_ts, "没有链接的标题乙", "") + ","                                  # 无 curl
+        + mk(5, 0, "零时间戳的旧标题", "http://x/5.shtml") + ","                        # ctime=0 → 1970 被过期过滤
+        + mk(6, now_ts - 60, "六十秒前的标题丙", "http://x/6.shtml") + ","
+        + mk(7, now_ts - 120, "一百二秒前标题丁", "http://x/7.shtml")
+        + "]</div>"
+    )
+    items = wp.parse_news_html(news_html, "ths", days=30, limit=5)
+    assert [i.id for i in items] == ["1", "6", "7"], str(items)   # 旧的/短的/无链接/坏时间戳全过滤
+
+    # ---- parse_report_html：无 infoCode → url 空 + id=title；坏日期行跳过；orgName 兜底 ----
+    em = (
+        '<script>var initdata = {"data":['
+        '{"title":"无码研报标题","orgName":"某券商研究所","publishDate":"2026-08-01 00:00:00.000"},'
+        '{"title":"坏日期研报","publishDate":"not-a-date"},'
+        '{"title":"带码研报","orgSName":"头部券商","publishDate":"2026/08/05","infoCode":"APX1","sRatingName":"买入"}'
+        "]};</script>"
+    )
+    reports = wp.parse_report_html(em, "eastmoney", 5)
+    assert [r.id for r in reports] == ["APX1", "无码研报标题"], str(reports)   # 有码 id=infoCode；坏日期行被滤；斜杠日期已归一化
+    assert reports[0].url.endswith("infocode=APX1") and reports[0].source == "头部券商" and reports[0].date == "2026-08-05"
+    no_code = reports[1]
+    assert no_code.url == "" and no_code.id == "无码研报标题" and no_code.source == "某券商研究所"

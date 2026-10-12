@@ -754,7 +754,12 @@ import { AI } from './ai.js';
       if (data && data.ok === false) throw new Error(data.error || '分析失败');
       state.inline = { item: item, loading: false, data: data, error: null };
     } catch (err) {
-      state.inline = { item: item, loading: false, data: null, error: err.message || String(err) };
+      // 页面切换取消：不落 error（避免返回本页时列表显示「请求已取消」）
+      if (err && err.aborted) {
+        state.inline = { item: item, loading: false, data: null, error: null };
+      } else {
+        state.inline = { item: item, loading: false, data: null, error: err.message || String(err) };
+      }
     }
     if (isCurrent()) repaintList();
   }
@@ -821,6 +826,7 @@ import { AI } from './ai.js';
       const data = await API.hotspotAnalyze(item, false);
       renderAnalysis(data);
     } catch (err) {
+      if (err && err.aborted) return;   // 页面切换取消：静默（finally 复位 loading）
       renderAnalysisError(err.message);
     } finally {
       hsState.loading = false;
@@ -836,6 +842,7 @@ import { AI } from './ai.js';
       const data = await API.hotspotAnalyze(hsState.item, true);
       renderAnalysis(data);
     } catch (err) {
+      if (err && err.aborted) return;   // 页面切换取消：静默
       renderAnalysisError(err.message);
     } finally {
       hsState.loading = false;

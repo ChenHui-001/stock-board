@@ -259,3 +259,78 @@ def test_kline_source_sticky() -> None:
     finally:
         reg.providers = orig_providers
         reg._sticky.clear()
+
+
+def test_quote_race_units() -> None:
+    """quote_race 纯函数与 placeholder/stash 分支（竞速主链路已有 test_quote_racing）。"""
+    from backend.providers import Registry
+    from backend.providers import base as pbase
+    import backend.providers.quote_race as qr
+
+    q = lambda **kw: pbase.Quote(code="600000", market="SH", **kw)
+
+    # ---- 新鲜度评分：现价100 + 昨收10 + 时间1 ----
+    assert qr._quote_freshness(q(price=10, prev_close=9, quote_time="15:00")) == 111
+    assert qr._quote_freshness(q()) == 0
+
+    # ---- _usable：盘中无价≠可用；盘前有昨收=可用 ----
+    orig_session = qr.session_state
+    try:
+        qr.session_state = lambda: "open"
+        assert qr._usable(q(price=10)) is True
+        assert qr._usable(q(prev_close=9)) is False      # 盘中拿不到价格 → 交下一个源
+        qr.session_state = lambda: "pre"
+        assert qr._usable(q(prev_close=9)) is True       # 盘前有昨收即可展示
+    finally:
+        qr.session_state = orig_session
+
+    # ---- _fill_preopen：盘前无成交价 → 昨收占位、涨跌归零 ----
+    fq = qr._fill_preopen(q(prev_close=9.5, change=-0.3, change_pct=-3.1))
+    assert fq.price == 9.5 and fq.change == 0.0 and fq.change_pct == 0.0
+    fq2 = qr._fill_preopen(q(price=10.0, prev_close=9.5))   # 有价不动
+    assert fq2.price == 10.0
+
+    # ---- _merge_quotes：不可用进 stash 不进 result；重复 key 跳过；used 记录 ----
+    reg = Registry.__new__(Registry)
+    result, stash, wanted, used = {}, {}, {"600000.SH": ("600000", "SH")}, []
+    qr.session_state = lambda: "open"
+    try:
+        reg._merge_quotes({"600000.SH": q(name="无价源", prev_close=9.0)},
+                         result, stash, wanted, used, "bad_src")
+        assert not result and "600000.SH" in stash          # 盘中无价 → stash
+        reg._merge_quotes({"600000.SH": q(name="好源", price=10.0, prev_close=9.0)},
+                         result, stash, wanted, used, "good_src")
+        assert result["600000.SH"].name == "好源" and used == ["good_src"]
+        reg._merge_quotes({"600000.SH": q(name="重复源", price=11.0)},
+                         result, stash, wanted, used, "late_src")
+        assert result["600000.SH"].name == "好源" and used == ["good_src"]   # 已有 key 跳过
+    finally:
+        qr.session_state = orig_session
+
+    # ---- _placeholder：盘前昨收→normal；盘中昨收→停牌；无昨收→unknown；旧数据→delayed ----
+    orig_stale = qr.data_is_stale
+    try:
+        qr.session_state = lambda: "pre"
+        ph = reg._placeholder("600000.SH", "600000", "SH", q(prev_close=9.5))
+        assert ph.price == 9.5 and ph.status == "normal"
+        qr.session_state = lambda: "open"
+        ph2 = reg._placeholder("600000.SH", "600000", "SH", q(prev_close=9.5))
+        assert ph2.status == "suspended" and ph2.status_text == "股票停牌"
+        ph3 = reg._placeholder("600000.SH", "600000", "SH", None)
+        assert ph3.status == "unknown"
+        qr.session_state = lambda: "pre"
+        qr.data_is_stale = lambda d: True
+        ph4 = reg._placeholder("600000.SH", "600000", "SH", q(prev_close=9.5, trade_date="2026-10-01"))
+        assert ph4.status == "delayed" and ph4.status_text == "数据更新延迟"
+    finally:
+        qr.session_state = orig_session
+        qr.data_is_stale = orig_stale
+
+    # ---- quotes 空 keys → ({}, [])；无可用源 → ProviderError ----
+    assert asyncio.run(reg.quotes([])) == ({}, [])
+    reg.providers = []
+    try:
+        asyncio.run(reg.quotes([("600000", "SH")]))
+        raise AssertionError("应抛 ProviderError")
+    except pbase.ProviderError as exc:
+        assert "没有可用的行情数据源" in str(exc), str(exc)

@@ -521,6 +521,7 @@ function skeleton() {
       renderData(state.data);
       U.toast('已强制重算机会候选', 'ok');
     } catch (e) {
+      if (e && e.aborted) return;   // 页面切换取消：不落 error（避免 tick 误报）
       state.error = e.message || String(e);
       viewEl.innerHTML = '';
       viewEl.appendChild(U.el('div', 'opp-error', '加载失败: ' + state.error));

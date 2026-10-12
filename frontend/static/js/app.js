@@ -3,6 +3,7 @@ import { U } from './util.js';
 import { API } from './api.js';
 import { Charts } from './charts.js';
 import { AI } from './ai.js';
+import * as Modal from './modal.js';
 import { PageSearch } from './page-search.js';
 import { PageValue } from './page-value.js';
 import { PageOpportunity } from './page-opportunity.js';
@@ -74,6 +75,11 @@ import { Settings } from './settings.js';
       state.mounted.destroy();
     }
     state.mounted = null;
+    // 取消上一页登记的在途长请求（aiAnalyze/valueScreen/opportunity 等）：
+    // 切页后结果注定丢弃，不取消会继续占用后端与 LLM 配额最长 300s。
+    // 被取消的请求 reject err.aborted=true，各调用方 catch 静默早退。
+    // 例外：全局 AI 弹窗开着时不取消——弹窗跨路由存活，用户可能正在等结果。
+    if (!Modal.isOpen()) API.abortPageScope();
     // 记录「上一页」用于详情页返回:仅在进入 stock 时记录(从非 stock 跳入),
     // 这样 home→详情→返回→home→详情→返回 时 fromRoute 始终是 home;
     // 而 value→详情→返回 也能正确回到 value。

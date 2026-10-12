@@ -191,8 +191,10 @@ def _parse_eastmoney_report_json(raw: str, source: str, limit: int) -> list[Repo
         if not isinstance(row, dict):
             continue
         title = str(row.get("title") or "").strip()
-        date = str(row.get("publishDate") or "")[:10]
-        if not title or not _date(date):
+        # 归一化到 YYYY-MM-DD：源数据存在 "2026/08/05" 斜杠格式，混入库会让
+        # 前端排序展示口径不一致（"/" 与 "-" 字符序还影响字符串排序）
+        date = _date(str(row.get("publishDate") or ""))
+        if not title or not date:
             continue
         info_code = str(row.get("infoCode") or "").strip()
         result.append(ReportItem(

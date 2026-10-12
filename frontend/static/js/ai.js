@@ -89,6 +89,7 @@ import * as M from './modal.js';
       state.report = report;
       renderReport(report);
     } catch (err) {
+      if (err && err.aborted) return;   // 页面切换取消：静默，不渲染错误卡片
       renderError(err.message);
     } finally {
       state.loading = false;
@@ -109,6 +110,7 @@ import * as M from './modal.js';
       state.report = report;
       renderReport(report);
     } catch (err) {
+      if (err && err.aborted) return;   // 页面切换取消：静默
       renderError(err.message);
     } finally {
       state.loading = false;

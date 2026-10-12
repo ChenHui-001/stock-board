@@ -6,11 +6,34 @@
   // 再加上取数时间，浏览器侧必须留出余量，否则后端还在正常出结果、前端已判定超时
   const LLM_TIMEOUT = 180000;
 
-  function fetchWithTimeout(path, opts) {
+  // ---- 页面级请求作用域（体检 M5）----
+  // route() 切页前调用 abortPageScope()：登记在当前 scope 的在途请求全部取消，
+  // 不再空烧后端/LLM 配额（aiAnalyze 最长 300s、valueScreen/opportunity 240s，
+  // 切页后结果注定被丢弃）。只有显式 opts.scope==='page' 的长耗时取数接口
+  // 才参与 scope，写操作与短请求不受影响。惰性创建：首个 scope 请求到达时建 ctrl。
+  let pageCtrl = null;
+  function pageSignal() {
+    if (!pageCtrl) pageCtrl = new AbortController();
+    return pageCtrl.signal;
+  }
+
+  function fetchWithTimeout(path, opts, outer) {
     const ctrl = new AbortController();
     const timer = setTimeout(function () { ctrl.abort(); }, opts.timeout || REQUEST_TIMEOUT);
+    // 合并外部 signal（页面 scope）：外部 abort 转发到本请求，超时逻辑不变
+    let onOuterAbort = null;
+    if (outer) {
+      if (outer.aborted) ctrl.abort();
+      else {
+        onOuterAbort = function () { ctrl.abort(); };
+        outer.addEventListener('abort', onOuterAbort);
+      }
+    }
     opts.signal = ctrl.signal;
-    return fetch(path, opts).finally(function () { clearTimeout(timer); });
+    return fetch(path, opts).finally(function () {
+      clearTimeout(timer);
+      if (onOuterAbort && outer.removeEventListener) outer.removeEventListener('abort', onOuterAbort);
+    });
   }
 
   async function request(path, options) {
@@ -20,10 +43,19 @@
       opts.headers['Content-Type'] = 'application/json';
     }
     let resp;
+    // scope:'page' 的请求挂到当前页面作用域下（见 abortPageScope 注释）
+    const outer = (opts && opts.scope === 'page') ? pageSignal() : null;
     try {
-      resp = await fetchWithTimeout(path, opts);
+      resp = await fetchWithTimeout(path, opts, outer);
     } catch (e) {
       if (e && e.name === 'AbortError') {
+        if (outer && outer.aborted) {
+          // 页面切换取消（非超时）：调用方应静默早退，不渲染错误卡片
+          const err = new Error('请求已取消');
+          err.aborted = true;
+          err.status = 0;
+          throw err;
+        }
         const err = new Error('请求超时，请稍后重试');
         err.status = 0;
         throw err;
@@ -102,6 +134,7 @@
       return request('/api/hotspot/analyze' + (refresh ? '?refresh=1' : ''), {
         method: 'POST',
         timeout: LLM_TIMEOUT,
+        scope: 'page',
         body: {
           title: String((item && item.title) || '').slice(0, 500),
           summary: String((item && item.summary) || '').slice(0, 2000),
@@ -122,7 +155,8 @@
       // 工作、前端已报「请求超时」，用户看到失败而结果其实已经算完并写进当日缓存。
       return request('/api/ai/' + encodeURIComponent(code) + (refresh ? '?refresh=1' : ''), {
         method: 'POST',
-        timeout: 300000
+        timeout: 300000,
+        scope: 'page'
       });
     },
     aiWatchlist: function (refresh) {
@@ -149,11 +183,11 @@
       return request('/api/score/weights');
     },
     valueScreen: function (refresh) {
-      return request('/api/value/screen' + (refresh ? '?refresh=1' : ''), { timeout: 240000 });
+      return request('/api/value/screen' + (refresh ? '?refresh=1' : ''), { timeout: 240000, scope: 'page' });
     },
     // 机会投资（短线策略选股）：后端有 10 分钟缓存，force=true 强制重算
     opportunity: function (force) {
-      return request('/api/opportunity' + (force ? '?force=1' : ''), { timeout: 240000 });
+      return request('/api/opportunity' + (force ? '?force=1' : ''), { timeout: 240000, scope: 'page' });
     },
     valueWeights: function () {
       return request('/api/value/weights');
@@ -210,5 +244,14 @@
     },
     backtestReportUrl: function (runId) {
       return '/api/backtest/run/' + encodeURIComponent(runId) + '/report';
+    },
+
+    // 取消当前页面作用域下所有在途请求（app.js route() 切页时调用）。
+    // 被取消的请求 reject：err.aborted===true，调用方 catch 里应静默早退。
+    abortPageScope: function () {
+      if (pageCtrl) {
+        pageCtrl.abort();
+        pageCtrl = null;
+      }
     }
   };
