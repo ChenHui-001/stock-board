@@ -44,8 +44,19 @@ jobs:
         uses: actions/setup-python@v5.6.0
         with:
           python-version: "3.12"
-      - name: 安装依赖
-        run: pip install -r requirements.txt
+          # pip 缓存：key 自动基于 requirements*.txt hash，依赖未变时秒装
+          cache: "pip"
+      - name: 安装依赖（运行时 + 测试）
+        # 测试依赖（pytest 等）单列 requirements-dev.txt，不进生产镜像
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: 用例数下限断言（防 tests/ 误删后 CI 假绿）
+        run: |
+          COUNT=$(python -m pytest tests/ --co -q 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)
+          echo "收集到 ${COUNT} 个用例"
+          if [ "${COUNT}" -lt 100 ]; then
+            echo "::error::用例数 ${COUNT} < 100，tests/ 目录疑似缺失或被清空"
+            exit 1
+          fi
       - name: 离线冒烟测试（不依赖网络/浏览器）
         run: python backend/smoke_test.py
 

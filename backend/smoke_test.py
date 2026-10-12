@@ -31,16 +31,24 @@ import pytest
 def main(argv: list[str] | None = None) -> int:
     """运行测试套件并返回退出码。
 
-    退出码与旧 smoke_test 对齐：
-      - 0  全部通过 / 收集到 0 个用例（视为通过，与旧行为一致）
+    退出码：
+      - 0  全部通过
       - 1  有失败
+      - 5  收集到 0 个用例（tests/ 目录缺失/为空/路径错）——视为失败
       - 其他  pytest 自身错误
+
+    历史：v3 重构初期 tests/ 迁移未完，曾把退出码 5 短路成 0（CI 假阳性：
+    目录被误删时 CI 全绿但零测试）。现迁移已完成，收集数为 0 必须失败。
     """
     args = list(argv) if argv else ["tests"]
     code = pytest.main(args)
-    # pytest 退出码 5 = "no tests collected"：CI/watcher 把它当成通过。
-    # 等迁移完所有用例后再移除这段兼容逻辑。
-    return 0 if code == 5 else code
+    if code == 5:
+        print(
+            "smoke_test: FATAL - pytest 未收集到任何用例（tests/ 目录缺失、为空或路径错误）",
+            file=sys.stderr,
+        )
+        return 5
+    return code
 
 
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+# 测试专用依赖 —— 不打进生产镜像（Dockerfile 只装 requirements.txt）
+# CI test job 与本地跑测试时装本文件：
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest==8.3.4
+pytest-asyncio==0.24.0
