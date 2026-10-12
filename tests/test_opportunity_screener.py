@@ -385,6 +385,7 @@ def test_fetch_min5_unpacks_registry_tuple(monkeypatch) -> None:
     """registry().kline_min 返回 (bars, 源名) 元组——历史 Bug：直接迭代导致
     AttributeError 被吞、5分钟K 100% 缺失、composite 恒丢 35 分永远空仓。"""
     from backend import opportunity_screener as ops
+    from backend import opportunity_scores as osc   # _fetch_min5 已拆至此（体检 M7）
     from backend.providers.base import Bar
 
     bars = [Bar(date="2026-09-09 13:30", open=10.0, close=10.5, high=10.6,
@@ -394,9 +395,9 @@ def test_fetch_min5_unpacks_registry_tuple(monkeypatch) -> None:
         async def kline_min(self, code, market, limit, klt=60):
             return bars, "fake-source"
 
-    monkeypatch.setattr(ops, "registry", lambda: FakeRegistry())
-    monkeypatch.setattr(ops, "_min5_cache", {})
-    rows = asyncio.run(ops._fetch_min5("002286", "SZ"))
+    monkeypatch.setattr(osc, "registry", lambda: FakeRegistry())
+    monkeypatch.setattr(osc, "_min5_cache", {})
+    rows = asyncio.run(osc._fetch_min5("002286", "SZ"))
     assert len(rows) == 12, rows
     assert rows[0]["close"] == 10.5
     # 有了分时数据，分时特征/评分不再恒 None
