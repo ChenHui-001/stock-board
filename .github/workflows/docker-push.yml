@@ -59,6 +59,17 @@ jobs:
           fi
       - name: 离线冒烟测试（不依赖网络/浏览器）
         run: python backend/smoke_test.py
+      - name: 安装 Node 20（前端构建门禁）
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: 安装前端依赖
+        run: npm ci --no-audit --no-fund
+      - name: 前端构建验证（vite 失败在 test 阶段就暴露，不拖到 build-and-push）
+        run: npm run build
+      - name: 前端结构冒烟（42 项断言）
+        run: node scripts/frontend_smoke.mjs
 
   build-and-push:
     needs: test

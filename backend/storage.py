@@ -26,6 +26,10 @@ def _connect() -> sqlite3.Connection:
         _conn = sqlite3.connect(settings.db_path, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")
+        # 写锁竞争兜底：单进程单连接下写天然串行，但未来多进程访问
+        # （备份脚本 / 手工调试）时没这条会直接抛 database is locked。
+        # 5s 内等锁重试，超时才报错。
+        _conn.execute("PRAGMA busy_timeout=5000")
         _init(_conn)
         run_migrations(_conn)
     return _conn

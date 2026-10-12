@@ -138,7 +138,7 @@ import { Settings } from './settings.js';
     const changed = !state.session || state.session.trading !== session.trading;
     state.session = session;
     const badge = document.getElementById('session-badge');
-    badge.innerHTML = session.label + (session.trading
+    badge.innerHTML = U.escapeHtml(session.label) + (session.trading
       ? '<i class="session-hint"> · 5秒自动刷新</i>'
       : '<i class="session-hint"> · 手动刷新</i>');
     badge.classList.toggle('live', !!session.trading);

@@ -23,7 +23,10 @@ RUN npm run build
 FROM python:3.12-slim
 
 # 是否把 AkShare 打进镜像（辅助数据源，依赖 pandas，体积 +~400MB）
-ARG WITH_AKSHARE=false
+# 口径统一为 true：CI workflow 与 docker-compose.yml 的 build args 默认都是
+# "true"，这里若改 false 会让「单独 docker build」产出与 CI 不同的镜像。
+# akshare 是 PROVIDER_ORDER 末位的 kline/fund_flow 兜底源，砍掉前先复核使用率。
+ARG WITH_AKSHARE=true
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

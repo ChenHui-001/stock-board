@@ -34,6 +34,8 @@ services:
       - "${HOST_PORT:-8000}:8000"
 
     environment:
+      # ⚠️ 本段与 docker-compose.yml 逐行同步维护：
+      # tests/test_compose_parity.py 会断言两份一致，改这里必须同步那边。
       # ---------- 基础 ----------
       TZ: Asia/Shanghai               # 交易时段判断依赖东八区
       DATA_DIR: /app/data
