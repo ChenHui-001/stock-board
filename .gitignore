@@ -55,3 +55,10 @@ ai_score_trades.csv
 # === 测试运行产物 ===
 tests/_smoke_data/
 tests/_node_import.mjs
+
+# scripts/ 一次性修复/验证脚本与研究产物（工作区保留，不入库）
+scripts/_*.py
+scripts/factor_attribution/results/
+
+# 本地日志统一归档目录
+logs/

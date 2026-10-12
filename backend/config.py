@@ -56,6 +56,10 @@ def _list(name: str, default: list[str]) -> list[str]:
 class Settings:
     # ---------- 基础 ----------
     APP_NAME = "股票看板"
+    # CORS 白名单（逗号分隔，如 "https://board.example.com,http://192.168.1.10:8000"）。
+    # 为空保持历史行为 allow_origins=["*"]：自托管内网用 '*' 没问题；
+    # 暴露公网时应设置本变量收敛来源（设置页可写 LLM key，跨域可被探测调用）。
+    ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
     TZ = os.getenv("TZ", "Asia/Shanghai")
     # Docker 内由 Dockerfile 设为 /app/data；本地开发落到项目下的 ./data
     DATA_DIR = Path(os.getenv("DATA_DIR") or (Path(__file__).resolve().parent.parent / "data"))

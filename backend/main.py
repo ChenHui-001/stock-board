@@ -108,7 +108,8 @@ if DEV_MODE:
     app.add_middleware(_JSCacheControlMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # 默认 '*'（自托管内网够用）；设置 ALLOWED_ORIGINS 环境变量即收敛为白名单
+    allow_origins=settings.ALLOWED_ORIGINS or ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

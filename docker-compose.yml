@@ -37,6 +37,8 @@ services:
       # ---------- 基础 ----------
       TZ: Asia/Shanghai               # 交易时段判断依赖东八区
       DATA_DIR: /app/data
+      # CORS 白名单：逗号分隔来源；留空 = allow '*'（自托管内网够用，暴露公网时收敛）
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-}"
 
       # ---------- AI 分析（OpenAI 兼容协议） ----------
       # 不配 LLM_API_KEY 也能跑：AI 分析自动降级为内置规则引擎
